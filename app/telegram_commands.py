@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,7 @@ HELP_TEXT = """LỆNH BOT P2P
 Ví dụ: /don P2P003 | 1000000 | NGUYEN VAN A | MB
 
 /danhsach - 10 đơn gần nhất
+/baocao - báo cáo các đơn tạo hôm nay
 /chitiet MÃ_ĐƠN - xem chi tiết
 /xacnhan MÃ_ĐƠN - xác nhận đã kiểm tra tiền
 /tuchoi MÃ_ĐƠN | LÝ_DO - từ chối giao dịch nghi vấn
@@ -48,6 +49,45 @@ def format_vietnam_time(value: datetime | None) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(VIETNAM_TIMEZONE).strftime("%H:%M:%S %d/%m/%Y")
+
+
+def build_daily_report(db: Session, now: datetime | None = None) -> str:
+    current_vn = now.astimezone(VIETNAM_TIMEZONE) if now else datetime.now(VIETNAM_TIMEZONE)
+    start_vn = datetime.combine(current_vn.date(), time.min, tzinfo=VIETNAM_TIMEZONE)
+    end_vn = start_vn + timedelta(days=1)
+    start_utc = start_vn.astimezone(timezone.utc)
+    end_utc = end_vn.astimezone(timezone.utc)
+    orders = db.scalars(
+        select(P2POrder)
+        .where(P2POrder.created_at >= start_utc, P2POrder.created_at < end_utc)
+        .order_by(P2POrder.id.desc())
+    ).all()
+
+    counts = {
+        "WAITING_PAYMENT": 0,
+        "PAYMENT_DETECTED": 0,
+        "CONFIRMED": 0,
+        "REJECTED": 0,
+        "CANCELLED": 0,
+    }
+    confirmed_amount = Decimal("0")
+    for order in orders:
+        if order.status in counts:
+            counts[order.status] += 1
+        if order.status == "CONFIRMED":
+            confirmed_amount += order.fiat_amount
+
+    return (
+        f"📊 BÁO CÁO P2P NGÀY {current_vn.strftime('%d/%m/%Y')}\n"
+        f"Tổng đơn tạo trong ngày: {len(orders)}\n"
+        f"⏳ Chờ thanh toán: {counts['WAITING_PAYMENT']}\n"
+        f"💰 Đã phát hiện tiền: {counts['PAYMENT_DETECTED']}\n"
+        f"✅ Đã xác nhận: {counts['CONFIRMED']}\n"
+        f"⛔ Đã từ chối: {counts['REJECTED']}\n"
+        f"🚫 Đã hủy: {counts['CANCELLED']}\n"
+        f"Tổng tiền đã xác nhận: {confirmed_amount:,.0f} VND\n"
+        f"Cập nhật lúc: {current_vn.strftime('%H:%M:%S')} (giờ Việt Nam)"
+    )
 
 
 def parse_create_order(text: str) -> tuple[str, Decimal, str, str]:
@@ -140,6 +180,9 @@ def handle_command(
             for order in orders
         )
         return "\n".join(lines)
+
+    if command == "/baocao":
+        return build_daily_report(db)
 
     if command == "/tuchoi":
         _, _, arguments = text.strip().partition(" ")
