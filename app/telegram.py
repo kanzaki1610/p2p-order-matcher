@@ -22,5 +22,10 @@ async def notify_match(decision: str, order: P2POrder | None, tx: BankTransactio
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.post(url, json={"chat_id": settings.telegram_chat_id, "text": "\n".join(lines)})
-        response.raise_for_status()
+                if response.is_error:
+            # Không ghi URL chứa bot token vào log.
+            print(
+                f"Telegram gửi thất bại: HTTP {response.status_code} - "
+                f"{response.text[:300]}"
+            )
 
