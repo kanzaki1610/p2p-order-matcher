@@ -25,6 +25,12 @@ def name_similarity(left: str | None, right: str | None) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+def contains_five_digit_reference(description: str | None, reference: str | None) -> bool:
+    if not description or not reference or not re.fullmatch(r"\d{5}", reference):
+        return False
+    return re.search(rf"(?<!\d){re.escape(reference)}(?!\d)", description) is not None
+
+
 def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
     score, reasons = 0, []
     if order.fiat_amount == tx.amount:
@@ -44,12 +50,17 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
         reasons.append("Ngân hàng không trả tên người chuyển")
 
     description = normalize_text(tx.description)
+    normalized_name = normalize_text(order.counterparty_name)
+    if normalized_name and normalized_name in description:
+        score += 25
+        reasons.append("Tên người thanh toán có trong nội dung +25")
+
     if normalize_text(order.order_code) in description:
         score += 40
-        reasons.append("Nội dung có mã đơn +40")
-    elif order.payment_note and normalize_text(order.payment_note) in description:
+        reasons.append("Nội dung có đầy đủ ID lệnh +40")
+    elif contains_five_digit_reference(tx.description, order.payment_note):
         score += 30
-        reasons.append("Nội dung có ghi chú thanh toán +30")
+        reasons.append("Nội dung có đúng 5 số cuối ID lệnh +30")
 
     if order.expected_bank and order.expected_bank == tx.bank:
         score += 5

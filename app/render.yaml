@@ -20,6 +20,14 @@ services:
         generateValue: true
       - key: PUBLIC_BASE_URL
         value: "https://p2p-order-matcher.onrender.com"
+      - key: DASHBOARD_ADMIN_KEY
+        generateValue: true
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_API_PASSPHRASE
+        sync: false
       - key: AUTO_MATCH_THRESHOLD
         value: "90"
       - key: REVIEW_THRESHOLD

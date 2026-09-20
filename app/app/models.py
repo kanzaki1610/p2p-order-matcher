@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -62,3 +62,76 @@ class PaymentMatch(Base):
     order: Mapped[P2POrder] = relationship(back_populates="matches")
     transaction: Mapped[BankTransaction] = relationship(back_populates="matches")
 
+
+class OrderConfirmation(Base):
+    __tablename__ = "order_confirmations"
+    __table_args__ = (UniqueConstraint("order_id", name="uq_order_confirmation"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("p2p_orders.id"), index=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(50))
+    telegram_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    telegram_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OrderRejection(Base):
+    __tablename__ = "order_rejections"
+    __table_args__ = (UniqueConstraint("order_id", name="uq_order_rejection"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("p2p_orders.id"), index=True)
+    reason: Mapped[str] = mapped_column(String(500))
+    telegram_user_id: Mapped[str] = mapped_column(String(50))
+    telegram_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    telegram_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OKXDashboardConfig(Base):
+    __tablename__ = "okx_dashboard_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=True)
+    buy_target_min: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    buy_target_max: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    sell_target_min: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    sell_target_max: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    scan_buy_seconds: Mapped[int] = mapped_column(Integer, default=10)
+    scan_sell_seconds: Mapped[int] = mapped_column(Integer, default=10)
+    price_step: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=1)
+    special_filter_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    min_account_days: Mapped[int] = mapped_column(Integer, default=0)
+    min_completed_orders: Mapped[int] = mapped_column(Integer, default=0)
+    max_total_orders: Mapped[int] = mapped_column(Integer, default=0)
+    buy_auto_reply: Mapped[str] = mapped_column(Text, default="")
+    sell_auto_reply: Mapped[str] = mapped_column(Text, default="")
+    blacklist: Mapped[str] = mapped_column(Text, default="")
+    friendly_list: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class OKXSlot(Base):
+    __tablename__ = "okx_slots"
+    __table_args__ = (UniqueConstraint("side", "slot_number", name="uq_okx_slot"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    side: Mapped[str] = mapped_column(String(10), index=True)
+    slot_number: Mapped[int] = mapped_column(Integer)
+    auto_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    current_price: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    min_amount: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    max_amount: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    adv_id: Mapped[str] = mapped_column(String(150), default="")
+    target_price: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class OKXAuditLog(Base):
+    __tablename__ = "okx_audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    detail: Mapped[str] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(String(100), default="dashboard")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

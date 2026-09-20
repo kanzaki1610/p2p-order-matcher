@@ -1,12 +1,14 @@
 import secrets
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import Base, engine, get_db
+from .dashboard import router as dashboard_router
 from .matching import match_transaction
 from .models import BankTransaction, P2POrder
 from .schemas import BankTransactionIn, MatchResult, OrderCreate, OrderOut, SePayWebhookIn, SePayWebhookOut
@@ -15,7 +17,13 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.3.0")
+app = FastAPI(title="P2P Order Matcher", version="0.8.1")
+app.include_router(dashboard_router)
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/dashboard")
 
 
 def verify_ingest_key(x_api_key: str = Header(default="")) -> None:
@@ -76,7 +84,17 @@ async def telegram_webhook(
         return {"ok": True, "ignored": True}
     if not secrets.compare_digest(chat_id, settings.telegram_chat_id):
         return {"ok": True, "ignored": True}
-    reply = handle_command(text, db)
+    sender = message.get("from") or {}
+    first_name = str(sender.get("first_name", "")).strip()
+    last_name = str(sender.get("last_name", "")).strip()
+    display_name = " ".join(part for part in (first_name, last_name) if part) or None
+    reply = handle_command(
+        text,
+        db,
+        telegram_user_id=str(sender.get("id", "unknown")),
+        telegram_username=sender.get("username"),
+        telegram_display_name=display_name,
+    )
     await send_telegram_message(chat_id, reply)
     return {"ok": True}
 

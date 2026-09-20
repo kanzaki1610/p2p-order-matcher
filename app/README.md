@@ -1,13 +1,34 @@
-# Bot khớp đơn P2P – SePay/MB/VIB/VPBank (V2)
+# OKX P2P Control + Bot đối soát SePay/Telegram (V8.1)
 
-V2 nhận đơn P2P nhập thủ công, nhận trực tiếp webhook SePay từ MB/VIB/VPBank, chấm điểm khớp và báo Telegram. Bot **không tự release USDT**.
+V8.1 gồm dashboard OKX chạy bắt buộc ở chế độ DRY RUN và bot nhận đơn P2P qua Telegram, nhận webhook SePay, chấm điểm khớp, báo Telegram và lưu thao tác xác nhận thủ công. Hệ thống **không tự release USDT** và chưa gửi hành động đề giá thật tới OKX.
+
+## Dashboard OKX
+
+Mở `https://<service>.onrender.com/dashboard` và đăng nhập bằng `DASHBOARD_ADMIN_KEY`.
+
+- 2 BUY slots và 2 SELL slots.
+- Giá trần BUY/giá sàn SELL riêng theo slot, chu kỳ quét và bước giá.
+- Hạn mức min/max của quảng cáo mình tách biệt với khoảng hạn mức đối thủ cần theo dõi.
+- Bộ lọc tuổi tài khoản, số lệnh hoàn tất và tổng số lệnh.
+- Blacklist bỏ qua hoàn toàn; Friendly theo cùng giá.
+- Tin nhắn tự động chỉ được lưu làm cấu hình.
+- Lịch sử cấu hình và chạy mô phỏng.
+- API key/secret/passphrase không lưu trong PostgreSQL.
+- LIVE bị khóa ở cấp mã nguồn cho tới khi có quyền và tài liệu OKX P2P merchant.
+
+### Ý nghĩa các trường đề giá
+
+- `Min/Max giao dịch của quảng cáo mình`: hạn mức khách được giao dịch trên quảng cáo của mình.
+- `Target BUY/SELL min/max`: khoảng hạn mức của quảng cáo đối thủ cần đưa vào phép tính; hai khoảng chỉ cần giao nhau.
+- `Giá mua tối đa`: giá trần của BUY, mô phỏng không được đề xuất cao hơn.
+- `Giá bán tối thiểu`: giá sàn của SELL, mô phỏng không được đề xuất thấp hơn.
 
 ## Luồng xử lý
 
 1. Nhân viên tạo đơn qua `POST /orders`.
 2. SePay đẩy giao dịch đến `POST /webhooks/sepay`; endpoint chuẩn hóa cũ vẫn có tại `/bank-transactions/{bank}`.
 3. Bot chỉ xét đơn `WAITING_PAYMENT`, cùng số tiền và trong cửa sổ thời gian.
-4. Điểm ưu tiên mã đơn trong nội dung (40) + số tiền (50); tên người chuyển chỉ dùng khi ngân hàng cung cấp.
+4. Điểm ưu tiên số tiền, tên người thanh toán trong nội dung và 5 số cuối ID lệnh.
 5. Từ 90 điểm và không mơ hồ: `AUTO_MATCHED`; từ 60: `REVIEW_REQUIRED`; còn lại: `UNMATCHED`.
 6. Telegram luôn nhắc người vận hành kiểm tra thủ công.
 
