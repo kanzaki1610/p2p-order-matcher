@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .models import OrderConfirmation, P2POrder
+from .models import OrderConfirmation, OrderRejection, P2POrder
 
 
 VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -21,6 +21,7 @@ Ví dụ: /don P2P003 | 1000000 | NGUYEN VAN A | MB
 /danhsach - 10 đơn gần nhất
 /chitiet MÃ_ĐƠN - xem chi tiết
 /xacnhan MÃ_ĐƠN - xác nhận đã kiểm tra tiền
+/tuchoi MÃ_ĐƠN | LÝ_DO - từ chối giao dịch nghi vấn
 /huy MÃ_ĐƠN - hủy đơn đang chờ
 /help - xem hướng dẫn
 
@@ -66,7 +67,11 @@ def parse_create_order(text: str) -> tuple[str, Decimal, str, str]:
     return order_code, normalize_amount(amount_text), counterparty_name, bank
 
 
-def format_order(order: P2POrder, confirmation: OrderConfirmation | None = None) -> str:
+def format_order(
+    order: P2POrder,
+    confirmation: OrderConfirmation | None = None,
+    rejection: OrderRejection | None = None,
+) -> str:
     result = (
         f"Mã đơn: {order.order_code}\n"
         f"Số tiền: {order.fiat_amount:,.0f} VND\n"
@@ -81,6 +86,14 @@ def format_order(order: P2POrder, confirmation: OrderConfirmation | None = None)
         result += (
             f"\nXác nhận bởi: {operator or confirmation.telegram_user_id}"
             f"\nXác nhận lúc: {format_vietnam_time(confirmation.confirmed_at)}"
+        )
+    if rejection:
+        operator = rejection.telegram_username or rejection.telegram_display_name
+        operator = f"@{operator}" if rejection.telegram_username else operator
+        result += (
+            f"\nTừ chối bởi: {operator or rejection.telegram_user_id}"
+            f"\nTừ chối lúc: {format_vietnam_time(rejection.rejected_at)}"
+            f"\nLý do từ chối: {rejection.reason}"
         )
     return result
 
@@ -128,6 +141,52 @@ def handle_command(
         )
         return "\n".join(lines)
 
+    if command == "/tuchoi":
+        _, _, arguments = text.strip().partition(" ")
+        parts = [part.strip() for part in arguments.split("|", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return "❌ Sai cú pháp. Ví dụ: /tuchoi P2P003 | Tên người chuyển không đúng"
+        order_code = parts[0].upper()
+        reason = parts[1]
+        if len(reason) < 3:
+            return "❌ Lý do từ chối quá ngắn"
+        if len(reason) > 500:
+            return "❌ Lý do từ chối không được vượt quá 500 ký tự"
+        order = db.scalar(select(P2POrder).where(P2POrder.order_code == order_code))
+        if not order:
+            return f"❌ Không tìm thấy đơn {order_code}"
+        if order.status == "REJECTED":
+            rejection = db.scalar(
+                select(OrderRejection).where(OrderRejection.order_id == order.id)
+            )
+            suffix = f": {rejection.reason}" if rejection else ""
+            return f"ℹ️ Đơn {order_code} đã bị từ chối trước đó{suffix}"
+        if order.status != "PAYMENT_DETECTED":
+            return f"❌ Chỉ từ chối đơn PAYMENT_DETECTED; trạng thái hiện tại: {order.status}"
+        rejection = OrderRejection(
+            order_id=order.id,
+            reason=reason,
+            telegram_user_id=telegram_user_id,
+            telegram_username=telegram_username,
+            telegram_display_name=telegram_display_name,
+        )
+        order.status = "REJECTED"
+        db.add(rejection)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            return f"ℹ️ Đơn {order_code} đã bị từ chối trước đó"
+        db.refresh(rejection)
+        return (
+            "⛔ ĐÃ TỪ CHỐI GIAO DỊCH\n"
+            f"Mã đơn: {order_code}\n"
+            f"Số tiền: {order.fiat_amount:,.0f} VND\n"
+            f"Lý do: {reason}\n"
+            f"Từ chối lúc: {format_vietnam_time(rejection.rejected_at)}\n"
+            "Hành động: KIỂM TRA THỦ CÔNG — bot không release USDT."
+        )
+
     if command in {"/chitiet", "/huy", "/xacnhan"}:
         parts = text.strip().split(maxsplit=1)
         if len(parts) != 2:
@@ -140,7 +199,10 @@ def handle_command(
             confirmation = db.scalar(
                 select(OrderConfirmation).where(OrderConfirmation.order_id == order.id)
             )
-            return format_order(order, confirmation)
+            rejection = db.scalar(
+                select(OrderRejection).where(OrderRejection.order_id == order.id)
+            )
+            return format_order(order, confirmation, rejection)
         if command == "/xacnhan":
             if order.status == "CONFIRMED":
                 confirmation = db.scalar(

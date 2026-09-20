@@ -73,3 +73,16 @@ class OrderConfirmation(Base):
     telegram_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     telegram_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OrderRejection(Base):
+    __tablename__ = "order_rejections"
+    __table_args__ = (UniqueConstraint("order_id", name="uq_order_rejection"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("p2p_orders.id"), index=True)
+    reason: Mapped[str] = mapped_column(String(500))
+    telegram_user_id: Mapped[str] = mapped_column(String(50))
+    telegram_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    telegram_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

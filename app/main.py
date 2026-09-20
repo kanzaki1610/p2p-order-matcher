@@ -15,7 +15,7 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.4.1")
+app = FastAPI(title="P2P Order Matcher", version="0.5.0")
 
 
 def verify_ingest_key(x_api_key: str = Header(default="")) -> None:
