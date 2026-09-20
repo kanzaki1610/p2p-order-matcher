@@ -1,13 +1,47 @@
-# Bot khớp đơn P2P – SePay/MB/VIB/VPBank (V2)
+# OKX P2P Control + Bot đối soát SePay/Telegram (V9)
 
-V2 nhận đơn P2P nhập thủ công, nhận trực tiếp webhook SePay từ MB/VIB/VPBank, chấm điểm khớp và báo Telegram. Bot **không tự release USDT**.
+V9 bổ sung Chrome Extension chỉ đọc quảng cáo đang hiển thị trên trang OKX P2P. Dashboard vẫn chạy bắt buộc ở chế độ DRY RUN; hệ thống **không tự release USDT**, không click trên OKX và không gửi hành động đề giá thật.
+
+## Dashboard OKX
+
+Mở `https://<service>.onrender.com/dashboard` và đăng nhập bằng `DASHBOARD_ADMIN_KEY`.
+
+- 2 BUY slots và 2 SELL slots.
+- Giá trần BUY/giá sàn SELL riêng theo slot, chu kỳ quét và bước giá.
+- Hạn mức min/max của quảng cáo mình tách biệt với khoảng hạn mức đối thủ cần theo dõi.
+- Bộ lọc tuổi tài khoản, số lệnh hoàn tất và tổng số lệnh.
+- Blacklist bỏ qua hoàn toàn; Friendly theo cùng giá.
+- Tin nhắn tự động chỉ được lưu làm cấu hình.
+- Lịch sử cấu hình và chạy mô phỏng.
+- API key/secret/passphrase không lưu trong PostgreSQL.
+- LIVE bị khóa ở cấp mã nguồn cho tới khi có quyền và tài liệu OKX P2P merchant.
+
+## Chrome Extension chỉ đọc
+
+Extension nằm trong thư mục `okx-p2p-extension` và chỉ gửi nickname, giá, hạn mức cùng thống kê công khai nhìn thấy trên trang P2P. Extension không gửi cookie, session token, mật khẩu, API key, số dư hay dữ liệu lệnh OKX.
+
+1. Tạo biến Render `OKX_BROWSER_BRIDGE_SECRET` bằng một chuỗi ngẫu nhiên dài và khác `DASHBOARD_ADMIN_KEY`.
+2. Mở `chrome://extensions`, bật **Developer mode**.
+3. Chọn **Load unpacked**, rồi chọn thư mục `okx-p2p-extension`.
+4. Mở Extension, nhập URL Render và đúng Bridge Secret.
+5. Mở trang OKX P2P, chọn BUY hoặc SELL rồi nhấn **Quét ngay**.
+6. Dashboard sẽ hiển thị snapshot và giá đề xuất cho từng slot.
+
+Chrome và tab OKX phải đang mở. Đây là bộ nhận diện giao diện thử nghiệm, không phải API P2P chính thức; nếu OKX đổi giao diện thì có thể cần cập nhật selector.
+
+### Ý nghĩa các trường đề giá
+
+- `Min/Max giao dịch của quảng cáo mình`: hạn mức khách được giao dịch trên quảng cáo của mình.
+- `Target BUY/SELL min/max`: khoảng hạn mức của quảng cáo đối thủ cần đưa vào phép tính; hai khoảng chỉ cần giao nhau.
+- `Giá mua tối đa`: giá trần của BUY, mô phỏng không được đề xuất cao hơn.
+- `Giá bán tối thiểu`: giá sàn của SELL, mô phỏng không được đề xuất thấp hơn.
 
 ## Luồng xử lý
 
 1. Nhân viên tạo đơn qua `POST /orders`.
 2. SePay đẩy giao dịch đến `POST /webhooks/sepay`; endpoint chuẩn hóa cũ vẫn có tại `/bank-transactions/{bank}`.
 3. Bot chỉ xét đơn `WAITING_PAYMENT`, cùng số tiền và trong cửa sổ thời gian.
-4. Điểm ưu tiên mã đơn trong nội dung (40) + số tiền (50); tên người chuyển chỉ dùng khi ngân hàng cung cấp.
+4. Điểm ưu tiên số tiền, tên người thanh toán trong nội dung và 5 số cuối ID lệnh.
 5. Từ 90 điểm và không mơ hồ: `AUTO_MATCHED`; từ 60: `REVIEW_REQUIRED`; còn lại: `UNMATCHED`.
 6. Telegram luôn nhắc người vận hành kiểm tra thủ công.
 
@@ -37,7 +71,7 @@ Không gửi token/khóa ngân hàng qua chat. Chỉ đặt chúng trong biến 
 
 1. Tạo PostgreSQL trên Render và sao chép **Internal Database URL**.
 2. Tạo Web Service từ kho GitHub này hoặc dùng `render.yaml`.
-3. Điền `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`; Render tự sinh hai khóa còn lại nếu dùng Blueprint.
+3. Điền `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`; đồng thời tạo `OKX_BROWSER_BRIDGE_SECRET` nếu dùng Extension. Render tự sinh các khóa khi dùng Blueprint.
 4. Kiểm tra `https://<service>.onrender.com/health`.
 5. Trong SePay, tạo Webhook sự kiện **Có tiền vào** đến `https://<service>.onrender.com/webhooks/sepay`.
 6. Cấu hình header `X-API-Key` có giá trị đúng bằng `SEPAY_WEBHOOK_SECRET` trên Render.

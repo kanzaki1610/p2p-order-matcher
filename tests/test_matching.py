@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from app.matching import evaluate, normalize_text
+from app.matching import contains_five_digit_reference, evaluate, normalize_text
 from app.models import BankTransaction, P2POrder
 
 
@@ -60,3 +60,30 @@ def test_amount_only_is_not_auto_match():
     )
     score, _ = evaluate(order, tx)
     assert score < 90
+
+
+def test_real_p2p_content_matches_name_and_last_five_order_digits():
+    order = P2POrder(
+        order_code="260920160719335",
+        fiat_amount=Decimal("1000000"),
+        counterparty_name="THI HONG THAM DAO",
+        expected_bank="MB",
+        payment_note="19335",
+    )
+    tx = BankTransaction(
+        bank="MB",
+        transaction_id="FT-REAL-DEMO",
+        amount=Decimal("1000000"),
+        sender_name=None,
+        description="THI HONG THAM DAO chuyen tien 19335",
+        occurred_at=datetime.now(timezone.utc),
+    )
+    score, reasons = evaluate(order, tx)
+    assert score == 100
+    assert any("Tên người thanh toán" in reason for reason in reasons)
+    assert any("5 số cuối" in reason for reason in reasons)
+
+
+def test_reference_must_be_independent_five_digit_group():
+    assert contains_five_digit_reference("chuyen tien 19335", "19335")
+    assert not contains_five_digit_reference("ma FT26193350001", "19335")

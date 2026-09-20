@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "OKX P2P Read-only Bridge",
+  "version": "0.1.0",
+  "description": "Đọc quảng cáo P2P đang hiển thị và gửi dữ liệu công khai về P2P Order Matcher. Không tự giao dịch.",
+  "permissions": ["storage", "activeTab", "tabs"],
+  "host_permissions": [
+    "https://okx.com/*",
+    "https://*.okx.com/*",
+    "https://*.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "OKX P2P Bridge",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://okx.com/*", "https://*.okx.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

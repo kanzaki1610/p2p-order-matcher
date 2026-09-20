@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body{width:360px;margin:0;padding:18px;background:#08101e;color:#eef4ff;font:13px/1.45 system-ui,sans-serif}h1{font-size:17px;margin:0 0 5px}p{color:#91a4bf;margin:0 0 14px}.field{display:grid;gap:5px;margin:11px 0}.field label{font-size:12px;color:#b9c7da}.field input,.field select{width:100%;box-sizing:border-box;border:1px solid #293952;border-radius:8px;background:#0d1728;color:#fff;padding:9px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.toggle{display:flex;align-items:center;gap:8px;margin:12px 0}.actions{display:flex;gap:8px}.btn{flex:1;border:0;border-radius:8px;padding:10px;color:white;background:#26364e;font-weight:700;cursor:pointer}.btn.primary{background:#2f6df6}.status{margin-top:12px;padding:10px;border-radius:8px;background:#101d31;color:#bcd2ef;white-space:pre-wrap}.status.ok{border:1px solid #1f754e;color:#87edb8}.status.bad{border:1px solid #8a303b;color:#ff9ca5}.warning{border-left:3px solid #f5ad42;padding:8px 10px;background:#2a2012;color:#ffdca3;margin-top:12px}
+  </style>
+</head>
+<body>
+  <h1>OKX P2P Read-only Bridge</h1>
+  <p>Chỉ đọc quảng cáo đang hiển thị. Không click và không giao dịch.</p>
+  <div class="field"><label>Render URL</label><input id="serverUrl" type="url"></div>
+  <div class="field"><label>OKX_BROWSER_BRIDGE_SECRET</label><input id="bridgeSecret" type="password" autocomplete="off"></div>
+  <div class="row">
+    <div class="field"><label>Chiều đang xem</label><select id="side"><option value="AUTO">Tự nhận diện</option><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div>
+    <div class="field"><label>Quét mỗi (giây)</label><input id="intervalSeconds" type="number" min="5" max="300"></div>
+  </div>
+  <label class="toggle"><input id="enabled" type="checkbox"> Tự động quét khi trang OKX đang mở</label>
+  <div class="actions"><button class="btn primary" id="save">Lưu</button><button class="btn" id="scan">Quét ngay</button></div>
+  <div class="status" id="status">Chưa chạy thử.</div>
+  <div class="warning">Không nhập API Key, Secret Key, mật khẩu OKX hoặc cookie vào Extension.</div>
+  <script src="popup.js"></script>
+</body>
+</html>
