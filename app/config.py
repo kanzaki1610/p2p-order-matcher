@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     sepay_webhook_secret: str = "change-this-to-a-different-long-random-key"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    telegram_webhook_secret: str = ""
+    public_base_url: str = ""
     match_window_minutes: int = 180
     auto_match_threshold: int = 90
     review_threshold: int = 60

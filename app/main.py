@@ -11,10 +11,11 @@ from .matching import match_transaction
 from .models import BankTransaction, P2POrder
 from .schemas import BankTransactionIn, MatchResult, OrderCreate, OrderOut, SePayWebhookIn, SePayWebhookOut
 from .sepay import combined_description, normalize_bank, parse_sepay_datetime, transaction_id
-from .telegram import notify_match
+from .telegram import notify_match, register_telegram_webhook, send_telegram_message
+from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.2.0")
+app = FastAPI(title="P2P Order Matcher", version="0.3.0")
 
 
 def verify_ingest_key(x_api_key: str = Header(default="")) -> None:
@@ -38,9 +39,46 @@ def verify_sepay_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook secret không hợp lệ")
 
 
+def verify_telegram_key(x_telegram_bot_api_secret_token: str = Header(default="")) -> None:
+    expected = settings.telegram_webhook_secret
+    if not expected or not secrets.compare_digest(x_telegram_bot_api_secret_token, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Telegram webhook secret không hợp lệ")
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "auto_release": False}
+    return {
+        "status": "ok",
+        "auto_release": False,
+        "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
+    }
+
+
+@app.post("/telegram/setup-webhook")
+async def setup_telegram_webhook(_: None = Depends(verify_ingest_key)):
+    success, message = await register_telegram_webhook()
+    if not success:
+        raise HTTPException(status_code=502, detail=message)
+    return {"success": True, "message": message}
+
+
+@app.post("/webhooks/telegram")
+async def telegram_webhook(
+    update: dict,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_telegram_key),
+):
+    message = update.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id", ""))
+    text = str(message.get("text", "")).strip()
+    if not chat_id or not text:
+        return {"ok": True, "ignored": True}
+    if not secrets.compare_digest(chat_id, settings.telegram_chat_id):
+        return {"ok": True, "ignored": True}
+    reply = handle_command(text, db)
+    await send_telegram_message(chat_id, reply)
+    return {"ok": True}
 
 
 @app.post("/orders", response_model=OrderOut, status_code=201)
