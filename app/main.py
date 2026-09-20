@@ -1,12 +1,14 @@
 import secrets
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import Base, engine, get_db
+from .dashboard import router as dashboard_router
 from .matching import match_transaction
 from .models import BankTransaction, P2POrder
 from .schemas import BankTransactionIn, MatchResult, OrderCreate, OrderOut, SePayWebhookIn, SePayWebhookOut
@@ -15,7 +17,13 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.7.0")
+app = FastAPI(title="P2P Order Matcher", version="0.8.0")
+app.include_router(dashboard_router)
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/dashboard")
 
 
 def verify_ingest_key(x_api_key: str = Header(default="")) -> None:
