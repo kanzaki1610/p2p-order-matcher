@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     auto_match_threshold: int = 90
     review_threshold: int = 60
     dashboard_admin_key: str = ""
+    okx_browser_bridge_secret: str = ""
     okx_api_key: str = ""
     okx_api_secret: str = ""
     okx_api_passphrase: str = ""

@@ -135,3 +135,14 @@ class OKXAuditLog(Base):
     detail: Mapped[str] = mapped_column(Text)
     actor: Mapped[str] = mapped_column(String(100), default="dashboard")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class OKXMarketSnapshot(Base):
+    __tablename__ = "okx_market_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    side: Mapped[str] = mapped_column(String(10), unique=True, index=True)
+    offers_json: Mapped[str] = mapped_column(Text)
+    page_url: Mapped[str] = mapped_column(Text, default="")
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

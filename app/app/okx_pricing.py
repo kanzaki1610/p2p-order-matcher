@@ -51,11 +51,14 @@ def propose_price(
         if competitor_max_amount and offer.min_amount > competitor_max_amount:
             reasons.append("hạn mức tối thiểu cao hơn Target")
         if special_filter_enabled:
-            if min_account_days and offer.account_days < min_account_days:
+            # Zero means the extension could not see this statistic on the
+            # current page. Unknown data is reported, but is not rejected as
+            # if it were a real zero-value account.
+            if min_account_days and offer.account_days and offer.account_days < min_account_days:
                 reasons.append("tuổi tài khoản thấp")
-            if min_completed_orders and offer.completed_orders < min_completed_orders:
+            if min_completed_orders and offer.completed_orders and offer.completed_orders < min_completed_orders:
                 reasons.append("số lệnh hoàn tất thấp")
-            if max_total_orders and offer.total_orders > max_total_orders:
+            if max_total_orders and offer.total_orders and offer.total_orders > max_total_orders:
                 reasons.append("tổng số lệnh vượt giới hạn")
         if reasons:
             skipped.append({"nickname": offer.nickname, "reasons": reasons})

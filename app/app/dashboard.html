@@ -28,7 +28,7 @@
 <div class="shell">
   <header class="top">
     <div class="brand"><div class="logo">OKX</div><div><h1>OKX P2P Control</h1><p>Đề giá có kiểm soát · Đối soát SePay · Telegram</p></div></div>
-    <div class="badges"><span class="badge safe">● SePay đang độc lập</span><span class="badge warn">DRY RUN bắt buộc</span><span class="badge" id="apiBadge">API chưa kiểm tra</span><button class="btn" onclick="logout()">Đăng xuất</button></div>
+    <div class="badges"><span class="badge safe">● SePay đang độc lập</span><span class="badge warn">DRY RUN bắt buộc</span><span class="badge" id="bridgeBadge">Extension chưa có dữ liệu</span><span class="badge" id="apiBadge">API chưa kiểm tra</span><button class="btn" onclick="logout()">Đăng xuất</button></div>
   </header>
   <div class="layout">
     <aside class="sidebar">
@@ -52,6 +52,10 @@
             <div class="status-card"><small>Kết nối P2P</small><b id="connectorStatus">Chưa kết nối</b></div>
             <div class="status-card"><small>Số slot</small><b>4</b></div>
           </div>
+        </div>
+        <div class="panel">
+          <div class="section-title"><div><h2>Dữ liệu OKX Extension</h2><p>Snapshot chỉ đọc từ quảng cáo đang hiển thị trên trình duyệt của bạn.</p></div><button class="btn" onclick="loadState()">Làm mới</button></div>
+          <div id="bridgeSnapshots"><div class="empty">Extension chưa gửi dữ liệu.</div></div>
         </div>
         <div class="panel"><div class="section-title"><div><h2>Trạng thái slot</h2><p>Giá gần nhất chỉ là kết quả mô phỏng.</p></div></div><div class="slots" id="overviewSlots"></div></div>
       </section>
@@ -99,7 +103,7 @@
       <section class="tab" id="tab-advanced">
         <div class="panel"><div class="section-title"><div><h2>Kết nối OKX</h2><p>Thông tin bí mật chỉ được đọc từ biến môi trường Render.</p></div></div>
           <div class="notice">Không nhập API key hoặc secret vào trang này. Không cấp quyền rút tiền. Chỉ bật IP whitelist khi có máy chủ IP cố định.</div>
-          <div class="grid"><div class="status-card"><small>Base URL</small><b id="baseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret / Passphrase</small><b id="credentialsStatus" style="font-size:14px">—</b></div></div>
+          <div class="grid"><div class="status-card"><small>Base URL</small><b id="baseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret / Passphrase</small><b id="credentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Browser Bridge</small><b id="bridgeStatus" style="font-size:14px">—</b></div></div>
           <div class="actions"><button class="btn" disabled>Kết nối P2P — chưa có tài liệu merchant</button></div>
         </div>
         <div class="panel"><div class="section-title"><div><h2>An toàn vận hành</h2></div></div><div class="grid three"><div class="status-card"><small>Release USDT</small><b style="color:#88f0ba">Thủ công</b></div><div class="status-card"><small>LIVE pricing</small><b style="color:#ffd28b">Đã khóa</b></div><div class="status-card"><small>API secret trong DB</small><b style="color:#88f0ba">Không lưu</b></div></div></div>
@@ -124,7 +128,24 @@ function showTab(name){$$('.nav button').forEach(x=>x.classList.toggle('active',
 $$('.nav button').forEach(x=>x.onclick=()=>showTab(x.dataset.tab));
 $('#loginForm').onsubmit=async e=>{e.preventDefault();adminKey=$('#adminKey').value;try{await loadState();sessionStorage.setItem('okxAdminKey',adminKey);$('#loginOverlay').classList.add('hidden');$('#loginError').textContent=''}catch(err){$('#loginError').textContent=err.message}};
 function slotCard(slot,editor=false){const id=`${slot.side}-${slot.slot_number}`,guardLabel=slot.side==='BUY'?'Giá mua tối đa (giá trần)':'Giá bán tối thiểu (giá sàn)';return `<div class="slot"><div class="slot-head"><strong>${slot.side} Slot ${slot.slot_number}</strong><label class="toggle"><input type="checkbox" id="auto-${id}" ${slot.auto_enabled?'checked':''} ${editor?'':'disabled'}> Auto</label></div>${editor?`<div class="grid"><div class="field"><label>Giá hiện tại</label><input id="price-${id}" type="number" value="${slot.current_price}"></div><div class="field"><label>${guardLabel}</label><input id="target-${id}" type="number" value="${slot.target_price}"><span class="hint">Để 0 nếu chưa muốn giới hạn giá.</span></div><div class="field"><label>Min giao dịch của quảng cáo mình</label><input id="min-${id}" type="number" value="${slot.min_amount}"></div><div class="field"><label>Max giao dịch của quảng cáo mình</label><input id="max-${id}" type="number" value="${slot.max_amount}"></div><div class="field" style="grid-column:1/-1"><label>AdvId</label><input id="adv-${id}" value="${slot.adv_id||''}"></div></div><div class="actions"><button class="btn green" onclick="saveSlot('${slot.side}',${slot.slot_number})">Lưu ${slot.side} Slot ${slot.slot_number}</button></div>`:`<div class="grid"><div><span class="hint">Giá mô phỏng</span><div style="font-size:22px;font-weight:800">${fmt(slot.current_price)} ₫</div></div><div><span class="hint">Hạn mức quảng cáo mình</span><div>${fmt(slot.min_amount)} – ${fmt(slot.max_amount)}</div></div></div>`}</div>`}
-function render(){const cfg=state.config;$$('[data-config]').forEach(el=>{const v=cfg[el.dataset.config];if(el.type==='checkbox')el.checked=!!v;else el.value=v??''});$('#overviewSlots').innerHTML=state.slots.map(s=>slotCard(s,false)).join('');$('#slotEditor').innerHTML=state.slots.map(s=>slotCard(s,true)).join('');$('#apiBadge').textContent=state.api.p2p_connector==='CONNECTED'?'API P2P đã kết nối':'API P2P chưa kết nối';$('#connectorStatus').textContent=state.api.p2p_connector==='CONNECTED'?'Đã kết nối':'Chưa kết nối';$('#baseUrl').textContent=state.api.base_url;const ok=state.api.key_configured&&state.api.secret_configured&&state.api.passphrase_configured;$('#credentialsStatus').textContent=ok?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';const body=$('#historyBody');body.innerHTML=state.history.length?state.history.map(x=>`<tr><td>${x.action}</td><td>${x.detail}</td><td>${vnTime(x.created_at)}</td></tr>`).join(''):`<tr><td colspan="3" class="empty">Chưa có lịch sử.</td></tr>`}
+function bridgeSnapshotCard(snapshot){const suggestions=snapshot.suggestions.map(item=>`<div class="status-card"><small>${snapshot.side} Slot ${item.slot_number}</small><b>${item.proposed_price==null?'—':fmt(item.proposed_price)+' ₫'}</b><span class="hint">${item.reason}</span></div>`).join('');return `<div class="slot"><div class="slot-head"><strong>${snapshot.side} · ${snapshot.offer_count} quảng cáo</strong><span class="hint">${vnTime(snapshot.received_at)}</span></div><div class="grid">${suggestions}</div><div class="hint" style="margin-top:12px">Nguồn chỉ đọc từ tab OKX · Không có hành động LIVE</div></div>`}
+function render(){
+  const cfg=state.config;
+  $$('[data-config]').forEach(el=>{const v=cfg[el.dataset.config];if(el.type==='checkbox')el.checked=!!v;else el.value=v??''});
+  $('#overviewSlots').innerHTML=state.slots.map(s=>slotCard(s,false)).join('');
+  $('#slotEditor').innerHTML=state.slots.map(s=>slotCard(s,true)).join('');
+  $('#apiBadge').textContent=state.api.p2p_connector==='CONNECTED'?'API P2P đã kết nối':'API P2P chưa kết nối';
+  $('#connectorStatus').textContent=state.api.p2p_connector==='CONNECTED'?'Đã kết nối':'Chưa kết nối';
+  $('#baseUrl').textContent=state.api.base_url;
+  const credentialsOk=state.api.key_configured&&state.api.secret_configured&&state.api.passphrase_configured;
+  $('#credentialsStatus').textContent=credentialsOk?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
+  $('#bridgeStatus').textContent=state.bridge.configured?'Đã cấu hình khóa chỉ đọc':'Chưa cấu hình OKX_BROWSER_BRIDGE_SECRET';
+  const snapshots=state.bridge.snapshots||[];
+  $('#bridgeBadge').textContent=snapshots.length?`Extension: ${snapshots.reduce((sum,x)=>sum+x.offer_count,0)} quảng cáo`:'Extension chưa có dữ liệu';
+  $('#bridgeSnapshots').innerHTML=snapshots.length?`<div class="slots">${snapshots.map(bridgeSnapshotCard).join('')}</div>`:'<div class="empty">Extension chưa gửi dữ liệu.</div>';
+  const body=$('#historyBody');
+  body.innerHTML=state.history.length?state.history.map(x=>`<tr><td>${x.action}</td><td>${x.detail}</td><td>${vnTime(x.created_at)}</td></tr>`).join(''):`<tr><td colspan="3" class="empty">Chưa có lịch sử.</td></tr>`;
+}
 async function loadState(){state=await api('/dashboard/api/state');render();return state}
 function collectConfig(){const out={...state.config};$$('[data-config]').forEach(el=>out[el.dataset.config]=el.type==='checkbox'?el.checked:(el.type==='number'?number(el.value):el.value));out.dry_run=true;return out}
 async function saveConfig(){try{const data=await api('/dashboard/api/config',{method:'PUT',body:JSON.stringify(collectConfig())});state.config=data.config;await loadState();toast('Đã lưu cấu hình DRY RUN')}catch(e){toast(e.message,true)}}

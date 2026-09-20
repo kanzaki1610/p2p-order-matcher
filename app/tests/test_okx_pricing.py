@@ -76,6 +76,19 @@ def test_blacklist_and_account_filters_are_applied():
     assert len(result["skipped"]) == 2
 
 
+def test_unknown_account_statistics_are_not_treated_as_real_zeroes():
+    result = propose(
+        "BUY",
+        [offer("UnknownStats", "25700", days=0, completed=0, total=0)],
+        special_filter_enabled=True,
+        min_account_days=70,
+        min_completed_orders=90,
+        max_total_orders=200,
+    )
+    assert result["competitor"]["nickname"] == "UnknownStats"
+    assert result["skipped"] == []
+
+
 def test_competitor_amount_range_requires_an_overlap():
     result = propose(
         "BUY",

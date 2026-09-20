@@ -17,7 +17,7 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.8.1")
+app = FastAPI(title="P2P Order Matcher", version="0.9.0")
 app.include_router(dashboard_router)
 
 
