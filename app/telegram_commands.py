@@ -15,8 +15,8 @@ VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 HELP_TEXT = """LỆNH BOT P2P
 
-/don MÃ_ĐƠN | SỐ_TIỀN | TÊN_NGƯỜI_MUA | NGÂN_HÀNG
-Ví dụ: /don P2P003 | 1000000 | NGUYEN VAN A | MB
+/don ID_LỆNH | SỐ_TIỀN | TÊN_NGƯỜI_THANH_TOÁN | NGÂN_HÀNG_NHẬN
+Ví dụ: /don 260920160719335 | 1000000 | THI HONG THAM DAO | MB
 
 /danhsach - 10 đơn gần nhất
 /baocao - báo cáo các đơn tạo hôm nay
@@ -94,17 +94,28 @@ def parse_create_order(text: str) -> tuple[str, Decimal, str, str]:
     _, _, arguments = text.partition(" ")
     parts = [part.strip() for part in arguments.split("|")]
     if len(parts) != 4:
-        raise ValueError("Sai cú pháp. Ví dụ: /don P2P003 | 1000000 | NGUYEN VAN A | MB")
+        raise ValueError(
+            "Sai cú pháp. Ví dụ: /don 260920160719335 | 1000000 | THI HONG THAM DAO | MB"
+        )
     order_code, amount_text, counterparty_name, bank = parts
     order_code = order_code.upper()
     bank = bank.upper()
-    if not re.fullmatch(r"[A-Z0-9_-]{3,100}", order_code):
-        raise ValueError("Mã đơn chỉ dùng chữ, số, dấu _ hoặc -")
+    if not re.fullmatch(r"[A-Z0-9_-]{5,100}", order_code):
+        raise ValueError("ID lệnh chỉ dùng chữ, số, dấu _ hoặc -")
+    if not re.search(r"\d{5}$", order_code):
+        raise ValueError("ID lệnh phải kết thúc bằng ít nhất 5 chữ số")
     if len(counterparty_name) < 2:
         raise ValueError("Tên người mua quá ngắn")
     if bank not in {"MB", "VIB", "VPBANK"}:
         raise ValueError("Ngân hàng chỉ nhận MB, VIB hoặc VPBANK")
     return order_code, normalize_amount(amount_text), counterparty_name, bank
+
+
+def payment_reference(order_code: str) -> str:
+    match = re.search(r"(\d{5})$", order_code)
+    if not match:
+        raise ValueError("ID lệnh không có 5 số cuối hợp lệ")
+    return match.group(1)
 
 
 def format_order(
@@ -115,8 +126,10 @@ def format_order(
     result = (
         f"Mã đơn: {order.order_code}\n"
         f"Số tiền: {order.fiat_amount:,.0f} VND\n"
-        f"Người mua: {order.counterparty_name}\n"
-        f"Ngân hàng: {order.expected_bank or 'Không chỉ định'}\n"
+        f"Người thanh toán: {order.counterparty_name}\n"
+        f"Ngân hàng nhận: {order.expected_bank or 'Không chỉ định'}\n"
+        f"Mã chuyển tiền: {order.payment_note or 'Không có'}\n"
+        f"Nội dung dự kiến: {order.counterparty_name} chuyen tien {order.payment_note or ''}\n"
         f"Trạng thái: {order.status}\n"
         f"Tạo lúc: {format_vietnam_time(order.created_at)}"
     )
@@ -159,7 +172,7 @@ def handle_command(
             fiat_amount=amount,
             counterparty_name=counterparty_name,
             expected_bank=bank,
-            payment_note=order_code,
+            payment_note=payment_reference(order_code),
         )
         db.add(order)
         try:
