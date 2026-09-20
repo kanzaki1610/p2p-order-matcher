@@ -1,11 +1,16 @@
 import re
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .models import OrderConfirmation, P2POrder
+
+
+VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
 HELP_TEXT = """LỆNH BOT P2P
@@ -36,6 +41,14 @@ def normalize_amount(value: str) -> Decimal:
     return amount
 
 
+def format_vietnam_time(value: datetime | None) -> str:
+    if value is None:
+        return "Không có dữ liệu"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(VIETNAM_TIMEZONE).strftime("%H:%M:%S %d/%m/%Y")
+
+
 def parse_create_order(text: str) -> tuple[str, Decimal, str, str]:
     _, _, arguments = text.partition(" ")
     parts = [part.strip() for part in arguments.split("|")]
@@ -60,14 +73,14 @@ def format_order(order: P2POrder, confirmation: OrderConfirmation | None = None)
         f"Người mua: {order.counterparty_name}\n"
         f"Ngân hàng: {order.expected_bank or 'Không chỉ định'}\n"
         f"Trạng thái: {order.status}\n"
-        f"Tạo lúc: {order.created_at.isoformat()}"
+        f"Tạo lúc: {format_vietnam_time(order.created_at)}"
     )
     if confirmation:
         operator = confirmation.telegram_username or confirmation.telegram_display_name
         operator = f"@{operator}" if confirmation.telegram_username else operator
         result += (
             f"\nXác nhận bởi: {operator or confirmation.telegram_user_id}"
-            f"\nXác nhận lúc: {confirmation.confirmed_at.isoformat()}"
+            f"\nXác nhận lúc: {format_vietnam_time(confirmation.confirmed_at)}"
         )
     return result
 
@@ -156,7 +169,7 @@ def handle_command(
                 "✅ ĐÃ XÁC NHẬN THANH TOÁN\n"
                 f"Mã đơn: {order_code}\n"
                 f"Số tiền: {order.fiat_amount:,.0f} VND\n"
-                f"Xác nhận lúc: {confirmation.confirmed_at.isoformat()}\n"
+                f"Xác nhận lúc: {format_vietnam_time(confirmation.confirmed_at)}\n"
                 "Lưu ý: thao tác này không tự release USDT."
             )
         if order.status != "WAITING_PAYMENT":
