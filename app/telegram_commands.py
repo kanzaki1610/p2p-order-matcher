@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .models import P2POrder
+from .models import OrderConfirmation, P2POrder
 
 
 HELP_TEXT = """LỆNH BOT P2P
@@ -15,6 +15,7 @@ Ví dụ: /don P2P003 | 1000000 | NGUYEN VAN A | MB
 
 /danhsach - 10 đơn gần nhất
 /chitiet MÃ_ĐƠN - xem chi tiết
+/xacnhan MÃ_ĐƠN - xác nhận đã kiểm tra tiền
 /huy MÃ_ĐƠN - hủy đơn đang chờ
 /help - xem hướng dẫn
 
@@ -52,8 +53,8 @@ def parse_create_order(text: str) -> tuple[str, Decimal, str, str]:
     return order_code, normalize_amount(amount_text), counterparty_name, bank
 
 
-def format_order(order: P2POrder) -> str:
-    return (
+def format_order(order: P2POrder, confirmation: OrderConfirmation | None = None) -> str:
+    result = (
         f"Mã đơn: {order.order_code}\n"
         f"Số tiền: {order.fiat_amount:,.0f} VND\n"
         f"Người mua: {order.counterparty_name}\n"
@@ -61,9 +62,23 @@ def format_order(order: P2POrder) -> str:
         f"Trạng thái: {order.status}\n"
         f"Tạo lúc: {order.created_at.isoformat()}"
     )
+    if confirmation:
+        operator = confirmation.telegram_username or confirmation.telegram_display_name
+        operator = f"@{operator}" if confirmation.telegram_username else operator
+        result += (
+            f"\nXác nhận bởi: {operator or confirmation.telegram_user_id}"
+            f"\nXác nhận lúc: {confirmation.confirmed_at.isoformat()}"
+        )
+    return result
 
 
-def handle_command(text: str, db: Session) -> str:
+def handle_command(
+    text: str,
+    db: Session,
+    telegram_user_id: str = "unknown",
+    telegram_username: str | None = None,
+    telegram_display_name: str | None = None,
+) -> str:
     command = text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower()
     if command in {"/start", "/help"}:
         return HELP_TEXT
@@ -100,7 +115,7 @@ def handle_command(text: str, db: Session) -> str:
         )
         return "\n".join(lines)
 
-    if command in {"/chitiet", "/huy"}:
+    if command in {"/chitiet", "/huy", "/xacnhan"}:
         parts = text.strip().split(maxsplit=1)
         if len(parts) != 2:
             return f"❌ Thiếu mã đơn. Ví dụ: {command} P2P003"
@@ -109,7 +124,41 @@ def handle_command(text: str, db: Session) -> str:
         if not order:
             return f"❌ Không tìm thấy đơn {order_code}"
         if command == "/chitiet":
-            return format_order(order)
+            confirmation = db.scalar(
+                select(OrderConfirmation).where(OrderConfirmation.order_id == order.id)
+            )
+            return format_order(order, confirmation)
+        if command == "/xacnhan":
+            if order.status == "CONFIRMED":
+                confirmation = db.scalar(
+                    select(OrderConfirmation).where(OrderConfirmation.order_id == order.id)
+                )
+                operator = confirmation.telegram_username if confirmation else None
+                suffix = f" bởi @{operator}" if operator else ""
+                return f"ℹ️ Đơn {order_code} đã được xác nhận{suffix}"
+            if order.status != "PAYMENT_DETECTED":
+                return f"❌ Chỉ xác nhận đơn PAYMENT_DETECTED; trạng thái hiện tại: {order.status}"
+            confirmation = OrderConfirmation(
+                order_id=order.id,
+                telegram_user_id=telegram_user_id,
+                telegram_username=telegram_username,
+                telegram_display_name=telegram_display_name,
+            )
+            order.status = "CONFIRMED"
+            db.add(confirmation)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                return f"ℹ️ Đơn {order_code} đã được xác nhận trước đó"
+            db.refresh(confirmation)
+            return (
+                "✅ ĐÃ XÁC NHẬN THANH TOÁN\n"
+                f"Mã đơn: {order_code}\n"
+                f"Số tiền: {order.fiat_amount:,.0f} VND\n"
+                f"Xác nhận lúc: {confirmation.confirmed_at.isoformat()}\n"
+                "Lưu ý: thao tác này không tự release USDT."
+            )
         if order.status != "WAITING_PAYMENT":
             return f"❌ Không thể hủy đơn đang ở trạng thái {order.status}"
         order.status = "CANCELLED"

@@ -15,7 +15,7 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.3.0")
+app = FastAPI(title="P2P Order Matcher", version="0.4.0")
 
 
 def verify_ingest_key(x_api_key: str = Header(default="")) -> None:
@@ -76,7 +76,17 @@ async def telegram_webhook(
         return {"ok": True, "ignored": True}
     if not secrets.compare_digest(chat_id, settings.telegram_chat_id):
         return {"ok": True, "ignored": True}
-    reply = handle_command(text, db)
+    sender = message.get("from") or {}
+    first_name = str(sender.get("first_name", "")).strip()
+    last_name = str(sender.get("last_name", "")).strip()
+    display_name = " ".join(part for part in (first_name, last_name) if part) or None
+    reply = handle_command(
+        text,
+        db,
+        telegram_user_id=str(sender.get("id", "unknown")),
+        telegram_username=sender.get("username"),
+        telegram_display_name=display_name,
+    )
     await send_telegram_message(chat_id, reply)
     return {"ok": True}
 
