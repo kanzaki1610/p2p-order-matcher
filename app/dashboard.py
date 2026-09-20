@@ -185,14 +185,20 @@ def update_config(
 ):
     config = get_or_create_config(db)
     data = payload.model_dump()
+    if data["buy_target_min"] and data["buy_target_max"] and data["buy_target_min"] > data["buy_target_max"]:
+        raise HTTPException(status_code=422, detail="Target BUY tối thiểu không được lớn hơn tối đa")
+    if data["sell_target_min"] and data["sell_target_max"] and data["sell_target_min"] > data["sell_target_max"]:
+        raise HTTPException(status_code=422, detail="Target SELL tối thiểu không được lớn hơn tối đa")
     # LIVE mode is intentionally disabled until an authorized OKX P2P connector exists.
     data["dry_run"] = True
+    changed = any(getattr(config, key) != value for key, value in data.items())
     for key, value in data.items():
         setattr(config, key, value)
-    add_audit(db, "CONFIG_UPDATED", "Đã cập nhật cấu hình OKX DRY RUN")
+    if changed:
+        add_audit(db, "CONFIG_UPDATED", "Đã cập nhật cấu hình OKX DRY RUN")
     db.commit()
     db.refresh(config)
-    return {"success": True, "config": config_dict(config)}
+    return {"success": True, "changed": changed, "config": config_dict(config)}
 
 
 @router.put("/dashboard/api/slots/{side}/{slot_number}")
@@ -206,6 +212,8 @@ def update_slot(
     side = side.upper()
     if side not in {"BUY", "SELL"} or slot_number not in {1, 2}:
         raise HTTPException(status_code=422, detail="Slot không hợp lệ")
+    if payload.min_amount and payload.max_amount and payload.min_amount > payload.max_amount:
+        raise HTTPException(status_code=422, detail="Min giao dịch không được lớn hơn Max giao dịch")
     get_or_create_slots(db)
     slot = db.scalar(select(OKXSlot).where(OKXSlot.side == side, OKXSlot.slot_number == slot_number))
     for key, value in payload.model_dump().items():
@@ -227,14 +235,15 @@ def simulate_pricing(
     slot = db.scalar(
         select(OKXSlot).where(OKXSlot.side == payload.side, OKXSlot.slot_number == payload.slot_number)
     )
-    target_min = config.buy_target_min if payload.side == "BUY" else config.sell_target_min
-    target_max = config.buy_target_max if payload.side == "BUY" else config.sell_target_max
+    competitor_min_amount = config.buy_target_min if payload.side == "BUY" else config.sell_target_min
+    competitor_max_amount = config.buy_target_max if payload.side == "BUY" else config.sell_target_max
     result = propose_price(
         side=payload.side,
         offers=[CompetitorOffer(**offer.model_dump()) for offer in payload.offers],
         price_step=config.price_step,
-        target_min=target_min,
-        target_max=target_max,
+        competitor_min_amount=competitor_min_amount,
+        competitor_max_amount=competitor_max_amount,
+        price_limit=slot.target_price,
         blacklist=parse_name_list(config.blacklist),
         friendly_list=parse_name_list(config.friendly_list),
         special_filter_enabled=config.special_filter_enabled,
@@ -255,6 +264,8 @@ def simulate_pricing(
     )
     if result["competitor"]:
         result["competitor"]["price"] = decimal_value(result["competitor"]["price"])
+        result["competitor"]["min_amount"] = decimal_value(result["competitor"]["min_amount"])
+        result["competitor"]["max_amount"] = decimal_value(result["competitor"]["max_amount"])
     result["simulated_at"] = datetime.now(timezone.utc).isoformat()
     result["live_action_performed"] = False
     return result
