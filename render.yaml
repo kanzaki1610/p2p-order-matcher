@@ -30,6 +30,22 @@ services:
         sync: false
       - key: OKX_API_PASSPHRASE
         sync: false
+      - key: BITGET_P2P_ENABLED
+        value: "false"
+      - key: BITGET_P2P_API_KEY
+        sync: false
+      - key: BITGET_P2P_API_SECRET
+        sync: false
+      - key: BITGET_P2P_API_PASSPHRASE
+        sync: false
+      - key: BITGET_P2P_BASE_URL
+        value: "https://api.bitget.com"
+      - key: BITGET_P2P_SYNC_SECONDS
+        value: "30"
+      - key: BITGET_P2P_AD_LIMIT
+        value: "10"
+      - key: BITGET_P2P_LIVE_WRITES
+        value: "false"
       - key: AUTO_MATCH_THRESHOLD
         value: "90"
       - key: REVIEW_THRESHOLD
