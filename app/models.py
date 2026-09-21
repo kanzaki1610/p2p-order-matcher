@@ -171,6 +171,8 @@ class ArbitrageConfig(Base):
     min_trade_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=1000000)
     max_trade_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=10000000)
     max_trade_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("500"))
+    target_trade_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    min_available_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=0)
     allow_same_exchange: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

@@ -8,6 +8,12 @@ def _decimal(value: object) -> Decimal:
     return Decimal(str(value or 0))
 
 
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    return Decimal(str(value))
+
+
 def find_opportunities(
     snapshots: list[dict],
     *,
@@ -17,6 +23,8 @@ def find_opportunities(
     max_trade_vnd: Decimal,
     max_trade_usdt: Decimal,
     allow_same_exchange: bool,
+    target_trade_vnd: Decimal = Decimal("0"),
+    min_available_usdt: Decimal = Decimal("0"),
 ) -> list[dict]:
     """Rank read-only P2P opportunities. BUY means the user buys USDT; SELL means the user sells USDT."""
     buys = [item for item in snapshots if item["side"] == "BUY"]
@@ -38,6 +46,16 @@ def find_opportunities(
                     if spread < min_spread_vnd or spread_percent < min_spread_percent:
                         continue
 
+                    buy_available = _optional_decimal(buy_offer.get("available_usdt"))
+                    sell_available = _optional_decimal(sell_offer.get("available_usdt"))
+                    if min_available_usdt > 0 and (
+                        buy_available is None
+                        or sell_available is None
+                        or buy_available < min_available_usdt
+                        or sell_available < min_available_usdt
+                    ):
+                        continue
+
                     caps = [max_trade_vnd]
                     buy_max = _decimal(buy_offer.get("max_amount"))
                     sell_max = _decimal(sell_offer.get("max_amount"))
@@ -47,16 +65,28 @@ def find_opportunities(
                         caps.append(sell_max)
                     if max_trade_usdt > 0:
                         caps.append(max_trade_usdt * buy_price)
-                    trade_vnd = min(value for value in caps if value > 0)
+                    if buy_available is not None:
+                        caps.append(buy_available * buy_price)
+                    if sell_available is not None:
+                        caps.append(sell_available * buy_price)
                     required = max(
                         min_trade_vnd,
                         _decimal(buy_offer.get("min_amount")),
                         _decimal(sell_offer.get("min_amount")),
                     )
+                    trade_vnd = target_trade_vnd if target_trade_vnd > 0 else min(
+                        value for value in caps if value > 0
+                    )
                     if trade_vnd < required:
+                        continue
+                    if any(cap > 0 and trade_vnd > cap for cap in caps):
                         continue
 
                     trade_usdt = (trade_vnd / buy_price).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
+                    if buy_available is not None and buy_available < trade_usdt:
+                        continue
+                    if sell_available is not None and sell_available < trade_usdt:
+                        continue
                     gross_profit = (trade_usdt * spread).quantize(Decimal("1"), rounding=ROUND_DOWN)
                     results.append(
                         {
@@ -70,6 +100,8 @@ def find_opportunities(
                             "spread_percent": spread_percent,
                             "trade_vnd": trade_vnd,
                             "trade_usdt": trade_usdt,
+                            "buy_available_usdt": buy_available,
+                            "sell_available_usdt": sell_available,
                             "gross_profit_vnd": gross_profit,
                             "fees_included": False,
                             "live_action_performed": False,
@@ -115,9 +147,12 @@ def compare_locked_trade(locked: dict, snapshots: list[dict]) -> list[dict]:
 
             min_amount = _decimal(offer.get("min_amount"))
             max_amount = _decimal(offer.get("max_amount"))
+            available_usdt = _optional_decimal(offer.get("available_usdt"))
             if min_amount > 0 and candidate_value < min_amount:
                 continue
             if max_amount > 0 and candidate_value > max_amount:
+                continue
+            if available_usdt is not None and executable_usdt > available_usdt:
                 continue
             net_difference = gross_difference - fixed_fee_vnd
             results.append(

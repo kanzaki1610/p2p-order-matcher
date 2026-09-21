@@ -175,6 +175,7 @@ def normalize_bitget_offers(items: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "price": price,
                 "min_amount": str(item.get("minAmount") or "0"),
                 "max_amount": str(item.get("maxAmount") or "0"),
+                "available_usdt": str(item.get("quantity")) if item.get("quantity") is not None else None,
                 "account_days": 0,
                 "completed_orders": int(float(item.get("completedOrderNum") or 0)),
                 "total_orders": int(float(item.get("completedOrderNum") or 0)),

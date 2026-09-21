@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .bitget_sync import bitget_sync_loop
-from .database import Base, engine, get_db
+from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
 from .models import BankTransaction, P2POrder
@@ -19,7 +19,8 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.2.0")
+ensure_runtime_schema()
+app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.3.0")
 app.include_router(dashboard_router)
 bitget_task: asyncio.Task | None = None
 

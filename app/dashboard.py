@@ -65,6 +65,7 @@ class OfferIn(BaseModel):
     price: Decimal = Field(gt=0)
     min_amount: Decimal = Field(default=0, ge=0)
     max_amount: Decimal = Field(default=0, ge=0)
+    available_usdt: Decimal | None = Field(default=None, ge=0)
     account_days: int = Field(default=0, ge=0)
     completed_orders: int = Field(default=0, ge=0)
     total_orders: int = Field(default=0, ge=0)
@@ -91,6 +92,8 @@ class ArbitrageConfigUpdate(BaseModel):
     min_trade_vnd: Decimal = Field(default=1000000, gt=0)
     max_trade_vnd: Decimal = Field(default=10000000, gt=0)
     max_trade_usdt: Decimal = Field(default=500, gt=0)
+    target_trade_vnd: Decimal = Field(default=0, ge=0)
+    min_available_usdt: Decimal = Field(default=0, ge=0)
     allow_same_exchange: bool = False
 
 
@@ -284,6 +287,8 @@ def arbitrage_config_dict(config: ArbitrageConfig) -> dict:
         "min_trade_vnd": decimal_value(config.min_trade_vnd),
         "max_trade_vnd": decimal_value(config.max_trade_vnd),
         "max_trade_usdt": decimal_value(config.max_trade_usdt),
+        "target_trade_vnd": decimal_value(config.target_trade_vnd),
+        "min_available_usdt": decimal_value(config.min_available_usdt),
         "allow_same_exchange": config.allow_same_exchange,
     }
 
@@ -298,8 +303,10 @@ def opportunity_dict(item: dict) -> dict:
         "trade_vnd",
         "trade_usdt",
         "gross_profit_vnd",
+        "buy_available_usdt",
+        "sell_available_usdt",
     ):
-        output[key] = decimal_value(output[key])
+        output[key] = decimal_value(output[key]) if output[key] is not None else None
     return output
 
 
@@ -347,6 +354,8 @@ def compute_arbitrage_state(db: Session) -> dict:
         max_trade_vnd=config.max_trade_vnd,
         max_trade_usdt=config.max_trade_usdt,
         allow_same_exchange=config.allow_same_exchange,
+        target_trade_vnd=config.target_trade_vnd,
+        min_available_usdt=config.min_available_usdt,
     ) if config.enabled else []
     locked_trades = db.scalars(
         select(LockedP2PTrade).order_by(LockedP2PTrade.id.desc()).limit(100)
@@ -449,6 +458,8 @@ def update_arbitrage_config(
 ):
     if payload.min_trade_vnd > payload.max_trade_vnd:
         raise HTTPException(status_code=422, detail="Giới hạn VND tối thiểu không được lớn hơn tối đa")
+    if payload.target_trade_vnd and not payload.min_trade_vnd <= payload.target_trade_vnd <= payload.max_trade_vnd:
+        raise HTTPException(status_code=422, detail="Số tiền muốn giao dịch phải nằm trong giới hạn VND")
     config = get_or_create_arbitrage_config(db)
     for key, value in payload.model_dump().items():
         setattr(config, key, value)
@@ -570,6 +581,7 @@ def ingest_browser_bridge_offers(
             "price": decimal_value(offer.price),
             "min_amount": decimal_value(offer.min_amount),
             "max_amount": decimal_value(offer.max_amount),
+            "available_usdt": decimal_value(offer.available_usdt) if offer.available_usdt is not None else None,
             "account_days": offer.account_days,
             "completed_orders": offer.completed_orders,
             "total_orders": offer.total_orders,
@@ -651,6 +663,7 @@ def offer_data(payload: BrowserBridgeIn) -> list[dict]:
             "price": decimal_value(offer.price),
             "min_amount": decimal_value(offer.min_amount),
             "max_amount": decimal_value(offer.max_amount),
+            "available_usdt": decimal_value(offer.available_usdt) if offer.available_usdt is not None else None,
             "account_days": offer.account_days,
             "completed_orders": offer.completed_orders,
             "total_orders": offer.total_orders,
