@@ -146,3 +146,46 @@ class OKXMarketSnapshot(Base):
     page_url: Mapped[str] = mapped_column(Text, default="")
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ExchangeMarketSnapshot(Base):
+    __tablename__ = "exchange_market_snapshots"
+    __table_args__ = (UniqueConstraint("exchange", "side", name="uq_exchange_market_snapshot"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    exchange: Mapped[str] = mapped_column(String(20), index=True)
+    side: Mapped[str] = mapped_column(String(10), index=True)
+    offers_json: Mapped[str] = mapped_column(Text)
+    page_url: Mapped[str] = mapped_column(Text, default="")
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ArbitrageConfig(Base):
+    __tablename__ = "arbitrage_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    min_spread_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=100)
+    min_spread_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("0.20"))
+    min_trade_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=1000000)
+    max_trade_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=10000000)
+    max_trade_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("500"))
+    allow_same_exchange: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class LockedP2PTrade(Base):
+    __tablename__ = "locked_p2p_trades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    exchange: Mapped[str] = mapped_column(String(20), index=True)
+    side: Mapped[str] = mapped_column(String(10), index=True)
+    price: Mapped[Decimal] = mapped_column(Numeric(20, 4))
+    amount_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+    fixed_fee_vnd: Mapped[Decimal] = mapped_column(Numeric(20, 0), default=0)
+    transfer_fee_usdt: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=0)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(20), default="OPEN", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
