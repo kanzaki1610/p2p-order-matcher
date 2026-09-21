@@ -48,17 +48,9 @@ async def sync_bitget_p2p(db: Session, client: BitgetP2PClient | None = None) ->
     if settings.bitget_p2p_live_writes:
         raise BitgetAPIError("Bản này chỉ hỗ trợ đọc; hãy đặt BITGET_P2P_LIVE_WRITES=false")
 
-    currencies = await client.get_currencies()
-    fiat_list = currencies.get("fiatDetailList", []) if isinstance(currencies, dict) else []
-    vnd_supported = any(str(item.get("fiat", "")).upper() == "VND" for item in fiat_list)
-    if not vnd_supported:
-        raise BitgetAPIError("Tài khoản/API Bitget hiện không trả về thị trường VND")
-
-    user_info, balance = await asyncio.gather(
-        client.get_user_info(),
-        client.get_balance("USDT"),
-        return_exceptions=True,
-    )
+    # P2P Search keys can read public advertisements even when the account is not
+    # eligible for merchant-only account, balance, or currency endpoints. Read the
+    # market first so an optional merchant check cannot block price synchronization.
     now = datetime.now(timezone.utc)
     counts: dict[str, int] = {}
     changed_any = False
@@ -73,6 +65,18 @@ async def sync_bitget_p2p(db: Session, client: BitgetP2PClient | None = None) ->
         counts[side] = len(offers)
         changed_any = _upsert_snapshot(db, side, offers, now) or changed_any
 
+    currencies, user_info, balance = await asyncio.gather(
+        client.get_currencies(),
+        client.get_user_info(),
+        client.get_balance("USDT"),
+        return_exceptions=True,
+    )
+    fiat_list = currencies.get("fiatDetailList", []) if isinstance(currencies, dict) else []
+    currencies_vnd = any(str(item.get("fiat", "")).upper() == "VND" for item in fiat_list)
+
+    def optional_status(value: Any) -> str:
+        return str(value) if isinstance(value, Exception) else "ok"
+
     if changed_any:
         db.add(
             OKXAuditLog(
@@ -86,10 +90,17 @@ async def sync_bitget_p2p(db: Session, client: BitgetP2PClient | None = None) ->
         "success": True,
         "mode": "READ_ONLY",
         "live_action_performed": False,
+        "market_accessible": True,
         "vnd_supported": True,
+        "currencies_reports_vnd": currencies_vnd if not isinstance(currencies, Exception) else None,
         "account_level": str(user_info.get("accountLevel", "unknown")) if isinstance(user_info, dict) else "unavailable",
         "nickname": str(user_info.get("nickName", "")) if isinstance(user_info, dict) else "",
         "available_usdt": str(balance.get("availableBalance", "0")) if isinstance(balance, dict) else "unavailable",
+        "optional_checks": {
+            "currencies": optional_status(currencies),
+            "user_info": optional_status(user_info),
+            "balance": optional_status(balance),
+        },
         "offers": counts,
         "synced_at": now.isoformat(),
     }
