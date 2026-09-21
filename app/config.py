@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     okx_api_secret: str = ""
     okx_api_passphrase: str = ""
     okx_base_url: str = "https://www.okx.com"
+    bitget_p2p_enabled: bool = False
+    bitget_p2p_api_key: str = ""
+    bitget_p2p_api_secret: str = ""
+    bitget_p2p_api_passphrase: str = ""
+    bitget_p2p_base_url: str = "https://api.bitget.com"
+    bitget_p2p_sync_seconds: int = 30
+    bitget_p2p_ad_limit: int = 10
+    bitget_p2p_live_writes: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

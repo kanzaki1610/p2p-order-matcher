@@ -13,7 +13,18 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .models import OKXAuditLog, OKXDashboardConfig, OKXMarketSnapshot, OKXSlot
+from .bitget import BitgetAPIError
+from .bitget_sync import sync_bitget_p2p
+from .arbitrage import EXCHANGES, compare_locked_trade, find_opportunities
+from .models import (
+    ArbitrageConfig,
+    ExchangeMarketSnapshot,
+    LockedP2PTrade,
+    OKXAuditLog,
+    OKXDashboardConfig,
+    OKXMarketSnapshot,
+    OKXSlot,
+)
 from .okx_pricing import CompetitorOffer, parse_name_list, propose_price
 
 
@@ -66,10 +77,31 @@ class SimulationIn(BaseModel):
 
 
 class BrowserBridgeIn(BaseModel):
+    exchange: Literal["OKX", "BINANCE", "MEXC", "BITGET"] = "OKX"
     side: Literal["BUY", "SELL"]
     offers: list[OfferIn] = Field(min_length=1, max_length=100)
     page_url: str = Field(default="", max_length=1000)
     captured_at: datetime
+
+
+class ArbitrageConfigUpdate(BaseModel):
+    enabled: bool = True
+    min_spread_vnd: Decimal = Field(default=100, ge=0)
+    min_spread_percent: Decimal = Field(default=Decimal("0.20"), ge=0, le=100)
+    min_trade_vnd: Decimal = Field(default=1000000, gt=0)
+    max_trade_vnd: Decimal = Field(default=10000000, gt=0)
+    max_trade_usdt: Decimal = Field(default=500, gt=0)
+    allow_same_exchange: bool = False
+
+
+class LockedTradeCreate(BaseModel):
+    exchange: Literal["OKX", "BINANCE", "MEXC", "BITGET"]
+    side: Literal["BUY", "SELL"]
+    price: Decimal = Field(gt=0)
+    amount_usdt: Decimal = Field(gt=0)
+    fixed_fee_vnd: Decimal = Field(default=0, ge=0)
+    transfer_fee_usdt: Decimal = Field(default=0, ge=0)
+    note: str = Field(default="", max_length=500)
 
 
 def verify_dashboard_key(x_admin_key: str = Header(default="")) -> None:
@@ -112,6 +144,16 @@ def get_or_create_slots(db: Session) -> list[OKXSlot]:
                 db.add(OKXSlot(side=side, slot_number=number))
     db.commit()
     return db.scalars(select(OKXSlot).order_by(OKXSlot.side, OKXSlot.slot_number)).all()
+
+
+def get_or_create_arbitrage_config(db: Session) -> ArbitrageConfig:
+    config = db.get(ArbitrageConfig, 1)
+    if not config:
+        config = ArbitrageConfig(id=1)
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    return config
 
 
 def decimal_value(value: Decimal | None) -> int | float:
@@ -221,6 +263,116 @@ def snapshot_dict(
     }
 
 
+def exchange_snapshot_dict(snapshot: ExchangeMarketSnapshot) -> dict:
+    offers = json.loads(snapshot.offers_json)
+    return {
+        "exchange": snapshot.exchange,
+        "side": snapshot.side,
+        "offer_count": len(offers),
+        "offers": offers,
+        "page_url": snapshot.page_url,
+        "captured_at": snapshot.captured_at.isoformat(),
+        "received_at": snapshot.received_at.isoformat(),
+    }
+
+
+def arbitrage_config_dict(config: ArbitrageConfig) -> dict:
+    return {
+        "enabled": config.enabled,
+        "min_spread_vnd": decimal_value(config.min_spread_vnd),
+        "min_spread_percent": decimal_value(config.min_spread_percent),
+        "min_trade_vnd": decimal_value(config.min_trade_vnd),
+        "max_trade_vnd": decimal_value(config.max_trade_vnd),
+        "max_trade_usdt": decimal_value(config.max_trade_usdt),
+        "allow_same_exchange": config.allow_same_exchange,
+    }
+
+
+def opportunity_dict(item: dict) -> dict:
+    output = dict(item)
+    for key in (
+        "buy_price",
+        "sell_price",
+        "spread_vnd",
+        "spread_percent",
+        "trade_vnd",
+        "trade_usdt",
+        "gross_profit_vnd",
+    ):
+        output[key] = decimal_value(output[key])
+    return output
+
+
+def locked_trade_dict(trade: LockedP2PTrade) -> dict:
+    return {
+        "id": trade.id,
+        "exchange": trade.exchange,
+        "side": trade.side,
+        "price": decimal_value(trade.price),
+        "amount_usdt": decimal_value(trade.amount_usdt),
+        "fixed_fee_vnd": decimal_value(trade.fixed_fee_vnd),
+        "transfer_fee_usdt": decimal_value(trade.transfer_fee_usdt),
+        "note": trade.note,
+        "status": trade.status,
+        "created_at": trade.created_at.isoformat(),
+        "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
+    }
+
+
+def locked_comparison_dict(item: dict) -> dict:
+    output = dict(item)
+    for key in (
+        "target_price",
+        "amount_usdt",
+        "target_value_vnd",
+        "price_difference",
+        "gross_difference_vnd",
+        "estimated_net_vnd",
+    ):
+        output[key] = decimal_value(output[key])
+    return output
+
+
+def compute_arbitrage_state(db: Session) -> dict:
+    config = get_or_create_arbitrage_config(db)
+    snapshots = db.scalars(
+        select(ExchangeMarketSnapshot).order_by(ExchangeMarketSnapshot.exchange, ExchangeMarketSnapshot.side)
+    ).all()
+    snapshot_data = [exchange_snapshot_dict(item) for item in snapshots]
+    opportunities = find_opportunities(
+        snapshot_data,
+        min_spread_vnd=config.min_spread_vnd,
+        min_spread_percent=config.min_spread_percent,
+        min_trade_vnd=config.min_trade_vnd,
+        max_trade_vnd=config.max_trade_vnd,
+        max_trade_usdt=config.max_trade_usdt,
+        allow_same_exchange=config.allow_same_exchange,
+    ) if config.enabled else []
+    locked_trades = db.scalars(
+        select(LockedP2PTrade).order_by(LockedP2PTrade.id.desc()).limit(100)
+    ).all()
+    locked_results = []
+    for trade in locked_trades:
+        comparisons = compare_locked_trade(locked_trade_dict(trade), snapshot_data) if trade.status == "OPEN" else []
+        locked_results.append(
+            {
+                "trade": locked_trade_dict(trade),
+                "comparisons": [locked_comparison_dict(item) for item in comparisons[:20]],
+                "best_comparison": locked_comparison_dict(comparisons[0]) if comparisons else None,
+            }
+        )
+    return {
+        "mode": "READ_ONLY_AUTO_PICK",
+        "live_trading_enabled": False,
+        "supported_exchanges": list(EXCHANGES),
+        "config": arbitrage_config_dict(config),
+        "snapshots": snapshot_data,
+        "opportunities": [opportunity_dict(item) for item in opportunities[:20]],
+        "best_opportunity": opportunity_dict(opportunities[0]) if opportunities else None,
+        "locked_trades": locked_results,
+    }
+
+
 @router.get("/dashboard", include_in_schema=False)
 def dashboard_page():
     return FileResponse(DASHBOARD_FILE)
@@ -246,11 +398,22 @@ def dashboard_state(
             "passphrase_configured": bool(settings.okx_api_passphrase),
             "p2p_connector": "NOT_CONNECTED",
         },
+        "bitget": {
+            "enabled": settings.bitget_p2p_enabled,
+            "base_url": settings.bitget_p2p_base_url,
+            "key_configured": bool(settings.bitget_p2p_api_key),
+            "secret_configured": bool(settings.bitget_p2p_api_secret),
+            "passphrase_configured": bool(settings.bitget_p2p_api_passphrase),
+            "live_writes": False,
+            "sync_seconds": max(15, settings.bitget_p2p_sync_seconds),
+            "connector": "READ_ONLY" if settings.bitget_p2p_enabled else "DISABLED",
+        },
         "bridge": {
             "configured": bool(settings.okx_browser_bridge_secret),
             "mode": "READ_ONLY",
             "snapshots": [snapshot_dict(snapshot, config, slots) for snapshot in snapshots],
         },
+        "arbitrage": compute_arbitrage_state(db),
         "config": config_dict(config),
         "slots": [slot_dict(slot) for slot in slots],
         "history": [
@@ -263,6 +426,81 @@ def dashboard_state(
             for log in logs
         ],
     }
+
+
+@router.post("/dashboard/api/bitget/sync")
+async def sync_bitget_market(
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_dashboard_key),
+):
+    try:
+        result = await sync_bitget_p2p(db)
+    except BitgetAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    result["arbitrage"] = compute_arbitrage_state(db)
+    return result
+
+
+@router.put("/dashboard/api/arbitrage/config")
+def update_arbitrage_config(
+    payload: ArbitrageConfigUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_dashboard_key),
+):
+    if payload.min_trade_vnd > payload.max_trade_vnd:
+        raise HTTPException(status_code=422, detail="Giới hạn VND tối thiểu không được lớn hơn tối đa")
+    config = get_or_create_arbitrage_config(db)
+    for key, value in payload.model_dump().items():
+        setattr(config, key, value)
+    add_audit(
+        db,
+        "ARBITRAGE_CONFIG_UPDATED",
+        "Đã cập nhật giới hạn auto pick 4 sàn; giao dịch LIVE vẫn khóa",
+    )
+    db.commit()
+    db.refresh(config)
+    return {"success": True, "config": arbitrage_config_dict(config), "live_trading_enabled": False}
+
+
+@router.post("/dashboard/api/locked-trades")
+def create_locked_trade(
+    payload: LockedTradeCreate,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_dashboard_key),
+):
+    trade = LockedP2PTrade(**payload.model_dump(), status="OPEN")
+    db.add(trade)
+    add_audit(
+        db,
+        "PRICE_LOCKED",
+        f"Đã chốt {payload.side} {payload.amount_usdt} USDT tại {payload.exchange}, giá {payload.price} VND",
+    )
+    db.commit()
+    db.refresh(trade)
+    return {
+        "success": True,
+        "trade": locked_trade_dict(trade),
+        "arbitrage": compute_arbitrage_state(db),
+        "live_action_performed": False,
+    }
+
+
+@router.post("/dashboard/api/locked-trades/{trade_id}/close")
+def close_locked_trade(
+    trade_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_dashboard_key),
+):
+    trade = db.get(LockedP2PTrade, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Không tìm thấy giá đã chốt")
+    if trade.status != "CLOSED":
+        trade.status = "CLOSED"
+        trade.closed_at = datetime.now(timezone.utc)
+        add_audit(db, "PRICE_LOCK_CLOSED", f"Đã đóng theo dõi giá chốt #{trade.id}")
+        db.commit()
+        db.refresh(trade)
+    return {"success": True, "trade": locked_trade_dict(trade)}
 
 
 @router.put("/dashboard/api/config")
@@ -368,6 +606,9 @@ def ingest_browser_bridge_offers(
     db.commit()
     db.refresh(snapshot)
 
+    # Mirror legacy OKX snapshots into the multi-exchange comparison table.
+    store_exchange_snapshot(db, payload)
+
     config = get_or_create_config(db)
     slots = get_or_create_slots(db)
     return {
@@ -376,6 +617,103 @@ def ingest_browser_bridge_offers(
         "mode": "READ_ONLY",
         "live_action_performed": False,
         "snapshot": snapshot_dict(snapshot, config, slots),
+    }
+
+
+EXCHANGE_HOSTS = {
+    "OKX": ("okx.com",),
+    "BINANCE": ("binance.com",),
+    "MEXC": ("mexc.com",),
+    "BITGET": ("bitget.com",),
+}
+
+
+def valid_exchange_page_url(exchange: str, page_url: str) -> bool:
+    if not page_url:
+        return True
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(page_url)
+        hostname = (parsed.hostname or "").lower()
+        return parsed.scheme == "https" and any(
+            hostname == domain or hostname.endswith(f".{domain}")
+            for domain in EXCHANGE_HOSTS[exchange]
+        )
+    except (KeyError, ValueError):
+        return False
+
+
+def offer_data(payload: BrowserBridgeIn) -> list[dict]:
+    return [
+        {
+            "nickname": offer.nickname,
+            "price": decimal_value(offer.price),
+            "min_amount": decimal_value(offer.min_amount),
+            "max_amount": decimal_value(offer.max_amount),
+            "account_days": offer.account_days,
+            "completed_orders": offer.completed_orders,
+            "total_orders": offer.total_orders,
+        }
+        for offer in payload.offers
+    ]
+
+
+def store_exchange_snapshot(db: Session, payload: BrowserBridgeIn) -> tuple[ExchangeMarketSnapshot, bool]:
+    data = offer_data(payload)
+    serialized = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    snapshot = db.scalar(
+        select(ExchangeMarketSnapshot).where(
+            ExchangeMarketSnapshot.exchange == payload.exchange,
+            ExchangeMarketSnapshot.side == payload.side,
+        )
+    )
+    changed = not snapshot or snapshot.offers_json != serialized
+    if not snapshot:
+        snapshot = ExchangeMarketSnapshot(
+            exchange=payload.exchange,
+            side=payload.side,
+            offers_json=serialized,
+            page_url=payload.page_url,
+            captured_at=payload.captured_at,
+        )
+        db.add(snapshot)
+    else:
+        snapshot.offers_json = serialized
+        snapshot.page_url = payload.page_url
+        snapshot.captured_at = payload.captured_at
+        snapshot.received_at = datetime.now(timezone.utc)
+    if changed:
+        add_audit(
+            db,
+            "MARKET_SCANNED",
+            f"Extension nhận {len(data)} quảng cáo {payload.side} từ {payload.exchange}",
+            actor="multi-exchange-extension",
+        )
+    db.commit()
+    db.refresh(snapshot)
+    return snapshot, changed
+
+
+@router.post("/dashboard/api/market/offers")
+def ingest_exchange_market_offers(
+    payload: BrowserBridgeIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_browser_bridge_key),
+):
+    if not valid_exchange_page_url(payload.exchange, payload.page_url):
+        raise HTTPException(
+            status_code=422,
+            detail=f"URL không thuộc tên miền chính thức của {payload.exchange}",
+        )
+    snapshot, changed = store_exchange_snapshot(db, payload)
+    return {
+        "success": True,
+        "changed": changed,
+        "mode": "READ_ONLY_AUTO_PICK",
+        "live_action_performed": False,
+        "snapshot": exchange_snapshot_dict(snapshot),
+        "arbitrage": compute_arbitrage_state(db),
     }
 
 

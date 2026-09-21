@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>OKX P2P Control</title>
+  <title>P2P 4-Sàn Control</title>
   <style>
     :root{--bg:#07101f;--panel:#0d1728;--panel2:#111e32;--line:#24334c;--text:#eef4ff;--muted:#8fa1bb;--blue:#2f6df6;--green:#18b66b;--amber:#f5ad42;--red:#f05d68;--purple:#8b5cf6}
     *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#13284b 0,#07101f 36%);color:var(--text);font:14px/1.45 Inter,system-ui,-apple-system,Segoe UI,sans-serif;min-height:100vh}
@@ -16,8 +16,8 @@
 <body>
 <div class="login" id="loginOverlay">
   <form class="login-card" id="loginForm">
-    <div class="logo" style="margin-bottom:16px">OKX</div>
-    <h2>OKX P2P Control</h2>
+    <div class="logo" style="margin-bottom:16px">P2P</div>
+    <h2>P2P 4-Sàn Control</h2>
     <p>Nhập khóa quản trị đã đặt trong Render. Khóa chỉ được giữ trong phiên trình duyệt này.</p>
     <div class="field"><label>DASHBOARD_ADMIN_KEY</label><input id="adminKey" type="password" autocomplete="current-password" required></div>
     <button class="btn primary" style="width:100%;margin-top:14px">Đăng nhập</button>
@@ -27,14 +27,15 @@
 
 <div class="shell">
   <header class="top">
-    <div class="brand"><div class="logo">OKX</div><div><h1>OKX P2P Control</h1><p>Đề giá có kiểm soát · Đối soát SePay · Telegram</p></div></div>
-    <div class="badges"><span class="badge safe">● SePay đang độc lập</span><span class="badge warn">DRY RUN bắt buộc</span><span class="badge" id="bridgeBadge">Extension chưa có dữ liệu</span><span class="badge" id="apiBadge">API chưa kiểm tra</span><button class="btn" onclick="logout()">Đăng xuất</button></div>
+    <div class="brand"><div class="logo">P2P</div><div><h1>P2P 4-Sàn Control</h1><p>OKX · Binance · MEXC · Bitget · SePay · Telegram</p></div></div>
+    <div class="badges"><span class="badge safe">● SePay đang độc lập</span><span class="badge warn">READ ONLY</span><span class="badge" id="bitgetBadge">Bitget API chưa bật</span><span class="badge" id="bridgeBadge">Extension chưa có dữ liệu</span><span class="badge" id="autoPickBadge">Auto pick chưa đủ dữ liệu</span><button class="btn" onclick="logout()">Đăng xuất</button></div>
   </header>
   <div class="layout">
     <aside class="sidebar">
-      <div class="exchange"><strong>OKX</strong><small>Sàn ưu tiên đầu tiên</small></div>
+      <div class="exchange"><strong>4 SÀN P2P</strong><small>So sánh giá USDT/VND</small></div>
       <div class="nav">
         <button class="active" data-tab="overview">Tổng quan</button>
+        <button data-tab="arbitrage">So sánh 4 sàn</button>
         <button data-tab="slots">Cấu hình</button>
         <button data-tab="pricing">Đề giá</button>
         <button data-tab="content">Nội dung</button>
@@ -45,11 +46,11 @@
     <main class="main">
       <section class="tab active" id="tab-overview">
         <div class="panel">
-          <div class="section-title"><div><h2>Tổng quan hệ thống</h2><p>Không có hành động thật nào được gửi tới OKX.</p></div><button class="btn" onclick="loadState()">Làm mới</button></div>
-          <div class="notice">LIVE đang bị khóa ở cấp mã nguồn. Dashboard chỉ tính giá đề xuất và ghi lịch sử mô phỏng.</div>
+          <div class="section-title"><div><h2>Tổng quan hệ thống</h2><p>Bitget dùng API chính thức chỉ đọc; các sàn còn lại tiếp tục dùng Extension.</p></div><button class="btn" onclick="loadState()">Làm mới</button></div>
+          <div class="notice">LIVE đang bị khóa ở cấp mã nguồn. Không tạo/sửa quảng cáo, không xác nhận thanh toán và không release USDT.</div>
           <div class="grid three">
             <div class="status-card"><small>Chế độ</small><b style="color:#ffd28b">DRY RUN</b></div>
-            <div class="status-card"><small>Kết nối P2P</small><b id="connectorStatus">Chưa kết nối</b></div>
+            <div class="status-card"><small>Bitget P2P API</small><b id="connectorStatus">Chưa kết nối</b></div>
             <div class="status-card"><small>Số slot</small><b>4</b></div>
           </div>
         </div>
@@ -58,6 +59,38 @@
           <div id="bridgeSnapshots"><div class="empty">Extension chưa gửi dữ liệu.</div></div>
         </div>
         <div class="panel"><div class="section-title"><div><h2>Trạng thái slot</h2><p>Giá gần nhất chỉ là kết quả mô phỏng.</p></div></div><div class="slots" id="overviewSlots"></div></div>
+      </section>
+
+      <section class="tab" id="tab-arbitrage">
+        <div class="panel">
+          <div class="section-title"><div><h2>Auto pick cơ hội mua thấp – bán cao</h2><p>Tự xếp hạng cơ hội; không tự bấm lệnh và không chuyển USDT.</p></div><button class="btn" onclick="loadState()">Làm mới</button></div>
+          <div class="notice">Lợi nhuận hiển thị là lợi nhuận gộp, chưa trừ phí chuyển USDT, biến động giá, thời gian thanh toán và rủi ro đối tác.</div>
+          <div class="grid three">
+            <div class="field"><label>Biên tối thiểu (VND/USDT)</label><input type="number" min="0" data-arb="min_spread_vnd"></div>
+            <div class="field"><label>Biên tối thiểu (%)</label><input type="number" min="0" step="0.01" data-arb="min_spread_percent"></div>
+            <div class="field"><label>Giao dịch tối thiểu (VND)</label><input type="number" min="1" data-arb="min_trade_vnd"></div>
+            <div class="field"><label>Giới hạn mỗi lần (VND)</label><input type="number" min="1" data-arb="max_trade_vnd"></div>
+            <div class="field"><label>Giới hạn mỗi lần (USDT)</label><input type="number" min="0.01" step="0.01" data-arb="max_trade_usdt"></div>
+            <div class="field"><label>Trạng thái</label><label class="toggle"><input type="checkbox" data-arb="enabled"> Bật tự chọn cơ hội</label><label class="toggle"><input type="checkbox" data-arb="allow_same_exchange"> Cho phép cùng sàn</label></div>
+          </div>
+          <div class="actions"><button class="btn primary" onclick="saveArbitrageConfig()">Lưu giới hạn auto pick</button></div>
+        </div>
+        <div class="panel">
+          <div class="section-title"><div><h2>Chốt giá đã mua hoặc đã bán</h2><p>Lưu giao dịch vừa thực hiện để tìm chiều đối ứng tốt nhất trên sàn khác.</p></div></div>
+          <div class="grid three">
+            <div class="field"><label>Sàn đã giao dịch</label><select id="lockExchange"><option>OKX</option><option>BINANCE</option><option>MEXC</option><option>BITGET</option></select></div>
+            <div class="field"><label>Đã thực hiện</label><select id="lockSide"><option value="BUY">MUA USDT</option><option value="SELL">BÁN USDT</option></select></div>
+            <div class="field"><label>Giá đã chốt (VND/USDT)</label><input id="lockPrice" type="number" min="1"></div>
+            <div class="field"><label>Số lượng (USDT)</label><input id="lockAmountUsdt" type="number" min="0.00000001" step="0.00000001"></div>
+            <div class="field"><label>Phí cố định dự kiến (VND)</label><input id="lockFixedFee" type="number" min="0" value="0"></div>
+            <div class="field"><label>Phí chuyển mạng (USDT)</label><input id="lockTransferFee" type="number" min="0" step="0.00000001" value="0"></div>
+            <div class="field" style="grid-column:1/-1"><label>Ghi chú</label><input id="lockNote" maxlength="500" placeholder="Ví dụ: Lệnh MEXC #12345"></div>
+          </div>
+          <div class="actions"><button class="btn green" onclick="createLockedTrade()">Chốt và bắt đầu so sánh</button></div>
+        </div>
+        <div class="panel"><div class="section-title"><div><h2>Giá đang theo dõi</h2><p>Giá BUY đã chốt sẽ tìm SELL cao; giá SELL đã chốt sẽ tìm BUY thấp.</p></div></div><div id="lockedTradeList"></div></div>
+        <div class="panel"><div class="section-title"><div><h2>Dữ liệu đang có</h2><p>Cần cả BUY và SELL để tính chênh lệch.</p></div></div><div id="exchangeCoverage" class="grid"></div></div>
+        <div class="panel"><div class="section-title"><div><h2>Cơ hội phù hợp</h2><p>Xếp theo lợi nhuận gộp ước tính.</p></div></div><div id="opportunityList"></div></div>
       </section>
 
       <section class="tab" id="tab-slots">
@@ -101,6 +134,11 @@
       </section>
 
       <section class="tab" id="tab-advanced">
+        <div class="panel"><div class="section-title"><div><h2>Kết nối Bitget P2P</h2><p>Đọc quảng cáo USDT/VND bằng API chính thức và tự cập nhật dữ liệu so sánh.</p></div></div>
+          <div class="notice">Khóa chỉ đặt trong Environment của Render. Bản này từ chối hoạt động nếu BITGET_P2P_LIVE_WRITES=true.</div>
+          <div class="grid three"><div class="status-card"><small>Base URL</small><b id="bitgetBaseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret / Passphrase</small><b id="bitgetCredentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Chu kỳ tự đồng bộ</small><b id="bitgetSyncStatus" style="font-size:14px">—</b></div></div>
+          <div class="actions"><button class="btn green" id="bitgetSyncButton" onclick="syncBitget()">Kiểm tra và đồng bộ Bitget</button></div>
+        </div>
         <div class="panel"><div class="section-title"><div><h2>Kết nối OKX</h2><p>Thông tin bí mật chỉ được đọc từ biến môi trường Render.</p></div></div>
           <div class="notice">Không nhập API key hoặc secret vào trang này. Không cấp quyền rút tiền. Chỉ bật IP whitelist khi có máy chủ IP cố định.</div>
           <div class="grid"><div class="status-card"><small>Base URL</small><b id="baseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret / Passphrase</small><b id="credentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Browser Bridge</small><b id="bridgeStatus" style="font-size:14px">—</b></div></div>
@@ -134,8 +172,14 @@ function render(){
   $$('[data-config]').forEach(el=>{const v=cfg[el.dataset.config];if(el.type==='checkbox')el.checked=!!v;else el.value=v??''});
   $('#overviewSlots').innerHTML=state.slots.map(s=>slotCard(s,false)).join('');
   $('#slotEditor').innerHTML=state.slots.map(s=>slotCard(s,true)).join('');
-  $('#apiBadge').textContent=state.api.p2p_connector==='CONNECTED'?'API P2P đã kết nối':'API P2P chưa kết nối';
-  $('#connectorStatus').textContent=state.api.p2p_connector==='CONNECTED'?'Đã kết nối':'Chưa kết nối';
+  const bitget=state.bitget||{};
+  const bitgetCredentials=bitget.key_configured&&bitget.secret_configured&&bitget.passphrase_configured;
+  $('#connectorStatus').textContent=bitget.enabled&&bitgetCredentials?'READ ONLY':'Chưa kết nối';
+  $('#bitgetBadge').textContent=bitget.enabled&&bitgetCredentials?'Bitget API: READ ONLY':'Bitget API chưa bật';
+  $('#bitgetBaseUrl').textContent=bitget.base_url||'https://api.bitget.com';
+  $('#bitgetCredentialsStatus').textContent=bitgetCredentials?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
+  $('#bitgetSyncStatus').textContent=bitget.enabled?`Tự động mỗi ${bitget.sync_seconds} giây`:'BITGET_P2P_ENABLED=false';
+  $('#bitgetSyncButton').disabled=!(bitget.enabled&&bitgetCredentials);
   $('#baseUrl').textContent=state.api.base_url;
   const credentialsOk=state.api.key_configured&&state.api.secret_configured&&state.api.passphrase_configured;
   $('#credentialsStatus').textContent=credentialsOk?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
@@ -143,12 +187,28 @@ function render(){
   const snapshots=state.bridge.snapshots||[];
   $('#bridgeBadge').textContent=snapshots.length?`Extension: ${snapshots.reduce((sum,x)=>sum+x.offer_count,0)} quảng cáo`:'Extension chưa có dữ liệu';
   $('#bridgeSnapshots').innerHTML=snapshots.length?`<div class="slots">${snapshots.map(bridgeSnapshotCard).join('')}</div>`:'<div class="empty">Extension chưa gửi dữ liệu.</div>';
+  renderArbitrage();
   const body=$('#historyBody');
   body.innerHTML=state.history.length?state.history.map(x=>`<tr><td>${x.action}</td><td>${x.detail}</td><td>${vnTime(x.created_at)}</td></tr>`).join(''):`<tr><td colspan="3" class="empty">Chưa có lịch sử.</td></tr>`;
 }
+function renderArbitrage(){
+  const arb=state.arbitrage||{config:{},snapshots:[],opportunities:[]};
+  $$('[data-arb]').forEach(el=>{const v=arb.config[el.dataset.arb];if(el.type==='checkbox')el.checked=!!v;else el.value=v??''});
+  const byExchange={};for(const snap of arb.snapshots||[]){(byExchange[snap.exchange]??={})[snap.side]=snap}
+  $('#exchangeCoverage').innerHTML=(arb.supported_exchanges||[]).map(name=>{const item=byExchange[name]||{},snap=item.BUY||item.SELL,apiSource=name==='BITGET'&&snap?.page_url?.includes('api.bitget.com');return `<div class="status-card"><small>${name}${apiSource?' · API chính thức':' · Extension'}</small><b style="font-size:15px">BUY: ${item.BUY?.offer_count??0} · SELL: ${item.SELL?.offer_count??0}</b><span class="hint">${snap?'Cập nhật: '+vnTime(snap.received_at):'Chưa quét'}</span></div>`}).join('');
+  const opportunities=arb.opportunities||[];
+  $('#autoPickBadge').textContent=opportunities.length?`Auto pick: ${opportunities.length} cơ hội`:'Auto pick chưa đủ dữ liệu';
+  $('#opportunityList').innerHTML=opportunities.length?`<div class="slots">${opportunities.map((x,i)=>`<div class="slot"><div class="slot-head"><strong>${i===0?'⭐ Tốt nhất':'Cơ hội '+(i+1)}</strong><span class="badge">${number(x.spread_percent).toFixed(2)}%</span></div><div class="grid"><div><span class="hint">MUA USDT</span><b style="display:block;font-size:18px">${x.buy_exchange} · ${fmt(x.buy_price)} ₫</b><span class="hint">${x.buy_merchant}</span></div><div><span class="hint">BÁN USDT</span><b style="display:block;font-size:18px">${x.sell_exchange} · ${fmt(x.sell_price)} ₫</b><span class="hint">${x.sell_merchant}</span></div><div><span class="hint">Khối lượng đề xuất</span><b style="display:block">${fmt(x.trade_vnd)} ₫ ≈ ${number(x.trade_usdt).toFixed(4)} USDT</b></div><div><span class="hint">Lãi gộp ước tính</span><b style="display:block;color:#88f0ba">${fmt(x.gross_profit_vnd)} ₫</b></div></div><div class="hint" style="margin-top:12px">Chưa trừ phí · Không có hành động LIVE</div></div>`).join('')}</div>`:'<div class="empty">Chưa có cặp BUY/SELL đạt điều kiện.</div>';
+  const locked=arb.locked_trades||[];
+  $('#lockedTradeList').innerHTML=locked.length?locked.map(item=>{const t=item.trade,b=item.best_comparison,open=t.status==='OPEN';return `<div class="slot" style="margin-bottom:12px"><div class="slot-head"><strong>#${t.id} · ĐÃ ${t.side==='BUY'?'MUA':'BÁN'} ${number(t.amount_usdt).toFixed(4)} USDT · ${t.exchange}</strong><span class="badge">${t.status}</span></div><div class="grid"><div><span class="hint">Giá đã chốt</span><b style="display:block;font-size:18px">${fmt(t.price)} ₫</b><span class="hint">${vnTime(t.created_at)}${t.note?' · '+t.note:''}</span></div><div>${b?`<span class="hint">Đối ứng tốt nhất</span><b style="display:block;font-size:18px">${b.target_side==='SELL'?'BÁN':'MUA'} tại ${b.target_exchange} · ${fmt(b.target_price)} ₫</b><span class="hint">${b.merchant}</span>`:`<span class="hint">Đối ứng tốt nhất</span><b style="display:block">${open?'Chưa có giá phù hợp':'Đã đóng theo dõi'}</b>`}</div>${b?`<div><span class="hint">Chênh lệch gộp</span><b style="display:block">${fmt(b.gross_difference_vnd)} ₫</b></div><div><span class="hint">Ước tính sau phí</span><b style="display:block;color:${b.profitable?'#88f0ba':'#ff929a'}">${fmt(b.estimated_net_vnd)} ₫</b></div>`:''}</div>${open?`<div class="actions"><button class="btn" onclick="closeLockedTrade(${t.id})">Đóng theo dõi</button></div>`:''}</div>`}).join(''):'<div class="empty">Chưa có giá nào được chốt.</div>';
+}
 async function loadState(){state=await api('/dashboard/api/state');render();return state}
+async function syncBitget(){const button=$('#bitgetSyncButton');button.disabled=true;button.textContent='Đang kết nối…';try{const r=await api('/dashboard/api/bitget/sync',{method:'POST'});await loadState();toast(`Bitget OK · BUY ${r.offers.BUY} · SELL ${r.offers.SELL}`)}catch(e){toast(e.message,true)}finally{button.textContent='Kiểm tra và đồng bộ Bitget';button.disabled=!(state?.bitget?.enabled&&state?.bitget?.key_configured&&state?.bitget?.secret_configured&&state?.bitget?.passphrase_configured)}}
 function collectConfig(){const out={...state.config};$$('[data-config]').forEach(el=>out[el.dataset.config]=el.type==='checkbox'?el.checked:(el.type==='number'?number(el.value):el.value));out.dry_run=true;return out}
 async function saveConfig(){try{const data=await api('/dashboard/api/config',{method:'PUT',body:JSON.stringify(collectConfig())});state.config=data.config;await loadState();toast('Đã lưu cấu hình DRY RUN')}catch(e){toast(e.message,true)}}
+async function saveArbitrageConfig(){const payload={...state.arbitrage.config};$$('[data-arb]').forEach(el=>payload[el.dataset.arb]=el.type==='checkbox'?el.checked:number(el.value));try{await api('/dashboard/api/arbitrage/config',{method:'PUT',body:JSON.stringify(payload)});await loadState();toast('Đã lưu giới hạn auto pick')}catch(e){toast(e.message,true)}}
+async function createLockedTrade(){const payload={exchange:$('#lockExchange').value,side:$('#lockSide').value,price:number($('#lockPrice').value),amount_usdt:number($('#lockAmountUsdt').value),fixed_fee_vnd:number($('#lockFixedFee').value),transfer_fee_usdt:number($('#lockTransferFee').value),note:$('#lockNote').value};try{await api('/dashboard/api/locked-trades',{method:'POST',body:JSON.stringify(payload)});$('#lockNote').value='';await loadState();toast('Đã chốt giá và bắt đầu so sánh')}catch(e){toast(e.message,true)}}
+async function closeLockedTrade(id){try{await api(`/dashboard/api/locked-trades/${id}/close`,{method:'POST'});await loadState();toast(`Đã đóng theo dõi #${id}`)}catch(e){toast(e.message,true)}}
 async function saveSlot(side,n){const id=`${side}-${n}`,payload={auto_enabled:$(`#auto-${id}`).checked,current_price:number($(`#price-${id}`).value),target_price:number($(`#target-${id}`).value),min_amount:number($(`#min-${id}`).value),max_amount:number($(`#max-${id}`).value),adv_id:$(`#adv-${id}`).value};try{await api(`/dashboard/api/slots/${side}/${n}`,{method:'PUT',body:JSON.stringify(payload)});await loadState();toast(`Đã lưu ${side} Slot ${n}`)}catch(e){toast(e.message,true)}}
 async function runSimulation(){const side=$('#simSide').value;const base=side==='BUY'?25700:25900;const offers=[{nickname:'Merchant_Alpha',price:base,min_amount:1000000,max_amount:200000000,account_days:240,completed_orders:180,total_orders:190},{nickname:'Friendly_Demo',price:side==='BUY'?base-1:base+1,min_amount:500000,max_amount:90000000,account_days:300,completed_orders:400,total_orders:500},{nickname:'New_Account',price:side==='BUY'?base+3:base-3,min_amount:500000,max_amount:50000000,account_days:12,completed_orders:8,total_orders:10}];try{await saveConfig();const r=await api('/dashboard/api/simulate',{method:'POST',body:JSON.stringify({side,slot_number:number($('#simSlot').value),offers})});const competitor=r.competitor?`${r.competitor.nickname} @ ${fmt(r.competitor.price)} VND\nHạn mức đối thủ: ${fmt(r.competitor.min_amount)} – ${fmt(r.competitor.max_amount)} VND`:'—';$('#simulationResult').textContent=`KẾT QUẢ: ${r.status}\nGiá đề xuất: ${r.proposed_price==null?'—':fmt(r.proposed_price)+' VND'}\nĐối thủ tham chiếu: ${competitor}\nLý do: ${r.reason}\nĐã bỏ qua: ${r.skipped.length}\nHành động thật lên OKX: KHÔNG`;await loadState()}catch(e){toast(e.message,true)}}
 if(adminKey){loadState().then(()=>$('#loginOverlay').classList.add('hidden')).catch(()=>sessionStorage.removeItem('okxAdminKey'))}

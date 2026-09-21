@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
@@ -7,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .bitget_sync import bitget_sync_loop
 from .database import Base, engine, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -17,8 +19,34 @@ from .telegram import notify_match, register_telegram_webhook, send_telegram_mes
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="P2P Order Matcher", version="0.9.0")
+app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.2.0")
 app.include_router(dashboard_router)
+bitget_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def start_bitget_reader() -> None:
+    global bitget_task
+    configured = bool(
+        settings.bitget_p2p_enabled
+        and settings.bitget_p2p_api_key
+        and settings.bitget_p2p_api_secret
+        and settings.bitget_p2p_api_passphrase
+    )
+    if configured and not settings.bitget_p2p_live_writes:
+        bitget_task = asyncio.create_task(bitget_sync_loop())
+
+
+@app.on_event("shutdown")
+async def stop_bitget_reader() -> None:
+    global bitget_task
+    if bitget_task:
+        bitget_task.cancel()
+        try:
+            await bitget_task
+        except asyncio.CancelledError:
+            pass
+        bitget_task = None
 
 
 @app.get("/", include_in_schema=False)
@@ -59,6 +87,8 @@ def health():
         "status": "ok",
         "auto_release": False,
         "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
+        "bitget_p2p_enabled": settings.bitget_p2p_enabled,
+        "bitget_p2p_read_only": not settings.bitget_p2p_live_writes,
     }
 
 
