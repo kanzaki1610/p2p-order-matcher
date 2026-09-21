@@ -99,7 +99,20 @@ class BitgetP2PClient:
             response.raise_for_status()
             result = response.json()
         except httpx.HTTPStatusError as exc:
-            raise BitgetAPIError(f"Bitget trả về HTTP {exc.response.status_code}") from exc
+            code = "UNKNOWN"
+            message = "Không có nội dung lỗi"
+            try:
+                error_data = exc.response.json()
+                if isinstance(error_data, dict):
+                    code = str(error_data.get("code") or code)[:50]
+                    message = str(error_data.get("msg") or error_data.get("message") or message)[:300]
+            except ValueError:
+                plain_text = exc.response.text.strip()
+                if plain_text:
+                    message = plain_text[:300]
+            raise BitgetAPIError(
+                f"Bitget HTTP {exc.response.status_code} · {code}: {message}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise BitgetAPIError(f"Không thể kết nối Bitget: {type(exc).__name__}") from exc
         if str(result.get("code")) != "00000":
