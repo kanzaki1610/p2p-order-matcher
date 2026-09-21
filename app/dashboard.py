@@ -648,10 +648,12 @@ def valid_exchange_page_url(exchange: str, page_url: str) -> bool:
 
         parsed = urlparse(page_url)
         hostname = (parsed.hostname or "").lower()
-        return parsed.scheme == "https" and any(
+        official = any(
             hostname == domain or hostname.endswith(f".{domain}")
             for domain in EXCHANGE_HOSTS[exchange]
         )
+        autop2p = hostname == "autop2p.biz" or hostname.endswith(".autop2p.biz")
+        return parsed.scheme == "https" and (official or autop2p)
     except (KeyError, ValueError):
         return False
 
@@ -717,7 +719,7 @@ def ingest_exchange_market_offers(
     if not valid_exchange_page_url(payload.exchange, payload.page_url):
         raise HTTPException(
             status_code=422,
-            detail=f"URL không thuộc tên miền chính thức của {payload.exchange}",
+            detail=f"URL không thuộc tên miền {payload.exchange} hoặc AutoP2P được hỗ trợ",
         )
     snapshot, changed = store_exchange_snapshot(db, payload)
     return {
