@@ -1,6 +1,67 @@
-# OKX P2P Control + Bot đối soát SePay/Telegram (V9)
+# P2P 4-Sàn Control + Bot đối soát SePay/Telegram (V13)
 
-V9 bổ sung Chrome Extension chỉ đọc quảng cáo đang hiển thị trên trang OKX P2P. Dashboard vẫn chạy bắt buộc ở chế độ DRY RUN; hệ thống **không tự release USDT**, không click trên OKX và không gửi hành động đề giá thật.
+V10 đọc quảng cáo P2P công khai đang hiển thị trên OKX, Binance, MEXC và Bitget, sau đó tự xếp hạng cơ hội mua USDT thấp/bán USDT cao theo giới hạn VND và USDT. Dashboard vẫn chạy bắt buộc ở chế độ READ ONLY; hệ thống **không tự release USDT**, không click và không đặt lệnh thật.
+
+V11 bổ sung **Giá đã chốt**: sau khi người dùng ghi nhận một giao dịch BUY hoặc SELL đã thực hiện, hệ thống so sánh chiều đối ứng trên các sàn khác và tính chênh lệch gộp/ước tính sau phí.
+
+V12 bổ sung **Bitget P2P API chính thức ở chế độ chỉ đọc**. Ứng dụng tự đồng bộ quảng cáo USDT/VND, kiểm tra thị trường VND và đưa dữ liệu Bitget vào phần so sánh 4 sàn. Mọi endpoint ghi, xác nhận thanh toán và release USDT vẫn bị khóa.
+
+V13 bổ sung **MEXC P2P API chính thức ở chế độ chỉ đọc**. Ứng dụng đọc đơn SELL USDT/VND, lấy số tiền và `userInfo.realName`, sau đó lưu thành đơn chờ để SePay đối chiếu. App không gọi endpoint đặt lệnh, đánh dấu đã trả tiền, quản lý quảng cáo hoặc release coin.
+
+## MEXC P2P API đọc đơn
+
+Chỉ bật quyền `P2P → Đọc thông tin tài khoản & lệnh`. Bỏ quyền `Đặt lệnh`, `Nhà quảng cáo` và mọi quyền rút tiền.
+
+```text
+MEXC_P2P_ENABLED=true
+MEXC_P2P_API_KEY=<Access Key>
+MEXC_P2P_API_SECRET=<Secret Key>
+MEXC_P2P_BASE_URL=https://api.mexc.com
+MEXC_P2P_SYNC_SECONDS=10
+MEXC_P2P_ORDER_LIMIT=50
+MEXC_P2P_LOOKBACK_MINUTES=1440
+MEXC_P2P_INCOMING_SIDE=SELL
+MEXC_P2P_LIVE_WRITES=false
+```
+
+- API key và secret chỉ đặt trong Environment của Render.
+- `SELL` nghĩa là app theo dõi đơn bạn bán USDT và nhận VND.
+- Danh sách lệnh: `GET /api/v3/fiat/market/order/paginationV2`.
+- Chi tiết lệnh: `GET /api/v3/fiat/order/detail`.
+- App dùng `amount` và `userInfo.realName` làm hai điều kiện chính để đối chiếu SePay.
+- Nút kiểm tra nằm trong Dashboard → Nâng cao → Kết nối MEXC P2P.
+
+## Bitget P2P API chỉ đọc
+
+Các biến môi trường cần thêm trên Render:
+
+```text
+BITGET_P2P_ENABLED=true
+BITGET_P2P_API_KEY=<Khóa API>
+BITGET_P2P_API_SECRET=<Secret key>
+BITGET_P2P_API_PASSPHRASE=<API token/cụm mật khẩu đã đặt khi tạo khóa>
+BITGET_P2P_BASE_URL=https://api.bitget.com
+BITGET_P2P_SYNC_SECONDS=30
+BITGET_P2P_AD_LIMIT=10
+BITGET_P2P_LIVE_WRITES=false
+```
+
+- Dùng khóa Bitget chỉ có quyền P2P Search/Read; không cấp quyền rút tiền.
+- `BITGET_P2P_API_PASSPHRASE` không phải Secret key.
+- Không nhập khóa vào Dashboard, GitHub, `.env.example` hoặc Extension.
+- Nút **Kiểm tra và đồng bộ Bitget** nằm trong Dashboard → Nâng cao.
+- Background reader tự thử đồng bộ lại theo `BITGET_P2P_SYNC_SECONDS`, tối thiểu 15 giây.
+- `BUY` trên Dashboard là bạn mua USDT nên API đọc quảng cáo `sell`; `SELL` là bạn bán USDT nên API đọc quảng cáo `buy`.
+- Bản này không gọi `ad-create`, `ad-update`, `ad-operate`, `order-pay` hoặc `order-release`.
+
+## So sánh 4 sàn
+
+- `BUY` là trang nơi bạn mua USDT: hệ thống ưu tiên giá thấp.
+- `SELL` là trang nơi bạn bán USDT: hệ thống ưu tiên giá cao.
+- Cấu hình biên tối thiểu theo VND/USDT và phần trăm.
+- Cấu hình số tiền giao dịch tối thiểu, giới hạn tối đa theo VND và USDT.
+- Auto pick chỉ chọn và xếp hạng cơ hội; không thực hiện giao dịch.
+- Lợi nhuận là ước tính gộp, chưa trừ phí chuyển coin, trượt giá và thời gian xử lý.
 
 ## Dashboard OKX
 
@@ -16,18 +77,26 @@ Mở `https://<service>.onrender.com/dashboard` và đăng nhập bằng `DASHBO
 - API key/secret/passphrase không lưu trong PostgreSQL.
 - LIVE bị khóa ở cấp mã nguồn cho tới khi có quyền và tài liệu OKX P2P merchant.
 
-## Chrome Extension chỉ đọc
+## Chrome Extension 4 sàn chỉ đọc
 
-Extension nằm trong thư mục `okx-p2p-extension` và chỉ gửi nickname, giá, hạn mức cùng thống kê công khai nhìn thấy trên trang P2P. Extension không gửi cookie, session token, mật khẩu, API key, số dư hay dữ liệu lệnh OKX.
+Extension nằm trong thư mục `okx-p2p-extension` (giữ tên cũ để cập nhật thuận tiện) và chỉ gửi tên người đăng quảng cáo, giá, hạn mức cùng thống kê công khai nhìn thấy trên trang P2P. Extension không gửi cookie, session token, mật khẩu, API key, số dư hay dữ liệu lệnh.
 
 1. Tạo biến Render `OKX_BROWSER_BRIDGE_SECRET` bằng một chuỗi ngẫu nhiên dài và khác `DASHBOARD_ADMIN_KEY`.
 2. Mở `chrome://extensions`, bật **Developer mode**.
 3. Chọn **Load unpacked**, rồi chọn thư mục `okx-p2p-extension`.
 4. Mở Extension, nhập URL Render và đúng Bridge Secret.
-5. Mở trang OKX P2P, chọn BUY hoặc SELL rồi nhấn **Quét ngay**.
-6. Dashboard sẽ hiển thị snapshot và giá đề xuất cho từng slot.
+5. Mở trang P2P của OKX/Binance/MEXC/Bitget, chọn đúng BUY hoặc SELL rồi nhấn **Quét ngay**.
+6. Quét cả hai chiều cần dùng. Dashboard **So sánh 4 sàn** sẽ hiển thị cơ hội phù hợp.
 
-Chrome và tab OKX phải đang mở. Đây là bộ nhận diện giao diện thử nghiệm, không phải API P2P chính thức; nếu OKX đổi giao diện thì có thể cần cập nhật selector.
+Chrome và tab sàn phải đang mở. Đây là bộ nhận diện giao diện thử nghiệm, không phải API P2P chính thức; nếu sàn đổi giao diện thì có thể cần cập nhật selector.
+
+## API tài khoản của các sàn
+
+- Binance: `https://www.binance.com/en/my/settings/api-management`
+- MEXC: `https://www.mexc.com/user/openapi`
+- Bitget: `https://www.bitget.com/account/newapi`
+
+Các API key thông thường dùng cho các sản phẩm được sàn cấp quyền như Spot/Futures/Wallet. Không nhập các key này vào Extension. Chỉ tích hợp thao tác P2P LIVE sau khi tài khoản được sàn cấp tài liệu và quyền P2P merchant chính thức. Khi thử API, chỉ bật quyền đọc và whitelist IP; không bật quyền rút tiền.
 
 ### Ý nghĩa các trường đề giá
 

@@ -15,6 +15,8 @@ from .config import settings
 from .database import get_db
 from .bitget import BitgetAPIError
 from .bitget_sync import sync_bitget_p2p
+from .mexc import MexcAPIError
+from .mexc_sync import sync_mexc_orders
 from .arbitrage import EXCHANGES, compare_locked_trade, find_opportunities
 from .models import (
     ArbitrageConfig,
@@ -417,6 +419,16 @@ def dashboard_state(
             "sync_seconds": max(15, settings.bitget_p2p_sync_seconds),
             "connector": "READ_ONLY" if settings.bitget_p2p_enabled else "DISABLED",
         },
+        "mexc": {
+            "enabled": settings.mexc_p2p_enabled,
+            "base_url": settings.mexc_p2p_base_url,
+            "key_configured": bool(settings.mexc_p2p_api_key),
+            "secret_configured": bool(settings.mexc_p2p_api_secret),
+            "live_writes": False,
+            "sync_seconds": max(10, settings.mexc_p2p_sync_seconds),
+            "incoming_side": settings.mexc_p2p_incoming_side.upper(),
+            "connector": "READ_ONLY" if settings.mexc_p2p_enabled else "DISABLED",
+        },
         "bridge": {
             "configured": bool(settings.okx_browser_bridge_secret),
             "mode": "READ_ONLY",
@@ -448,6 +460,17 @@ async def sync_bitget_market(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     result["arbitrage"] = compute_arbitrage_state(db)
     return result
+
+
+@router.post("/dashboard/api/mexc/sync")
+async def sync_mexc_p2p_orders(
+    db: Session = Depends(get_db),
+    _: None = Depends(verify_dashboard_key),
+):
+    try:
+        return await sync_mexc_orders(db)
+    except MexcAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.put("/dashboard/api/arbitrage/config")

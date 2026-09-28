@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .bitget_sync import bitget_sync_loop
+from .mexc_sync import mexc_sync_loop
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -20,9 +21,10 @@ from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
 ensure_runtime_schema()
-app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.4.3")
+app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.5.0")
 app.include_router(dashboard_router)
 bitget_task: asyncio.Task | None = None
+mexc_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
@@ -48,6 +50,30 @@ async def stop_bitget_reader() -> None:
         except asyncio.CancelledError:
             pass
         bitget_task = None
+
+
+@app.on_event("startup")
+async def start_mexc_reader() -> None:
+    global mexc_task
+    configured = bool(
+        settings.mexc_p2p_enabled
+        and settings.mexc_p2p_api_key
+        and settings.mexc_p2p_api_secret
+    )
+    if configured and not settings.mexc_p2p_live_writes:
+        mexc_task = asyncio.create_task(mexc_sync_loop())
+
+
+@app.on_event("shutdown")
+async def stop_mexc_reader() -> None:
+    global mexc_task
+    if mexc_task:
+        mexc_task.cancel()
+        try:
+            await mexc_task
+        except asyncio.CancelledError:
+            pass
+        mexc_task = None
 
 
 @app.get("/", include_in_schema=False)
@@ -90,6 +116,8 @@ def health():
         "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
         "bitget_p2p_enabled": settings.bitget_p2p_enabled,
         "bitget_p2p_read_only": not settings.bitget_p2p_live_writes,
+        "mexc_p2p_enabled": settings.mexc_p2p_enabled,
+        "mexc_p2p_read_only": not settings.mexc_p2p_live_writes,
     }
 
 

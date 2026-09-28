@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     bitget_p2p_sync_seconds: int = 30
     bitget_p2p_ad_limit: int = 10
     bitget_p2p_live_writes: bool = False
+    mexc_p2p_enabled: bool = False
+    mexc_p2p_api_key: str = ""
+    mexc_p2p_api_secret: str = ""
+    mexc_p2p_base_url: str = "https://api.mexc.com"
+    mexc_p2p_sync_seconds: int = 10
+    mexc_p2p_order_limit: int = 50
+    mexc_p2p_lookback_minutes: int = 1440
+    mexc_p2p_incoming_side: str = "SELL"
+    mexc_p2p_live_writes: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

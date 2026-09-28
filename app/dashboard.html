@@ -28,7 +28,7 @@
 <div class="shell">
   <header class="top">
     <div class="brand"><div class="logo">P2P</div><div><h1>P2P 4-Sàn Control</h1><p>OKX · Binance · MEXC · Bitget · SePay · Telegram</p></div></div>
-    <div class="badges"><span class="badge safe">● SePay đang độc lập</span><span class="badge warn">READ ONLY</span><span class="badge" id="bitgetBadge">Bitget API chưa bật</span><span class="badge" id="bridgeBadge">Extension chưa có dữ liệu</span><span class="badge" id="autoPickBadge">Auto pick chưa đủ dữ liệu</span><button class="btn" onclick="logout()">Đăng xuất</button></div>
+    <div class="badges"><span class="badge safe">● SePay đang độc lập</span><span class="badge warn">READ ONLY</span><span class="badge" id="mexcBadge">MEXC API chưa bật</span><span class="badge" id="bitgetBadge">Bitget API chưa bật</span><span class="badge" id="bridgeBadge">Extension chưa có dữ liệu</span><span class="badge" id="autoPickBadge">Auto pick chưa đủ dữ liệu</span><button class="btn" onclick="logout()">Đăng xuất</button></div>
   </header>
   <div class="layout">
     <aside class="sidebar">
@@ -136,6 +136,11 @@
       </section>
 
       <section class="tab" id="tab-advanced">
+        <div class="panel"><div class="section-title"><div><h2>Kết nối MEXC P2P</h2><p>Chỉ đọc đơn SELL USDT/VND để đối chiếu thanh toán SePay.</p></div></div>
+          <div class="notice">Khóa chỉ có quyền P2P Đọc thông tin tài khoản &amp; lệnh. Không bật Đặt lệnh, Nhà quảng cáo hoặc quyền rút tiền.</div>
+          <div class="grid three"><div class="status-card"><small>Base URL</small><b id="mexcBaseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret</small><b id="mexcCredentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Chu kỳ đọc đơn</small><b id="mexcSyncStatus" style="font-size:14px">—</b></div></div>
+          <div class="actions"><button class="btn green" id="mexcSyncButton" onclick="syncMexc()">Kiểm tra và đọc lệnh MEXC</button></div>
+        </div>
         <div class="panel"><div class="section-title"><div><h2>Kết nối Bitget P2P</h2><p>Đọc quảng cáo USDT/VND bằng API chính thức và tự cập nhật dữ liệu so sánh.</p></div></div>
           <div class="notice">Khóa chỉ đặt trong Environment của Render. Bản này từ chối hoạt động nếu BITGET_P2P_LIVE_WRITES=true.</div>
           <div class="grid three"><div class="status-card"><small>Base URL</small><b id="bitgetBaseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret / Passphrase</small><b id="bitgetCredentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Chu kỳ tự đồng bộ</small><b id="bitgetSyncStatus" style="font-size:14px">—</b></div></div>
@@ -182,6 +187,13 @@ function render(){
   $('#bitgetCredentialsStatus').textContent=bitgetCredentials?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
   $('#bitgetSyncStatus').textContent=bitget.enabled?`Tự động mỗi ${bitget.sync_seconds} giây`:'BITGET_P2P_ENABLED=false';
   $('#bitgetSyncButton').disabled=!(bitget.enabled&&bitgetCredentials);
+  const mexc=state.mexc||{};
+  const mexcCredentials=mexc.key_configured&&mexc.secret_configured;
+  $('#mexcBadge').textContent=mexc.enabled&&mexcCredentials?'MEXC API: READ ONLY':'MEXC API chưa bật';
+  $('#mexcBaseUrl').textContent=mexc.base_url||'https://api.mexc.com';
+  $('#mexcCredentialsStatus').textContent=mexcCredentials?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
+  $('#mexcSyncStatus').textContent=mexc.enabled?`Mỗi ${mexc.sync_seconds} giây · ${mexc.incoming_side}`:'MEXC_P2P_ENABLED=false';
+  $('#mexcSyncButton').disabled=!(mexc.enabled&&mexcCredentials);
   $('#baseUrl').textContent=state.api.base_url;
   const credentialsOk=state.api.key_configured&&state.api.secret_configured&&state.api.passphrase_configured;
   $('#credentialsStatus').textContent=credentialsOk?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
@@ -206,6 +218,7 @@ function renderArbitrage(){
 }
 async function loadState(){state=await api('/dashboard/api/state');render();return state}
 async function syncBitget(){const button=$('#bitgetSyncButton');button.disabled=true;button.textContent='Đang kết nối…';try{const r=await api('/dashboard/api/bitget/sync',{method:'POST'});await loadState();toast(`Bitget OK · BUY ${r.offers.BUY} · SELL ${r.offers.SELL}`)}catch(e){toast(e.message,true)}finally{button.textContent='Kiểm tra và đồng bộ Bitget';button.disabled=!(state?.bitget?.enabled&&state?.bitget?.key_configured&&state?.bitget?.secret_configured&&state?.bitget?.passphrase_configured)}}
+async function syncMexc(){const button=$('#mexcSyncButton');button.disabled=true;button.textContent='Đang đọc lệnh…';try{const r=await api('/dashboard/api/mexc/sync',{method:'POST'});await loadState();toast(`MEXC OK · nhận ${r.orders_received} lệnh · mới ${r.orders_created}`)}catch(e){toast(e.message,true)}finally{button.textContent='Kiểm tra và đọc lệnh MEXC';button.disabled=!(state?.mexc?.enabled&&state?.mexc?.key_configured&&state?.mexc?.secret_configured)}}
 function collectConfig(){const out={...state.config};$$('[data-config]').forEach(el=>out[el.dataset.config]=el.type==='checkbox'?el.checked:(el.type==='number'?number(el.value):el.value));out.dry_run=true;return out}
 async function saveConfig(){try{const data=await api('/dashboard/api/config',{method:'PUT',body:JSON.stringify(collectConfig())});state.config=data.config;await loadState();toast('Đã lưu cấu hình DRY RUN')}catch(e){toast(e.message,true)}}
 async function saveArbitrageConfig(){const payload={...state.arbitrage.config};$$('[data-arb]').forEach(el=>payload[el.dataset.arb]=el.type==='checkbox'?el.checked:number(el.value));try{await api('/dashboard/api/arbitrage/config',{method:'PUT',body:JSON.stringify(payload)});await loadState();toast('Đã lưu giới hạn auto pick')}catch(e){toast(e.message,true)}}
