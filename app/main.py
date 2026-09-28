@@ -21,7 +21,7 @@ from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
 ensure_runtime_schema()
-app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.5.0")
+app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.5.1")
 app.include_router(dashboard_router)
 bitget_task: asyncio.Task | None = None
 mexc_task: asyncio.Task | None = None

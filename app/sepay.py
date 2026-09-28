@@ -11,6 +11,10 @@ BANK_ALIASES = {
     "MILITARYBANK": "MB",
     "VIB": "VIB",
     "VPBANK": "VPBANK",
+    "VPB": "VPBANK",
+    "VIETNAMPROSPERITYBANK": "VPBANK",
+    "ACB": "ACB",
+    "ASIACOMMERCIALBANK": "ACB",
 }
 
 

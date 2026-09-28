@@ -11,7 +11,7 @@ class OrderCreate(BaseModel):
     fiat_amount: Decimal = Field(gt=0, decimal_places=0)
     crypto_amount: Decimal | None = Field(default=None, gt=0)
     counterparty_name: str = Field(min_length=2, max_length=255)
-    expected_bank: Literal["MB", "VIB", "VPBANK"] | None = None
+    expected_bank: Literal["MB", "VIB", "VPBANK", "ACB"] | None = None
     payment_note: str | None = Field(default=None, max_length=255)
     expires_at: datetime | None = None
 

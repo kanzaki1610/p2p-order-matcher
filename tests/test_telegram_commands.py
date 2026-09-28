@@ -27,9 +27,19 @@ def test_parse_create_order():
     assert bank == "MB"
 
 
-def test_parse_create_order_rejects_bank():
+def test_parse_create_order_accepts_acb():
+    code, amount, name, bank = parse_create_order(
+        "/don 260920160719335 | 1000000 | Nguyen Van A | ACB"
+    )
+    assert code == "260920160719335"
+    assert amount == Decimal("1000000")
+    assert name == "Nguyen Van A"
+    assert bank == "ACB"
+
+
+def test_parse_create_order_rejects_unsupported_bank():
     with pytest.raises(ValueError):
-        parse_create_order("/don 260920160719335 | 1000000 | Nguyen Van A | ACB")
+        parse_create_order("/don 260920160719335 | 1000000 | Nguyen Van A | XYZBANK")
 
 
 def test_payment_reference_uses_last_five_digits():

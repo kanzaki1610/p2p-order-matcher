@@ -23,3 +23,10 @@ def test_sepay_adapter():
     assert transaction_id(payload) == "FT26264367805804"
     assert "TESTP2P001" in combined_description(payload)
     assert parse_sepay_datetime(payload.transactionDate).tzinfo is not None
+
+
+def test_sepay_normalizes_vpbank_and_acb_aliases():
+    assert normalize_bank("VPB") == "VPBANK"
+    assert normalize_bank("Vietnam Prosperity Bank") == "VPBANK"
+    assert normalize_bank("ACB") == "ACB"
+    assert normalize_bank("Asia Commercial Bank") == "ACB"

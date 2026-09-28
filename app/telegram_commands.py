@@ -26,7 +26,7 @@ Ví dụ: /don 260920160719335 | 1000000 | THI HONG THAM DAO | MB
 /huy MÃ_ĐƠN - hủy đơn đang chờ
 /help - xem hướng dẫn
 
-Ngân hàng hỗ trợ: MB, VIB, VPBANK
+Ngân hàng hỗ trợ: MB, VIB, VPBANK, ACB
 Bot chỉ khớp và báo; không tự release USDT."""
 
 
@@ -106,8 +106,8 @@ def parse_create_order(text: str) -> tuple[str, Decimal, str, str]:
         raise ValueError("ID lệnh phải kết thúc bằng ít nhất 5 chữ số")
     if len(counterparty_name) < 2:
         raise ValueError("Tên người mua quá ngắn")
-    if bank not in {"MB", "VIB", "VPBANK"}:
-        raise ValueError("Ngân hàng chỉ nhận MB, VIB hoặc VPBANK")
+    if bank not in {"MB", "VIB", "VPBANK", "ACB"}:
+        raise ValueError("Ngân hàng chỉ nhận MB, VIB, VPBANK hoặc ACB")
     return order_code, normalize_amount(amount_text), counterparty_name, bank
 
 
