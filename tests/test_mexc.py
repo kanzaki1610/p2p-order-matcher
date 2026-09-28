@@ -51,11 +51,17 @@ def test_mexc_client_uses_read_only_p2p_endpoints():
     assert requests[1].url.path == "/api/v3/fiat/order/detail"
     assert requests[0].headers["X-MEXC-APIKEY"] == "key"
     assert parse_qs(requests[0].url.query.decode())["side"] == ["SELL"]
+    assert "orderDealState" not in parse_qs(requests[0].url.query.decode())
 
 
 class FakeMexcClient:
+    def __init__(self, state="PAID"):
+        self.state = state
+
     async def get_orders(self, **kwargs):
-        return [{"advOrderNo": "a1370592216728096768"}]
+        if kwargs.get("states") == self.state:
+            return [{"advOrderNo": "a1370592216728096768"}]
+        return []
 
     async def get_order_detail(self, order_code):
         return {
@@ -64,7 +70,7 @@ class FakeMexcClient:
             "price": "25800",
             "amount": "2592900",
             "coinName": "USDT",
-            "state": "PAID",
+            "state": self.state,
             "payTimeLimit": 1737880040000,
             "side": "SELL",
             "fiatUnit": "VND",
@@ -93,4 +99,19 @@ def test_sync_mexc_creates_waiting_order_for_sepay_matching(monkeypatch):
     assert order.counterparty_name == "DUONG DUC HUY"
     assert order.expected_bank == "VPBANK"
     assert order.payment_note == "96768"
+    assert order.status == "WAITING_PAYMENT"
+
+
+def test_sync_mexc_imports_done_order_for_late_sepay_reconciliation(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(settings, "mexc_p2p_enabled", True)
+    monkeypatch.setattr(settings, "mexc_p2p_live_writes", False)
+    monkeypatch.setattr(settings, "mexc_p2p_incoming_side", "SELL")
+
+    with Session(engine) as db:
+        result = asyncio.run(sync_mexc_orders(db, FakeMexcClient(state="DONE")))
+        order = db.scalar(select(P2POrder))
+
+    assert result["orders_received"] == 1
     assert order.status == "WAITING_PAYMENT"

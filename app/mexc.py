@@ -107,7 +107,7 @@ class MexcP2PClient:
         start_time: int,
         end_time: int,
         side: str = "SELL",
-        states: str = "NOT_PAID,PAID",
+        states: str | None = None,
         limit: int = 50,
     ) -> Any:
         return await self.request(

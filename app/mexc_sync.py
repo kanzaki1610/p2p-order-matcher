@@ -9,12 +9,16 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import SessionLocal
+from .matching import match_transaction
 from .mexc import MexcAPIError, MexcP2PClient
-from .models import OKXAuditLog, P2POrder
+from .models import BankTransaction, OKXAuditLog, P2POrder
+from .telegram import notify_match
 
 
 OPEN_STATES = {"NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING"}
-TERMINAL_STATES = {"DONE", "CANCEL", "CANCELLED", "TIMEOUT"}
+RECONCILABLE_STATES = OPEN_STATES | {"DONE"}
+CANCELLED_STATES = {"CANCEL", "CANCELLED", "INVALID", "REFUSE", "TIMEOUT"}
+QUERY_STATES = ("NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING", "DONE")
 
 
 def _items(data: Any) -> list[dict[str, Any]]:
@@ -79,7 +83,9 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
             counterparty_name=counterparty,
             expected_bank=_bank_name(detail),
             payment_note=_last_five(order_code),
-            status="WAITING_PAYMENT" if api_state in OPEN_STATES else api_state,
+            # DONE can be discovered after SePay has already delivered the bank
+            # transaction. Keep it eligible for read-only reconciliation.
+            status="WAITING_PAYMENT" if api_state in RECONCILABLE_STATES else "CANCELLED",
             created_at=_milliseconds(detail.get("createTime")) or datetime.now(timezone.utc),
             expires_at=_milliseconds(detail.get("payTimeLimit")),
         )
@@ -92,8 +98,8 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
         order.expected_bank = _bank_name(detail) or order.expected_bank
         order.payment_note = _last_five(order_code) or order.payment_note
         order.expires_at = _milliseconds(detail.get("payTimeLimit")) or order.expires_at
-        if order.status == "WAITING_PAYMENT" and api_state in TERMINAL_STATES:
-            order.status = "COMPLETED" if api_state == "DONE" else "CANCELLED"
+        if order.status == "WAITING_PAYMENT" and api_state in CANCELLED_STATES:
+            order.status = "CANCELLED"
     return order, created
 
 
@@ -105,15 +111,25 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
     client = client or MexcP2PClient()
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=max(30, settings.mexc_p2p_lookback_minutes))
-    raw = await client.get_orders(
-        start_time=int(start.timestamp() * 1000),
-        end_time=int(now.timestamp() * 1000),
-        side=settings.mexc_p2p_incoming_side.upper(),
-        limit=settings.mexc_p2p_order_limit,
-    )
-    summaries = _items(raw)
+    # MEXC accepts one order state per query. A comma-separated value can
+    # succeed with an empty result, which caused completed orders to be missed.
+    summaries_by_code: dict[str, dict[str, Any]] = {}
+    for state in QUERY_STATES:
+        raw = await client.get_orders(
+            start_time=int(start.timestamp() * 1000),
+            end_time=int(now.timestamp() * 1000),
+            side=settings.mexc_p2p_incoming_side.upper(),
+            states=state,
+            limit=settings.mexc_p2p_order_limit,
+        )
+        for summary in _items(raw):
+            code = str(summary.get("advOrderNo") or "").strip()
+            if code:
+                summaries_by_code[code] = summary
+    summaries = list(summaries_by_code.values())
     created_count = 0
     updated_count = 0
+    reconciled_count = 0
     for summary in summaries:
         code = str(summary.get("advOrderNo") or "").strip()
         if not code:
@@ -123,14 +139,31 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             continue
         if str(detail.get("fiatUnit") or "VND").upper() != "VND":
             continue
-        _, created = _upsert_order(db, detail)
+        order, created = _upsert_order(db, detail)
         created_count += int(created)
         updated_count += int(not created)
+        if created and order.status == "WAITING_PAYMENT":
+            unmatched_transactions = db.scalars(
+                select(BankTransaction).where(
+                    BankTransaction.status == "UNMATCHED",
+                    BankTransaction.amount == order.fiat_amount,
+                    BankTransaction.occurred_at >= start,
+                    BankTransaction.occurred_at <= now + timedelta(minutes=15),
+                )
+            ).all()
+            for tx in unmatched_transactions:
+                decision, matched_order, score, reasons = match_transaction(db, tx)
+                if matched_order is not None:
+                    reconciled_count += 1
+                    await notify_match(decision, matched_order, tx, score, reasons)
     if summaries:
         db.add(
             OKXAuditLog(
                 action="MEXC_ORDERS_SYNCED",
-                detail=f"MEXC P2P nhận {len(summaries)} lệnh · mới {created_count} · cập nhật {updated_count}",
+                detail=(
+                    f"MEXC P2P nhận {len(summaries)} lệnh · mới {created_count} · "
+                    f"cập nhật {updated_count} · đối soát lại {reconciled_count}"
+                ),
                 actor="mexc-p2p-api",
             )
         )
@@ -142,6 +175,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_received": len(summaries),
         "orders_created": created_count,
         "orders_updated": updated_count,
+        "transactions_reconciled": reconciled_count,
         "synced_at": now.isoformat(),
     }
 
