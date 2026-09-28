@@ -47,22 +47,20 @@ async def register_telegram_webhook() -> tuple[bool, str]:
     return True, "Đã đăng ký Telegram webhook"
 
 
+def format_payment_notification(tx: BankTransaction) -> str:
+    # Webhook descriptions can repeat the same bank memo after a "|".
+    # Keep only the actual transfer memo so the Telegram alert stays concise.
+    content = (tx.description or "Không có dữ liệu").split("|", 1)[0].strip()
+    return "\n".join(
+        [
+            f"Ngân hàng: {tx.bank}",
+            f"Số tiền: {tx.amount:,.0f} VND",
+            f"Nội dung: {content[:300]}",
+        ]
+    )
+
+
 async def notify_match(decision: str, order: P2POrder | None, tx: BankTransaction, score: int, reasons: list[str]) -> None:
     if not settings.telegram_bot_token or not settings.telegram_chat_id:
         return
-    icon = {"AUTO_MATCHED": "✅", "REVIEW_REQUIRED": "⚠️", "UNMATCHED": "❌"}.get(decision, "ℹ️")
-    lines = [
-        f"{icon} P2P PAYMENT: {decision}",
-        f"Ngân hàng: {tx.bank}",
-        f"Mã GD: {tx.transaction_id}",
-        f"Số tiền: {tx.amount:,.0f} VND",
-        f"Người chuyển: {tx.sender_name or 'Không có dữ liệu'}",
-        f"Người thanh toán dự kiến: {order.counterparty_name if order else 'Chưa xác định'}",
-        f"Nội dung chuyển khoản: {(tx.description or 'Không có dữ liệu')[:300]}",
-        f"Mã đơn: {order.order_code if order else 'Chưa xác định'}",
-        f"Mã 5 số cuối: {order.payment_note if order else 'Chưa xác định'}",
-        f"Điểm khớp: {score}/100",
-        "Lý do: " + "; ".join(reasons),
-        "Hành động: KIỂM TRA VÀ XÁC NHẬN THỦ CÔNG — bot không release USDT.",
-    ]
-    await send_telegram_message(settings.telegram_chat_id, "\n".join(lines))
+    await send_telegram_message(settings.telegram_chat_id, format_payment_notification(tx))

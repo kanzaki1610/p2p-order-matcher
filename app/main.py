@@ -20,7 +20,7 @@ from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
 ensure_runtime_schema()
-app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.4.0")
+app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.4.1")
 app.include_router(dashboard_router)
 bitget_task: asyncio.Task | None = None
 
@@ -157,8 +157,8 @@ async def ingest_transaction(
     _: None = Depends(verify_ingest_key),
 ):
     bank = bank.upper()
-    if bank not in {"MB", "VIB", "VPBANK"}:
-        raise HTTPException(status_code=422, detail="Chỉ hỗ trợ MB, VIB hoặc VPBANK")
+    if bank not in {"MB", "VIB", "VPBANK", "ACB"}:
+        raise HTTPException(status_code=422, detail="Chỉ hỗ trợ MB, VIB, VPBANK hoặc ACB")
     tx = BankTransaction(bank=bank, **payload.model_dump())
     db.add(tx)
     try:
