@@ -106,14 +106,18 @@ class MexcP2PClient:
         *,
         start_time: int,
         end_time: int,
-        side: str = "SELL",
+        side: str | None = None,
         states: str | None = None,
         limit: int = 50,
+        maker_view: bool = True,
     ) -> Any:
         return await self.request(
-            "/api/v3/fiat/market/order/paginationV2",
+            (
+                "/api/v3/fiat/merchant/order/paginationV2"
+                if maker_view
+                else "/api/v3/fiat/market/order/paginationV2"
+            ),
             params={
-                "coinId": "USDT",
                 "side": side,
                 "orderDealState": states,
                 "startTime": start_time,

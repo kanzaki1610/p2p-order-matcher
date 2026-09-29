@@ -47,7 +47,7 @@ def test_mexc_client_uses_read_only_p2p_endpoints():
     asyncio.run(client.get_order_detail("123"))
 
     assert requests[0].method == "GET"
-    assert requests[0].url.path == "/api/v3/fiat/market/order/paginationV2"
+    assert requests[0].url.path == "/api/v3/fiat/merchant/order/paginationV2"
     assert requests[1].url.path == "/api/v3/fiat/order/detail"
     assert requests[0].headers["X-MEXC-APIKEY"] == "key"
     assert parse_qs(requests[0].url.query.decode())["side"] == ["SELL"]
@@ -59,7 +59,7 @@ class FakeMexcClient:
         self.state = state
 
     async def get_orders(self, **kwargs):
-        if kwargs.get("states") == self.state:
+        if kwargs.get("maker_view"):
             return [{"advOrderNo": "a1370592216728096768"}]
         return []
 

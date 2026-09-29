@@ -18,7 +18,7 @@ from .telegram import notify_match
 OPEN_STATES = {"NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING"}
 RECONCILABLE_STATES = OPEN_STATES | {"DONE"}
 CANCELLED_STATES = {"CANCEL", "CANCELLED", "INVALID", "REFUSE", "TIMEOUT"}
-QUERY_STATES = ("NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING", "DONE")
+QUERY_STATES = "NOT_PAID,PAID,WAIT_PROCESS,PROCESSING,DONE"
 
 
 def _items(data: Any) -> list[dict[str, Any]]:
@@ -111,22 +111,27 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
     client = client or MexcP2PClient()
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=max(30, settings.mexc_p2p_lookback_minutes))
-    # MEXC accepts one order state per query. A comma-separated value can
-    # succeed with an empty result, which caused completed orders to be missed.
-    summaries_by_code: dict[str, dict[str, Any]] = {}
-    for state in QUERY_STATES:
+    # Ads created by this account are Maker orders, so use the merchant view.
+    # Do not send coin/side filters here: MEXC can return an empty list for
+    # valid credentials when those filters do not match its internal values.
+    raw = await client.get_orders(
+        start_time=int(start.timestamp() * 1000),
+        end_time=int(now.timestamp() * 1000),
+        states=QUERY_STATES,
+        limit=settings.mexc_p2p_order_limit,
+        maker_view=True,
+    )
+    summaries = _items(raw)
+    source_endpoint = "MAKER_VIEW"
+    if not summaries:
         raw = await client.get_orders(
             start_time=int(start.timestamp() * 1000),
             end_time=int(now.timestamp() * 1000),
-            side=settings.mexc_p2p_incoming_side.upper(),
-            states=state,
             limit=settings.mexc_p2p_order_limit,
+            maker_view=False,
         )
-        for summary in _items(raw):
-            code = str(summary.get("advOrderNo") or "").strip()
-            if code:
-                summaries_by_code[code] = summary
-    summaries = list(summaries_by_code.values())
+        summaries = _items(raw)
+        source_endpoint = "ALL_ORDERS_FALLBACK"
     created_count = 0
     updated_count = 0
     reconciled_count = 0
@@ -138,6 +143,8 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         if str(detail.get("coinName") or "USDT").upper() != "USDT":
             continue
         if str(detail.get("fiatUnit") or "VND").upper() != "VND":
+            continue
+        if str(detail.get("side") or "").upper() != settings.mexc_p2p_incoming_side.upper():
             continue
         order, created = _upsert_order(db, detail)
         created_count += int(created)
@@ -176,6 +183,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_created": created_count,
         "orders_updated": updated_count,
         "transactions_reconciled": reconciled_count,
+        "source_endpoint": source_endpoint,
         "synced_at": now.isoformat(),
     }
 
