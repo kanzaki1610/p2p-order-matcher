@@ -75,6 +75,37 @@ def format_payment_notification(tx: BankTransaction, score: int, reasons: list[s
     return "\n".join(lines)
 
 
+def format_mexc_new_order_notification(order: P2POrder) -> str:
+    side = (order.side or "").upper()
+    side_label = "BÁN" if side == "SELL" else "MUA" if side == "BUY" else side or "KHÔNG RÕ"
+    status_label = {
+        "WAITING_PAYMENT": "Chờ người mua thanh toán",
+        "CANCELLED": "Đã hủy",
+    }.get(order.status, order.status or "Không rõ")
+
+    lines = [
+        "🆕 LỆNH MEXC P2P MỚI",
+        "",
+        f"Loại: {side_label}",
+        f"ID: {order.order_code}",
+        f"Số tiền: {order.fiat_amount:,.0f} VND",
+        f"Số lượng: {order.crypto_amount:,.4f} USDT",
+        f"Đối tác: {order.counterparty_name or 'Không có dữ liệu'}",
+        f"Ngân hàng: {order.expected_bank or 'Chưa xác định'}",
+        f"Trạng thái: {status_label}",
+    ]
+    return "\n".join(lines)
+
+
+async def notify_mexc_new_order(order: P2POrder) -> bool:
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        return False
+    return await send_telegram_message(
+        settings.telegram_chat_id,
+        format_mexc_new_order_notification(order),
+    )
+
+
 async def notify_match(decision: str, order: P2POrder | None, tx: BankTransaction, score: int, reasons: list[str]) -> None:
     if not settings.telegram_bot_token or not settings.telegram_chat_id:
         return

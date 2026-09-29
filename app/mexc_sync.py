@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -12,8 +13,10 @@ from .database import SessionLocal
 from .matching import match_transaction
 from .mexc import MexcAPIError, MexcP2PClient
 from .models import BankTransaction, OKXAuditLog, P2POrder
-from .telegram import notify_match
+from .telegram import notify_match, notify_mexc_new_order
 
+
+logger = logging.getLogger(__name__)
 
 OPEN_STATES = {"NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING"}
 RECONCILABLE_STATES = OPEN_STATES | {"DONE"}
@@ -132,9 +135,12 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         )
         summaries = _items(raw)
         source_endpoint = "ALL_ORDERS_FALLBACK"
+
     created_count = 0
     updated_count = 0
     reconciled_count = 0
+    telegram_new_order_count = 0
+
     for summary in summaries:
         code = str(summary.get("advOrderNo") or "").strip()
         if not code:
@@ -146,9 +152,30 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             continue
         if str(detail.get("side") or "").upper() != settings.mexc_p2p_incoming_side.upper():
             continue
+
         order, created = _upsert_order(db, detail)
         created_count += int(created)
         updated_count += int(not created)
+
+        # Flush first so the order is materialized before notification/matching.
+        if created:
+            db.flush()
+            if order.status == "WAITING_PAYMENT":
+                sent = await notify_mexc_new_order(order)
+                telegram_new_order_count += int(sent)
+                if sent:
+                    logger.info(
+                        "MEXC new order Telegram sent | order=%s | amount=%s | side=%s",
+                        order.order_code,
+                        order.fiat_amount,
+                        order.side,
+                    )
+                else:
+                    logger.warning(
+                        "MEXC new order Telegram not sent | order=%s",
+                        order.order_code,
+                    )
+
         if created and order.status == "WAITING_PAYMENT":
             unmatched_transactions = db.scalars(
                 select(BankTransaction).where(
@@ -163,13 +190,15 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                 if matched_order is not None:
                     reconciled_count += 1
                     await notify_match(decision, matched_order, tx, score, reasons)
+
     if summaries:
         db.add(
             OKXAuditLog(
                 action="MEXC_ORDERS_SYNCED",
                 detail=(
                     f"MEXC P2P nhận {len(summaries)} lệnh · mới {created_count} · "
-                    f"cập nhật {updated_count} · đối soát lại {reconciled_count}"
+                    f"cập nhật {updated_count} · Telegram mới {telegram_new_order_count} · "
+                    f"đối soát lại {reconciled_count}"
                 ),
                 actor="mexc-p2p-api",
             )
@@ -182,6 +211,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_received": len(summaries),
         "orders_created": created_count,
         "orders_updated": updated_count,
+        "telegram_new_orders_sent": telegram_new_order_count,
         "transactions_reconciled": reconciled_count,
         "source_endpoint": source_endpoint,
         "synced_at": now.isoformat(),
@@ -191,10 +221,35 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
 async def mexc_sync_loop() -> None:
     interval = max(10, settings.mexc_p2p_sync_seconds)
     await asyncio.sleep(3)
+    logger.info(
+        "MEXC sync loop started | interval=%ss | enabled=%s | incoming_side=%s",
+        interval,
+        settings.mexc_p2p_enabled,
+        settings.mexc_p2p_incoming_side,
+    )
+
+    empty_polls = 0
     while True:
         try:
             with SessionLocal() as db:
-                await sync_mexc_orders(db)
+                result = await sync_mexc_orders(db)
+
+            if result["orders_received"] > 0 or result["orders_created"] > 0:
+                logger.info("MEXC sync result: %s", result)
+                empty_polls = 0
+            else:
+                empty_polls += 1
+                # Keep a heartbeat in Render logs without flooding them every 10s.
+                if empty_polls >= 6:
+                    logger.info(
+                        "MEXC sync heartbeat | received=0 | source=%s",
+                        result["source_endpoint"],
+                    )
+                    empty_polls = 0
+        except asyncio.CancelledError:
+            logger.info("MEXC sync loop stopped")
+            raise
         except Exception:
-            pass
+            logger.exception("MEXC sync failed")
+
         await asyncio.sleep(interval)
