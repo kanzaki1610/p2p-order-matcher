@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import Base
-from app.mexc import MexcP2PClient
-from app.mexc_sync import sync_mexc_orders
+from app.mexc import MexcAPIError, MexcP2PClient
+from app.mexc_sync import _get_order_detail_with_retry, sync_mexc_orders
 from app.models import P2POrder
 
 
@@ -80,6 +80,85 @@ class FakeMexcClient:
         }
 
 
+class RetryThenSuccessClient(FakeMexcClient):
+    def __init__(self):
+        super().__init__()
+        self.detail_calls = 0
+
+    async def get_order_detail(self, order_code):
+        self.detail_calls += 1
+        if self.detail_calls < 3:
+            network_error = httpx.ConnectTimeout("temporary timeout")
+            raise MexcAPIError("Không thể kết nối MEXC: ConnectTimeout") from network_error
+        return await super().get_order_detail(order_code)
+
+
+class AlwaysTimeoutClient(FakeMexcClient):
+    def __init__(self):
+        super().__init__()
+        self.detail_calls = 0
+
+    async def get_order_detail(self, order_code):
+        self.detail_calls += 1
+        network_error = httpx.ConnectTimeout("temporary timeout")
+        raise MexcAPIError("Không thể kết nối MEXC: ConnectTimeout") from network_error
+
+
+class MixedOrdersClient(FakeMexcClient):
+    async def get_orders(self, **kwargs):
+        if kwargs.get("maker_view"):
+            return [
+                {"advOrderNo": "bad-timeout"},
+                {"advOrderNo": "good-order"},
+            ]
+        return []
+
+    async def get_order_detail(self, order_code):
+        if order_code == "bad-timeout":
+            network_error = httpx.ConnectTimeout("temporary timeout")
+            raise MexcAPIError("Không thể kết nối MEXC: ConnectTimeout") from network_error
+
+        detail = await super().get_order_detail(order_code)
+        detail["advOrderNo"] = order_code
+        detail["amount"] = "260600"
+        detail["tradableQuantity"] = "10"
+        return detail
+
+
+def _no_sleep(monkeypatch):
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("app.mexc_sync.asyncio.sleep", fake_sleep)
+
+
+def test_order_detail_retries_transient_timeout_then_recovers(monkeypatch):
+    _no_sleep(monkeypatch)
+    client = RetryThenSuccessClient()
+
+    detail = asyncio.run(
+        _get_order_detail_with_retry(client, "retry-order", max_attempts=3)
+    )
+
+    assert client.detail_calls == 3
+    assert detail["advOrderNo"] == "retry-order"
+
+
+def test_order_detail_stops_after_max_attempts(monkeypatch):
+    _no_sleep(monkeypatch)
+    client = AlwaysTimeoutClient()
+
+    try:
+        asyncio.run(
+            _get_order_detail_with_retry(client, "timeout-order", max_attempts=3)
+        )
+        assert False, "Expected MexcAPIError"
+    except MexcAPIError:
+        pass
+
+    assert client.detail_calls == 3
+
+
 def test_sync_mexc_creates_waiting_order_for_sepay_matching(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -115,3 +194,22 @@ def test_sync_mexc_imports_done_order_for_late_sepay_reconciliation(monkeypatch)
 
     assert result["orders_received"] == 1
     assert order.status == "WAITING_PAYMENT"
+
+
+def test_one_timed_out_order_does_not_abort_the_whole_sync(monkeypatch):
+    _no_sleep(monkeypatch)
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(settings, "mexc_p2p_enabled", True)
+    monkeypatch.setattr(settings, "mexc_p2p_live_writes", False)
+    monkeypatch.setattr(settings, "mexc_p2p_incoming_side", "SELL")
+
+    with Session(engine) as db:
+        result = asyncio.run(sync_mexc_orders(db, MixedOrdersClient()))
+        orders = db.scalars(select(P2POrder)).all()
+
+    assert result["orders_received"] == 2
+    assert result["order_details_failed"] == 1
+    assert result["orders_created"] == 1
+    assert len(orders) == 1
+    assert orders[0].order_code == "good-order"
