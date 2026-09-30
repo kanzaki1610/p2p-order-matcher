@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,10 @@ OPEN_STATES = {"NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING"}
 RECONCILABLE_STATES = OPEN_STATES | {"DONE"}
 CANCELLED_STATES = {"CANCEL", "CANCELLED", "INVALID", "REFUSE", "TIMEOUT"}
 QUERY_STATES = "NOT_PAID,PAID,WAIT_PROCESS,PROCESSING,DONE"
+
+# Total attempts for MEXC order detail: 3.
+# Retry delays are 1s then 2s.
+MEXC_DETAIL_MAX_ATTEMPTS = 3
 
 
 def _items(data: Any) -> list[dict[str, Any]]:
@@ -63,6 +68,69 @@ def _decimal(value: Any, default: str = "0") -> Decimal:
         return Decimal(default)
 
 
+def _is_transient_mexc_error(exc: BaseException) -> bool:
+    """Retry only temporary network/timeout errors."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (httpx.TimeoutException, httpx.TransportError)):
+            return True
+        current = current.__cause__ or current.__context__
+
+    return False
+
+
+async def _get_order_detail_with_retry(
+    client: MexcP2PClient,
+    order_code: str,
+    *,
+    max_attempts: int = MEXC_DETAIL_MAX_ATTEMPTS,
+) -> dict[str, Any]:
+    attempts = max(1, int(max_attempts))
+
+    for attempt in range(1, attempts + 1):
+        try:
+            detail = await client.get_order_detail(order_code)
+            if attempt > 1:
+                logger.info(
+                    "MEXC order detail recovered | order=%s | attempt=%s/%s",
+                    order_code,
+                    attempt,
+                    attempts,
+                )
+            return detail
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            transient = _is_transient_mexc_error(exc)
+
+            if not transient or attempt >= attempts:
+                logger.error(
+                    "MEXC order detail failed | order=%s | attempt=%s/%s | transient=%s | error=%s",
+                    order_code,
+                    attempt,
+                    attempts,
+                    transient,
+                    str(exc)[:300],
+                )
+                raise
+
+            delay = 2 ** (attempt - 1)  # 1s, 2s
+            logger.warning(
+                "MEXC order detail retry | order=%s | attempt=%s/%s | wait=%ss | error=%s",
+                order_code,
+                attempt,
+                attempts,
+                delay,
+                str(exc)[:300],
+            )
+            await asyncio.sleep(delay)
+
+    raise MexcAPIError(f"Không thể lấy chi tiết lệnh MEXC {order_code}")
+
+
 def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
     order_code = str(detail.get("advOrderNo") or "").strip()
     if not order_code:
@@ -86,8 +154,6 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
             counterparty_name=counterparty,
             expected_bank=_bank_name(detail),
             payment_note=_last_five(order_code),
-            # DONE can be discovered after SePay has already delivered the bank
-            # transaction. Keep it eligible for read-only reconciliation.
             status="WAITING_PAYMENT" if api_state in RECONCILABLE_STATES else "CANCELLED",
             created_at=_milliseconds(detail.get("createTime")) or datetime.now(timezone.utc),
             expires_at=_milliseconds(detail.get("payTimeLimit")),
@@ -111,12 +177,11 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         raise MexcAPIError("MEXC_P2P_ENABLED đang tắt")
     if settings.mexc_p2p_live_writes:
         raise MexcAPIError("Bản này chỉ hỗ trợ đọc; hãy đặt MEXC_P2P_LIVE_WRITES=false")
+
     client = client or MexcP2PClient()
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=max(30, settings.mexc_p2p_lookback_minutes))
-    # Ads created by this account are Maker orders, so use the merchant view.
-    # Do not send coin/side filters here: MEXC can return an empty list for
-    # valid credentials when those filters do not match its internal values.
+
     raw = await client.get_orders(
         start_time=int(start.timestamp() * 1000),
         end_time=int(now.timestamp() * 1000),
@@ -126,6 +191,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
     )
     summaries = _items(raw)
     source_endpoint = "MAKER_VIEW"
+
     if not summaries:
         raw = await client.get_orders(
             start_time=int(start.timestamp() * 1000),
@@ -140,12 +206,23 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
     updated_count = 0
     reconciled_count = 0
     telegram_new_order_count = 0
+    detail_failed_count = 0
 
     for summary in summaries:
         code = str(summary.get("advOrderNo") or "").strip()
         if not code:
             continue
-        detail = await client.get_order_detail(code)
+
+        # A timeout on one order must not abort the entire sync batch.
+        try:
+            detail = await _get_order_detail_with_retry(client, code)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            detail_failed_count += 1
+            logger.exception("MEXC order skipped after detail failure | order=%s", code)
+            continue
+
         if str(detail.get("coinName") or "USDT").upper() != "USDT":
             continue
         if str(detail.get("fiatUnit") or "VND").upper() != "VND":
@@ -157,7 +234,6 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         created_count += int(created)
         updated_count += int(not created)
 
-        # Flush first so the order is materialized before notification/matching.
         if created:
             db.flush()
             if order.status == "WAITING_PAYMENT":
@@ -197,12 +273,13 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                 action="MEXC_ORDERS_SYNCED",
                 detail=(
                     f"MEXC P2P nhận {len(summaries)} lệnh · mới {created_count} · "
-                    f"cập nhật {updated_count} · Telegram mới {telegram_new_order_count} · "
-                    f"đối soát lại {reconciled_count}"
+                    f"cập nhật {updated_count} · lỗi detail {detail_failed_count} · "
+                    f"Telegram mới {telegram_new_order_count} · đối soát lại {reconciled_count}"
                 ),
                 actor="mexc-p2p-api",
             )
         )
+
     db.commit()
     return {
         "success": True,
@@ -211,6 +288,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_received": len(summaries),
         "orders_created": created_count,
         "orders_updated": updated_count,
+        "order_details_failed": detail_failed_count,
         "telegram_new_orders_sent": telegram_new_order_count,
         "transactions_reconciled": reconciled_count,
         "source_endpoint": source_endpoint,
@@ -234,12 +312,15 @@ async def mexc_sync_loop() -> None:
             with SessionLocal() as db:
                 result = await sync_mexc_orders(db)
 
-            if result["orders_received"] > 0 or result["orders_created"] > 0:
+            if (
+                result["orders_received"] > 0
+                or result["orders_created"] > 0
+                or result["order_details_failed"] > 0
+            ):
                 logger.info("MEXC sync result: %s", result)
                 empty_polls = 0
             else:
                 empty_polls += 1
-                # Keep a heartbeat in Render logs without flooding them every 10s.
                 if empty_polls >= 6:
                     logger.info(
                         "MEXC sync heartbeat | received=0 | source=%s",
