@@ -248,3 +248,44 @@ def test_notification_is_retried_then_not_resent(monkeypatch):
         for _ in range(3):
             asyncio.run(sync_mexc_orders(db, FakeMexcClient()))
     assert len(sent) == 2
+
+
+def test_api_side_can_differ_from_accounting_side(monkeypatch):
+    class BuyerSideClient(FakeMexcClient):
+        async def get_order_detail(self, code):
+            detail = await super().get_order_detail(code)
+            return {**detail, "side": "BUY"}
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(settings, "mexc_p2p_enabled", True)
+    monkeypatch.setattr(settings, "mexc_p2p_api_incoming_side", "BUY")
+    monkeypatch.setattr(settings, "mexc_p2p_incoming_side", "SELL")
+    sent = []
+
+    async def notify(order):
+        sent.append(order.side)
+        return True
+
+    monkeypatch.setattr("app.mexc_sync.notify_mexc_new_order", notify)
+    with Session(engine) as db:
+        result = asyncio.run(sync_mexc_orders(db, BuyerSideClient()))
+        assert db.scalar(select(P2POrder)).side == "SELL"
+    assert result["orders_created"] == 1
+    assert sent == ["SELL"]
+
+
+def test_completed_order_does_not_send_new_order_alert(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(settings, "mexc_p2p_enabled", True)
+    sent = []
+
+    async def notify(order):
+        sent.append(order.order_code)
+        return True
+
+    monkeypatch.setattr("app.mexc_sync.notify_mexc_new_order", notify)
+    with Session(engine) as db:
+        asyncio.run(sync_mexc_orders(db, FakeMexcClient(state="DONE")))
+    assert sent == []
