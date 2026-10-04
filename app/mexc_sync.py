@@ -211,6 +211,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
     telegram_new_order_count = 0
     detail_failed_count = 0
     skipped_filters = {"coin": 0, "fiat": 0, "side_buy": 0, "side_sell": 0, "side_missing": 0, "side_other": 0}
+    expected_api_side = (settings.mexc_p2p_api_incoming_side or settings.mexc_p2p_incoming_side).upper()
 
     for summary in summaries:
         code = str(summary.get("advOrderNo") or "").strip()
@@ -235,24 +236,27 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         if str(detail.get("fiatUnit") or "VND").upper() != "VND":
             skipped_filters["fiat"] += 1
             continue
-        if str(detail.get("side") or "").upper() != settings.mexc_p2p_incoming_side.upper():
+        if str(detail.get("side") or "").upper() != expected_api_side:
             side = str(detail.get("side") or "").upper()
             reason = {"BUY": "side_buy", "SELL": "side_sell", "": "side_missing"}.get(side, "side_other")
             skipped_filters[reason] += 1
             continue
 
+        # The API-side convention is configured independently of our accounting side.
+        detail = {**detail, "side": settings.mexc_p2p_incoming_side.upper()}
         order, created = _upsert_order(db, detail)
         created_count += int(created)
         updated_count += int(not created)
 
         if created:
             db.flush()
-            db.add(MexcNotification(order_code=order.order_code))
+            if str(detail.get("state") or "NOT_PAID").upper() in OPEN_STATES:
+                db.add(MexcNotification(order_code=order.order_code))
             # Persist pending delivery before contacting Telegram.
             db.commit()
         pending = db.get(MexcNotification, order.order_code)
         if pending is not None and pending.sent_at is None:
-            if order.status == "WAITING_PAYMENT":
+            if order.status == "WAITING_PAYMENT" and str(detail.get("state") or "NOT_PAID").upper() in OPEN_STATES:
                 sent = await notify_mexc_new_order(order)
                 telegram_new_order_count += int(sent)
                 if sent:
@@ -308,6 +312,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_updated": updated_count,
         "order_details_failed": detail_failed_count,
         "orders_skipped_filters": skipped_filters,
+        "api_incoming_side": expected_api_side,
         "telegram_new_orders_sent": telegram_new_order_count,
         "transactions_reconciled": reconciled_count,
         "source_endpoint": source_endpoint,

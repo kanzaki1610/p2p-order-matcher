@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     mexc_p2p_order_limit: int = 50
     mexc_p2p_lookback_minutes: int = 1440
     mexc_p2p_incoming_side: str = "SELL"
+    mexc_p2p_api_incoming_side: str = ""
     mexc_p2p_live_writes: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
