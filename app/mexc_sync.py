@@ -210,6 +210,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
     reconciled_count = 0
     telegram_new_order_count = 0
     detail_failed_count = 0
+    skipped_filters = {"coin": 0, "fiat": 0, "side_buy": 0, "side_sell": 0, "side_missing": 0, "side_other": 0}
 
     for summary in summaries:
         code = str(summary.get("advOrderNo") or "").strip()
@@ -229,10 +230,15 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             continue
 
         if str(detail.get("coinName") or "USDT").upper() != "USDT":
+            skipped_filters["coin"] += 1
             continue
         if str(detail.get("fiatUnit") or "VND").upper() != "VND":
+            skipped_filters["fiat"] += 1
             continue
         if str(detail.get("side") or "").upper() != settings.mexc_p2p_incoming_side.upper():
+            side = str(detail.get("side") or "").upper()
+            reason = {"BUY": "side_buy", "SELL": "side_sell", "": "side_missing"}.get(side, "side_other")
+            skipped_filters[reason] += 1
             continue
 
         order, created = _upsert_order(db, detail)
@@ -301,6 +307,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_created": created_count,
         "orders_updated": updated_count,
         "order_details_failed": detail_failed_count,
+        "orders_skipped_filters": skipped_filters,
         "telegram_new_orders_sent": telegram_new_order_count,
         "transactions_reconciled": reconciled_count,
         "source_endpoint": source_endpoint,
