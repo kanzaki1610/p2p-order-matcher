@@ -17,7 +17,7 @@ from .models import BankTransaction, OKXAuditLog, P2POrder, MexcNotification
 from .telegram import notify_match, notify_mexc_new_order
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error.mexc_sync")
 
 OPEN_STATES = {"NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING"}
 RECONCILABLE_STATES = OPEN_STATES | {"DONE"}

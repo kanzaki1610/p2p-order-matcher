@@ -11,7 +11,7 @@ import httpx
 
 from .config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error.mexc")
 
 
 class MexcAPIError(RuntimeError):
