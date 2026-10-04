@@ -213,3 +213,38 @@ def test_one_timed_out_order_does_not_abort_the_whole_sync(monkeypatch):
     assert result["orders_created"] == 1
     assert len(orders) == 1
     assert orders[0].order_code == "good-order"
+
+
+def test_list_retries_tls_error_and_resigns(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = []
+
+    async def handler(request):
+        calls.append(request)
+        if len(calls) < 3:
+            raise httpx.ConnectError('TLS handshake failed')
+        return httpx.Response(200, json={'code': 0, 'data': []})
+
+    async def run():
+        async with MexcP2PClient(api_key='test', api_secret='test', transport=httpx.MockTransport(handler)) as client:
+            return await client.get_orders(start_time=1, end_time=2)
+
+    assert asyncio.run(run()) == []
+    assert len(calls) == 3
+
+
+def test_notification_is_retried_then_not_resent(monkeypatch):
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(settings, 'mexc_p2p_enabled', True)
+    sent = []
+
+    async def notify(order):
+        sent.append(order.order_code)
+        return len(sent) > 1
+
+    monkeypatch.setattr('app.mexc_sync.notify_mexc_new_order', notify)
+    with Session(engine) as db:
+        for _ in range(3):
+            asyncio.run(sync_mexc_orders(db, FakeMexcClient()))
+    assert len(sent) == 2
