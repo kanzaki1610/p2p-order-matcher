@@ -274,7 +274,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                         order.order_code,
                     )
 
-        if order.status == "WAITING_PAYMENT":
+        if created and order.status == "WAITING_PAYMENT":
             unmatched_transactions = db.scalars(
                 select(BankTransaction).where(
                     BankTransaction.status == "UNMATCHED",
