@@ -13,7 +13,7 @@ from .config import settings
 from .database import SessionLocal
 from .matching import match_transaction
 from .mexc import MexcAPIError, MexcP2PClient
-from .models import BankTransaction, OKXAuditLog, P2POrder
+from .models import BankTransaction, OKXAuditLog, P2POrder, MexcNotification
 from .telegram import notify_match, notify_mexc_new_order
 
 
@@ -173,6 +173,9 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
 
 
 async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> dict[str, Any]:
+    if client is None:
+        async with MexcP2PClient() as owned_client:
+            return await sync_mexc_orders(db, owned_client)
     if not settings.mexc_p2p_enabled:
         raise MexcAPIError("MEXC_P2P_ENABLED đang tắt")
     if settings.mexc_p2p_live_writes:
@@ -215,12 +218,14 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
 
         # A timeout on one order must not abort the entire sync batch.
         try:
-            detail = await _get_order_detail_with_retry(client, code)
+            detail = await _get_order_detail_with_retry(
+                client, code, max_attempts=1 if isinstance(client, MexcP2PClient) else MEXC_DETAIL_MAX_ATTEMPTS,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             detail_failed_count += 1
-            logger.exception("MEXC order skipped after detail failure | order=%s", code)
+            logger.error("MEXC order skipped after detail failure | order=%s", code)
             continue
 
         if str(detail.get("coinName") or "USDT").upper() != "USDT":
@@ -236,10 +241,17 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
 
         if created:
             db.flush()
+            db.add(MexcNotification(order_code=order.order_code))
+            # Persist pending delivery before contacting Telegram.
+            db.commit()
+        pending = db.get(MexcNotification, order.order_code)
+        if pending is not None and pending.sent_at is None:
             if order.status == "WAITING_PAYMENT":
                 sent = await notify_mexc_new_order(order)
                 telegram_new_order_count += int(sent)
                 if sent:
+                    pending.sent_at = datetime.now(timezone.utc)
+                    db.commit()
                     logger.info(
                         "MEXC new order Telegram sent | order=%s | amount=%s | side=%s",
                         order.order_code,
@@ -252,7 +264,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                         order.order_code,
                     )
 
-        if created and order.status == "WAITING_PAYMENT":
+        if order.status == "WAITING_PAYMENT":
             unmatched_transactions = db.scalars(
                 select(BankTransaction).where(
                     BankTransaction.status == "UNMATCHED",
@@ -330,7 +342,8 @@ async def mexc_sync_loop() -> None:
         except asyncio.CancelledError:
             logger.info("MEXC sync loop stopped")
             raise
-        except Exception:
-            logger.exception("MEXC sync failed")
+        except Exception as exc:
+            # Never log chained HTTP exceptions: they may include signed URLs.
+            logger.error("MEXC sync failed | error=%s", type(exc).__name__)
 
         await asyncio.sleep(interval)

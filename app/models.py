@@ -29,6 +29,13 @@ class P2POrder(Base):
     matches: Mapped[list["PaymentMatch"]] = relationship(back_populates="order")
 
 
+class MexcNotification(Base):
+    __tablename__ = 'mexc_notifications'
+
+    order_code: Mapped[str] = mapped_column(String(100), primary_key=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BankTransaction(Base):
     __tablename__ = "bank_transactions"
     __table_args__ = (UniqueConstraint("bank", "transaction_id", name="uq_bank_tx"),)
