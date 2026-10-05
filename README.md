@@ -1,3 +1,7 @@
+# Discord notifications
+
+Xem [DISCORD-SETUP.md](DISCORD-SETUP.md) để cấu hình Discord, commands và Telegram fallback.
+
 # P2P 4-Sàn Control + Bot đối soát SePay/Telegram (V13)
 
 V10 đọc quảng cáo P2P công khai đang hiển thị trên OKX, Binance, MEXC và Bitget, sau đó tự xếp hạng cơ hội mua USDT thấp/bán USDT cao theo giới hạn VND và USDT. Dashboard vẫn chạy bắt buộc ở chế độ READ ONLY; hệ thống **không tự release USDT**, không click và không đặt lệnh thật.

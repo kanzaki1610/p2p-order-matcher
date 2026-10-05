@@ -15,7 +15,7 @@ async def send_telegram_message(chat_id: str, text: str) -> bool:
             print(f"Telegram gửi thất bại do lỗi mạng: {type(exc).__name__}")
             return False
         if response.is_error:
-            print(f"Telegram gửi thất bại: HTTP {response.status_code} - {response.text[:300]}")
+            print(f"Telegram gửi thất bại: HTTP {response.status_code}")
             return False
     return True
 
@@ -43,7 +43,7 @@ async def register_telegram_webhook() -> tuple[bool, str]:
         except httpx.RequestError as exc:
             return False, f"Lỗi mạng: {type(exc).__name__}"
     if response.is_error:
-        return False, f"Telegram HTTP {response.status_code}: {response.text[:300]}"
+        return False, f"Telegram HTTP {response.status_code}"
     return True, "Đã đăng ký Telegram webhook"
 
 
@@ -98,15 +98,10 @@ def format_mexc_new_order_notification(order: P2POrder) -> str:
 
 
 async def notify_mexc_new_order(order: P2POrder) -> bool:
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
-        return False
-    return await send_telegram_message(
-        settings.telegram_chat_id,
-        format_mexc_new_order_notification(order),
-    )
+    from .notifications import notify_mexc_new_order as routed
+    return await routed(order)
 
 
 async def notify_match(decision: str, order: P2POrder | None, tx: BankTransaction, score: int, reasons: list[str]) -> None:
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
-        return
-    await send_telegram_message(settings.telegram_chat_id, format_payment_notification(tx, score, reasons))
+    from .notifications import notify_match as routed
+    await routed(decision, order, tx, score, reasons)

@@ -14,7 +14,7 @@ from .database import SessionLocal
 from .matching import match_transaction
 from .mexc import MexcAPIError, MexcP2PClient
 from .models import BankTransaction, OKXAuditLog, P2POrder, MexcNotification
-from .telegram import notify_match, notify_mexc_new_order
+from .notifications import notify_match, notify_mexc_new_order, notify_system_alert
 
 
 logger = logging.getLogger("uvicorn.error.mexc_sync")
@@ -252,7 +252,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             db.flush()
             if str(detail.get("state") or "NOT_PAID").upper() in OPEN_STATES:
                 db.add(MexcNotification(order_code=order.order_code))
-            # Persist pending delivery before contacting Telegram.
+            # Persist pending delivery before contacting the notification provider.
             db.commit()
         pending = db.get(MexcNotification, order.order_code)
         if pending is not None and pending.sent_at is None:
@@ -263,14 +263,14 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                     pending.sent_at = datetime.now(timezone.utc)
                     db.commit()
                     logger.info(
-                        "MEXC new order Telegram sent | order=%s | amount=%s | side=%s",
+                        "MEXC new order notification sent | order=%s | amount=%s | side=%s",
                         order.order_code,
                         order.fiat_amount,
                         order.side,
                     )
                 else:
                     logger.warning(
-                        "MEXC new order Telegram not sent | order=%s",
+                        "MEXC new order notification not sent | order=%s",
                         order.order_code,
                     )
 
@@ -296,7 +296,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                 detail=(
                     f"MEXC P2P nhận {len(summaries)} lệnh · mới {created_count} · "
                     f"cập nhật {updated_count} · lỗi detail {detail_failed_count} · "
-                    f"Telegram mới {telegram_new_order_count} · đối soát lại {reconciled_count}"
+                    f"Thông báo mới {telegram_new_order_count} · đối soát lại {reconciled_count}"
                 ),
                 actor="mexc-p2p-api",
             )
@@ -314,6 +314,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         "orders_skipped_filters": skipped_filters,
         "api_incoming_side": expected_api_side,
         "telegram_new_orders_sent": telegram_new_order_count,
+        "notifications_new_orders_sent": telegram_new_order_count,
         "transactions_reconciled": reconciled_count,
         "source_endpoint": source_endpoint,
         "synced_at": now.isoformat(),
@@ -331,10 +332,14 @@ async def mexc_sync_loop() -> None:
     )
 
     empty_polls = 0
+    failed = False
     while True:
         try:
             with SessionLocal() as db:
                 result = await sync_mexc_orders(db)
+            if failed:
+                await notify_system_alert("MEXC sync đã hoạt động trở lại")
+            failed = False
 
             if (
                 result["orders_received"] > 0
@@ -357,5 +362,8 @@ async def mexc_sync_loop() -> None:
         except Exception as exc:
             # Never log chained HTTP exceptions: they may include signed URLs.
             logger.error("MEXC sync failed | error=%s", type(exc).__name__)
+            if not failed:
+                await notify_system_alert("MEXC sync lỗi; hệ thống sẽ thử lại. Kiểm tra kết nối và cấu hình.")
+            failed = True
 
         await asyncio.sleep(interval)

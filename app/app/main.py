@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
+from ..config import settings as notification_settings
+from ..notifications import notify_command_result
 from .database import Base, engine, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -48,6 +50,8 @@ def verify_sepay_key(
 
 
 def verify_telegram_key(x_telegram_bot_api_secret_token: str = Header(default="")) -> None:
+    if not notification_settings.telegram_commands_enabled:
+        raise HTTPException(status_code=404, detail="Telegram commands disabled")
     expected = settings.telegram_webhook_secret
     if not expected or not secrets.compare_digest(x_telegram_bot_api_secret_token, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Telegram webhook secret không hợp lệ")
@@ -96,6 +100,7 @@ async def telegram_webhook(
         telegram_display_name=display_name,
     )
     await send_telegram_message(chat_id, reply)
+    await notify_command_result(reply, db)
     return {"ok": True}
 
 

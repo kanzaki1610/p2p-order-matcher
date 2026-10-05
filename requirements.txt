@@ -6,3 +6,5 @@ pydantic-settings==2.10.1
 httpx==0.28.1
 python-multipart==0.0.20
 pytest==8.4.1
+PyNaCl==1.6.0
+tzdata==2025.2

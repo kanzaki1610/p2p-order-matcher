@@ -68,3 +68,38 @@ services:
         value: "90"
       - key: REVIEW_THRESHOLD
         value: "60"
+
+      - key: NOTIFICATION_PROVIDER
+        value: "discord"
+      - key: TELEGRAM_FALLBACK_ENABLED
+        value: "true"
+      - key: TELEGRAM_COMMANDS_ENABLED
+        value: "true"
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: DISCORD_WEBHOOK_ORDERS
+        sync: false
+      - key: DISCORD_WEBHOOK_PAYMENT_DETECTED
+        sync: false
+      - key: DISCORD_WEBHOOK_REVIEW_REQUIRED
+        sync: false
+      - key: DISCORD_WEBHOOK_CONFIRMED
+        sync: false
+      - key: DISCORD_WEBHOOK_SYSTEM_ALERTS
+        sync: false
+      - key: DISCORD_COMMANDS_ENABLED
+        value: "false"
+      - key: DISCORD_APPLICATION_ID
+        sync: false
+      - key: DISCORD_PUBLIC_KEY
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_ALLOWED_USER_IDS
+        sync: false
+      - key: DISCORD_ALLOWED_ROLE_IDS
+        sync: false
+      - key: DISCORD_COMMAND_CHANNEL_IDS
+        sync: false

@@ -16,13 +16,16 @@ from .matching import match_transaction
 from .models import BankTransaction, P2POrder
 from .schemas import BankTransactionIn, MatchResult, OrderCreate, OrderOut, SePayWebhookIn, SePayWebhookOut
 from .sepay import combined_description, normalize_bank, parse_sepay_datetime, transaction_id
-from .telegram import notify_match, register_telegram_webhook, send_telegram_message
+from .telegram import register_telegram_webhook, send_telegram_message
+from .notifications import notify_match, notify_event, notify_command_result
+from .discord_commands import router as discord_router
 from .telegram_commands import handle_command
 
 Base.metadata.create_all(bind=engine)
 ensure_runtime_schema()
 app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.5.3")
 app.include_router(dashboard_router)
+app.include_router(discord_router)
 bitget_task: asyncio.Task | None = None
 mexc_task: asyncio.Task | None = None
 
@@ -103,6 +106,8 @@ def verify_sepay_key(
 
 
 def verify_telegram_key(x_telegram_bot_api_secret_token: str = Header(default="")) -> None:
+    if not settings.telegram_commands_enabled:
+        raise HTTPException(status_code=404, detail="Telegram commands disabled")
     expected = settings.telegram_webhook_secret
     if not expected or not secrets.compare_digest(x_telegram_bot_api_secret_token, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Telegram webhook secret không hợp lệ")
@@ -113,6 +118,10 @@ def health():
     return {
         "status": "ok",
         "auto_release": False,
+        "notification_provider": settings.notification_provider,
+        "discord_configured": any((settings.discord_webhook_url, settings.discord_webhook_orders,
+            settings.discord_webhook_payment_detected, settings.discord_webhook_review_required,
+            settings.discord_webhook_confirmed, settings.discord_webhook_system_alerts)),
         "telegram_configured": bool(settings.telegram_bot_token and settings.telegram_chat_id),
         "bitget_p2p_enabled": settings.bitget_p2p_enabled,
         "bitget_p2p_read_only": not settings.bitget_p2p_live_writes,
@@ -155,7 +164,19 @@ async def telegram_webhook(
         telegram_display_name=display_name,
     )
     await send_telegram_message(chat_id, reply)
+    await notify_command_result(reply, db)
     return {"ok": True}
+
+
+@app.post("/discord/test-notification")
+async def test_discord_notification(_: None = Depends(verify_ingest_key)):
+    from .discord_notifications import send_discord_message
+    from .telegram_commands import format_vietnam_time
+    from datetime import datetime, timezone
+    sent = await send_discord_message("SYSTEM_ALERT", "TEST DISCORD — dữ liệu giả\nNgân hàng: MB\nSố tiền: 1,000 VND\nNội dung: TEST P2P\nMã lệnh: TEST001\nTrạng thái: TEST\nThời gian VN: " + format_vietnam_time(datetime.now(timezone.utc)))
+    if not sent:
+        raise HTTPException(502, "Discord chưa gửi được; kiểm tra webhook và kết nối")
+    return {"sent": True, "channel": "system-alerts"}
 
 
 @app.post("/orders", response_model=OrderOut, status_code=201)

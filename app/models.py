@@ -11,6 +11,12 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class DiscordInteractionReceipt(Base):
+    __tablename__ = "discord_interaction_receipts"
+    interaction_id: Mapped[str] = mapped_column(String(30), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class P2POrder(Base):
     __tablename__ = "p2p_orders"
 
