@@ -60,7 +60,8 @@ def consistent(order, row):
         # Get Order does not document isOwner; ad ownership is not order ownership.
         # The authenticated detail response and imported receipt identify the order.
         and row.get("side") == "sell"
-        and row.get("cryptoCurrency") == "USDT" and row.get("fiatCurrency") == "VND"
+        and str(row.get("cryptoCurrency") or "").strip().upper() == "USDT"
+        and str(row.get("fiatCurrency") or "").strip().upper() == "VND"
         and Decimal(str(row.get("fiatAmount"))) == order.fiat_amount
         and Decimal(str(row.get("cryptoAmount"))) == order.crypto_amount
         and bool(normalize_text(party.get("realName")))
