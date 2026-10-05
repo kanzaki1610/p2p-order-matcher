@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from collections import Counter
 from datetime import timedelta, timezone
 from difflib import SequenceMatcher
 
@@ -31,13 +32,41 @@ def contains_five_digit_reference(description: str | None, reference: str | None
     return re.search(rf"(?<!\d){re.escape(reference)}(?!\d)", description) is not None
 
 
+def word_tokens(value: str | None) -> list[str]:
+    value = unicodedata.normalize("NFD", (value or "").upper().replace("Đ", "D"))
+    value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
+    return re.findall(r"[A-Z0-9]+", value)
+
+
+def same_name(left: str | None, right: str | None) -> bool:
+    tokens = word_tokens(left)
+    return bool(tokens) and Counter(tokens) == Counter(word_tokens(right))
+
+
+def memo_contains_name(description: str | None, name: str | None) -> bool:
+    expected = Counter(word_tokens(name))
+    actual = Counter(word_tokens(description))
+    return bool(expected) and all(actual[word] >= count for word, count in expected.items())
+
+
+def memo_contains_order_code(description: str | None, code: str | None) -> bool:
+    parts = word_tokens(code)
+    if not parts:
+        return False
+    text = " ".join(word_tokens(description))
+    if len(parts) == 1 and parts[0].isdigit():
+        return re.search(r"(?<!\d)" + re.escape(parts[0]) + r"(?!\d)", text) is not None
+    # Permit spaces/punctuation in a code, but never a substring of a longer identifier.
+    pattern = r"(?<![A-Z0-9])" + r"\s*".join(map(re.escape, parts)) + r"(?![A-Z0-9])"
+    return re.search(pattern, text) is not None
+
+
 def satisfies_payment_rules(order: P2POrder, tx: BankTransaction) -> bool:
-    description = normalize_text(tx.description)
-    name = normalize_text(order.counterparty_name)
     return bool(
         order.fiat_amount == tx.amount
-        and name
-        and (name == normalize_text(tx.sender_name) or name in description)
+        and (memo_contains_order_code(tx.description, order.order_code)
+             or same_name(order.counterparty_name, tx.sender_name)
+             or memo_contains_name(tx.description, order.counterparty_name))
         and tx.direction == "CREDIT"
         and order.side == "SELL"
     )
@@ -62,12 +91,11 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
         reasons.append("Ngân hàng không trả tên người chuyển")
 
     description = normalize_text(tx.description)
-    normalized_name = normalize_text(order.counterparty_name)
-    if normalized_name and normalized_name in description:
+    if memo_contains_name(tx.description, order.counterparty_name):
         score += 25
         reasons.append("Tên người thanh toán có trong nội dung +25")
 
-    if normalize_text(order.order_code) in description:
+    if memo_contains_order_code(tx.description, order.order_code):
         score += 40
         reasons.append("Nội dung có đầy đủ ID lệnh +40")
     elif contains_five_digit_reference(tx.description, order.payment_note):
@@ -79,7 +107,7 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
         reasons.append("Đúng ngân hàng dự kiến +5")
 
     if satisfies_payment_rules(order, tx):
-        reasons.append("Đạt quy tắc: số tiền và họ tên chính xác, tiền ghi có")
+        reasons.append("Đạt quy tắc: số tiền chính xác và mã lệnh hoặc đủ họ tên (cho phép đảo thứ tự), tiền ghi có")
         return 100, reasons
     return min(score, 89), reasons
 

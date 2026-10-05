@@ -13,7 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import settings
 from .database import Base
-from .matching import normalize_text, satisfies_payment_rules
+from .matching import normalize_text, same_name, satisfies_payment_rules
 from .models import BankTransaction, P2POrder, PaymentMatch
 from .notifications import notify_event
 from .okx_sync import OKXOrderReceipt
@@ -62,7 +62,7 @@ def consistent(order, row):
         and Decimal(str(row.get("fiatAmount"))) == order.fiat_amount
         and Decimal(str(row.get("cryptoAmount"))) == order.crypto_amount
         and bool(normalize_text(party.get("realName")))
-        and normalize_text(party.get("realName")) == normalize_text(order.counterparty_name))
+        and same_name(party.get("realName"), order.counterparty_name))
 
 
 def releasable(order, row):
