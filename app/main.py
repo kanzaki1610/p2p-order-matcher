@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .bitget_sync import bitget_sync_loop
 from .mexc_sync import mexc_sync_loop
+from .okx_sync import okx_sync_loop
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -28,6 +29,26 @@ app.include_router(dashboard_router)
 app.include_router(discord_router)
 bitget_task: asyncio.Task | None = None
 mexc_task: asyncio.Task | None = None
+okx_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def start_okx_reader():
+    global okx_task
+    if settings.okx_p2p_enabled and all((settings.okx_api_key, settings.okx_api_secret, settings.okx_api_passphrase)):
+        okx_task = asyncio.create_task(okx_sync_loop())
+
+
+@app.on_event("shutdown")
+async def stop_okx_reader():
+    global okx_task
+    if okx_task:
+        okx_task.cancel()
+        try:
+            await okx_task
+        except asyncio.CancelledError:
+            pass
+        okx_task = None
 
 
 @app.on_event("startup")

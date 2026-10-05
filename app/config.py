@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     okx_api_secret: str = ""
     okx_api_passphrase: str = ""
     okx_base_url: str = "https://www.okx.com"
+    okx_p2p_enabled: bool = True
+    okx_p2p_sync_seconds: int = 15
     bitget_p2p_enabled: bool = False
     bitget_p2p_api_key: str = ""
     bitget_p2p_api_secret: str = ""
