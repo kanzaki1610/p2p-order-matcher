@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import Base
 from app.models import BankTransaction, P2POrder, PaymentMatch
-from app.okx_release import OKXReleaseAttempt, process_releases
+from app.okx_release import OKXReleaseAttempt, OKXReleaseDiagnostic, process_releases
 from app.okx_sync import OKXOrderReceipt
 
 
@@ -105,6 +105,34 @@ def test_timeout_is_not_automatically_resubmitted(setup):
     assert len(posts) == 1
     assert db.get(OKXReleaseAttempt, order.id).state == "UNKNOWN"
     assert order.status == "PAYMENT_DETECTED"
+    assert "Hết thời gian" in db.get(OKXReleaseDiagnostic, order.id).reason
+
+
+@pytest.mark.parametrize("status,payload,expected", [
+    (200, {"code": "50120", "msg": "FAKE_SECRET private response"}, "50120"),
+    (403, {"code": "50101", "msg": "FAKE_SECRET"}, "HTTP 403"),
+    (200, {"code": "FAKE_SECRET", "msg": "private"}, "không có mã hợp lệ"),
+])
+def test_release_failure_is_persisted_and_not_retried(setup, monkeypatch, status, payload, expected):
+    db, order, row = setup
+    notifier = AsyncMock(side_effect=[False, True])
+    monkeypatch.setattr("app.okx_release.notify_event", notifier)
+    posts = []
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request)
+            return httpx.Response(status, json=payload)
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler)
+    db.expire_all()
+    run(db, handler)
+    assert len(posts) == 1
+    assert db.get(OKXReleaseAttempt, order.id).state == "UNKNOWN"
+    assert expected in db.get(OKXReleaseDiagnostic, order.id).reason
+    for call in notifier.call_args_list:
+        assert expected in call.args[1]
+        assert "FAKE_SECRET" not in call.args[1]
+        assert "private" not in call.args[1]
 
 
 def test_api_acceptance_alone_does_not_mark_released(setup):
