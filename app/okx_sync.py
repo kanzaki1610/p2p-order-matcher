@@ -111,6 +111,23 @@ async def sync_orders(db, client):
     return sent
 
 
+async def reconcile_bank_transactions(db):
+    # Catch bank credits received before an OKX order was imported.
+    from datetime import timedelta
+    from .models import BankTransaction
+    from .matching import match_transaction
+    from .notifications import notify_match
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.match_window_minutes)
+    transactions = db.scalars(select(BankTransaction).where(
+        BankTransaction.status == "UNMATCHED", BankTransaction.direction == "CREDIT",
+        BankTransaction.occurred_at >= cutoff,
+    ).order_by(BankTransaction.occurred_at).limit(200)).all()
+    for tx in transactions:
+        decision, order, score, reasons = match_transaction(db, tx)
+        if decision != "UNMATCHED":
+            await notify_match(decision, order, tx, score, reasons)
+
+
 async def okx_sync_loop():
     failed = False
     async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
@@ -118,6 +135,9 @@ async def okx_sync_loop():
             try:
                 with SessionLocal() as db:
                     await sync_orders(db, client)
+                    await reconcile_bank_transactions(db)
+                    from .okx_release import process_releases
+                    await process_releases(db, client)
                 if failed:
                     await notify_system_alert("Kết nối đọc lệnh OKX đã phục hồi")
                 failed = False

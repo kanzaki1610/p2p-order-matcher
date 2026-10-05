@@ -1,0 +1,117 @@
+import asyncio
+import json
+from datetime import datetime, timezone
+from decimal import Decimal
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.database import Base
+from app.models import BankTransaction, P2POrder, PaymentMatch
+from app.okx_release import OKXReleaseAttempt, process_releases
+from app.okx_sync import OKXOrderReceipt
+
+
+@pytest.fixture
+def setup(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    db = Session(engine, expire_on_commit=False)
+    order = P2POrder(order_code="TEST001", side="SELL", fiat_amount=Decimal("100000"),
+        crypto_amount=Decimal("4"), counterparty_name="Đặng Văn An", status="PAYMENT_DETECTED")
+    tx = BankTransaction(bank="MB", transaction_id="FAKE001", amount=Decimal("100000"),
+        direction="CREDIT", description="DANG VAN AN chuyen tien", occurred_at=datetime.now(timezone.utc))
+    db.add_all([order, tx, OKXOrderReceipt(order_id="TEST001")])
+    db.commit()
+    db.add(PaymentMatch(order_id=order.id, transaction_id=tx.id, score=100,
+        decision="AUTO_MATCHED", reasons="Test"))
+    db.commit()
+    monkeypatch.setattr(settings, "okx_auto_release_enabled", True)
+    monkeypatch.setattr(settings, "okx_api_key", "FAKE")
+    monkeypatch.setattr(settings, "okx_api_secret", "FAKE")
+    monkeypatch.setattr(settings, "okx_api_passphrase", "FAKE")
+    monkeypatch.setattr("app.okx_release.notify_event", AsyncMock(return_value=True))
+    row = {"orderId": "TEST001", "side": "sell", "isOwner": True,
+        "fiatAmount": "100000", "cryptoAmount": "4", "cryptoCurrency": "USDT", "fiatCurrency": "VND",
+        "orderStatus": "new", "paymentStatus": "paid", "isFrozen": False, "disputeStatus": "0",
+        "counterpartyDetail": {"realName": "DANG VAN AN"}}
+    yield db, order, row
+    db.close()
+    engine.dispose()
+
+
+def run(db, handler):
+    async def execute():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await process_releases(db, client)
+    asyncio.run(execute())
+
+
+def test_disabled_flag_makes_no_api_calls(setup, monkeypatch):
+    db, order, row = setup
+    monkeypatch.setattr(settings, "okx_auto_release_enabled", False)
+    def handler(request):
+        pytest.fail("Disabled release must not call any API")
+    run(db, handler)
+    assert db.get(OKXReleaseAttempt, order.id) is None
+
+
+def test_release_only_after_exchange_confirms_and_no_duplicate(setup):
+    db, order, row = setup
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        if request.method == "POST":
+            assert request.url.path == "/api/v5/p2p/order/release-crypto"
+            assert json.loads(request.content) == {"orderId": "TEST001", "verificationType": "2", "amount": "100000"}
+            row.update(orderStatus="completed", paymentStatus="confirmed")
+            return httpx.Response(200, json={"code": "0", "data": [{"orderId": "TEST001"}]})
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler)
+    run(db, handler)
+    assert calls.count("POST") == 1
+    assert order.status == "RELEASED"
+    assert db.get(OKXReleaseAttempt, order.id).state == "RELEASED"
+
+
+@pytest.mark.parametrize("field,value", [("isFrozen", True), ("disputeStatus", "1"),
+    ("orderStatus", "cancelled"), ("paymentStatus", "unpaid"),
+    ("isOwner", False), ("fiatAmount", "99999"), ("cryptoAmount", "5")])
+def test_unsafe_exchange_state_never_posts(setup, field, value):
+    db, order, row = setup
+    row[field] = value
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler)
+    assert db.get(OKXReleaseAttempt, order.id).state == "REVIEW_REQUIRED"
+    assert order.status != "RELEASED"
+
+
+def test_timeout_is_not_automatically_resubmitted(setup):
+    db, order, row = setup
+    posts = []
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request)
+            raise httpx.ReadTimeout("Simulated timeout")
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler)
+    run(db, handler)
+    assert len(posts) == 1
+    assert db.get(OKXReleaseAttempt, order.id).state == "UNKNOWN"
+    assert order.status == "PAYMENT_DETECTED"
+
+
+def test_api_acceptance_alone_does_not_mark_released(setup):
+    db, order, row = setup
+    def handler(request):
+        data = {"orderId": "TEST001"} if request.method == "POST" else row
+        return httpx.Response(200, json={"code": "0", "data": [data]})
+    run(db, handler)
+    assert db.get(OKXReleaseAttempt, order.id).state == "SUBMITTED"
+    assert order.status != "RELEASED"

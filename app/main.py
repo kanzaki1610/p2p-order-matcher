@@ -11,6 +11,7 @@ from .config import settings
 from .bitget_sync import bitget_sync_loop
 from .mexc_sync import mexc_sync_loop
 from .okx_sync import okx_sync_loop
+from .okx_release import OKXReleaseAttempt
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -138,7 +139,7 @@ def verify_telegram_key(x_telegram_bot_api_secret_token: str = Header(default=""
 def health():
     return {
         "status": "ok",
-        "auto_release": False,
+        "auto_release": settings.okx_auto_release_enabled,
         "notification_provider": settings.notification_provider,
         "discord_configured": any((settings.discord_webhook_url, settings.discord_webhook_orders,
             settings.discord_webhook_payment_detected, settings.discord_webhook_review_required,
