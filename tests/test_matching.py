@@ -10,13 +10,13 @@ def test_normalize_vietnamese_name():
 
 
 def test_high_confidence_match():
-    order = P2POrder(
+    order = P2POrder(side="SELL", 
         order_code="OKX-ABC123",
         fiat_amount=Decimal("52360000"),
         counterparty_name="Nguyễn Văn An",
         expected_bank="VIB",
     )
-    tx = BankTransaction(
+    tx = BankTransaction(direction="CREDIT", 
         bank="VIB",
         transaction_id="VIB001",
         amount=Decimal("52360000"),
@@ -30,13 +30,13 @@ def test_high_confidence_match():
 
 
 def test_sepay_match_without_sender_name_uses_order_code():
-    order = P2POrder(
+    order = P2POrder(side="SELL", 
         order_code="P2P001",
         fiat_amount=Decimal("10000"),
         counterparty_name="Unknown Sender",
         expected_bank="MB",
     )
-    tx = BankTransaction(
+    tx = BankTransaction(direction="CREDIT", 
         bank="MB",
         transaction_id="FT-DEMO",
         amount=Decimal("10000"),
@@ -45,12 +45,12 @@ def test_sepay_match_without_sender_name_uses_order_code():
         occurred_at=datetime.now(timezone.utc),
     )
     score, _ = evaluate(order, tx)
-    assert score >= 90
+    assert score < 90  # Order code alone no longer replaces exact buyer name.
 
 
 def test_amount_only_is_not_auto_match():
-    order = P2POrder(order_code="ORDER1", fiat_amount=Decimal("1000000"), counterparty_name="Tran Van B")
-    tx = BankTransaction(
+    order = P2POrder(side="SELL", order_code="ORDER1", fiat_amount=Decimal("1000000"), counterparty_name="Tran Van B")
+    tx = BankTransaction(direction="CREDIT", 
         bank="VPBANK",
         transaction_id="VP001",
         amount=Decimal("1000000"),
@@ -63,14 +63,14 @@ def test_amount_only_is_not_auto_match():
 
 
 def test_real_p2p_content_matches_name_and_last_five_order_digits():
-    order = P2POrder(
+    order = P2POrder(side="SELL", 
         order_code="260920160719335",
         fiat_amount=Decimal("1000000"),
         counterparty_name="THI HONG THAM DAO",
         expected_bank="MB",
         payment_note="19335",
     )
-    tx = BankTransaction(
+    tx = BankTransaction(direction="CREDIT", 
         bank="MB",
         transaction_id="FT-REAL-DEMO",
         amount=Decimal("1000000"),
@@ -87,3 +87,4 @@ def test_real_p2p_content_matches_name_and_last_five_order_digits():
 def test_reference_must_be_independent_five_digit_group():
     assert contains_five_digit_reference("chuyen tien 19335", "19335")
     assert not contains_five_digit_reference("ma FT26193350001", "19335")
+
