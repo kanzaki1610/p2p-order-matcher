@@ -133,6 +133,37 @@ def test_documented_order_detail_does_not_require_ad_ownership(setup, ownership)
     assert calls.count("POST") == 1
 
 
+@pytest.mark.parametrize("crypto,fiat", [("usdt", "vnd"), ("UsDt", "VnD")])
+def test_detail_currency_case_and_decimal_format_are_normalized(setup, crypto, fiat):
+    db, order, row = setup
+    row.update(cryptoCurrency=crypto, fiatCurrency=fiat, cryptoAmount="4.00000000")
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        if request.method == "POST":
+            row.update(orderStatus="completed", paymentStatus="confirmed")
+            data = {"orderId": "TEST001"}
+        else:
+            data = row
+        return httpx.Response(200, json={"code": "0", "data": [data]})
+    run(db, handler)
+    run(db, handler)
+    assert calls.count("POST") == 1
+    assert order.status == "RELEASED"
+
+
+@pytest.mark.parametrize("field,value", [("cryptoCurrency", "btc"), ("fiatCurrency", "usd"),
+    ("cryptoCurrency", None), ("fiatCurrency", "")])
+def test_currency_normalization_still_rejects_wrong_or_missing_currency(setup, field, value):
+    db, order, row = setup
+    row[field] = value
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler)
+    assert db.get(OKXReleaseAttempt, order.id).state == "REVIEW_REQUIRED"
+
+
 @pytest.mark.parametrize("field", ["isFrozen", "disputeStatus", "paymentStatus", "fiatAmount", "counterpartyDetail"])
 def test_missing_required_detail_blocks_and_explains_without_post(setup, monkeypatch, field):
     db, order, row = setup
