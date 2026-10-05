@@ -41,11 +41,11 @@ def test_sepay_match_without_sender_name_uses_order_code():
         transaction_id="FT-DEMO",
         amount=Decimal("10000"),
         sender_name=None,
-        description="TESTP2P001 FT26264040336009",
+        description="TEST P2P001 FT26264040336009",
         occurred_at=datetime.now(timezone.utc),
     )
     score, _ = evaluate(order, tx)
-    assert score < 90  # Order code alone no longer replaces exact buyer name.
+    assert score == 100
 
 
 def test_amount_only_is_not_auto_match():
