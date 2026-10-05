@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import Base
 from app.models import BankTransaction, P2POrder, PaymentMatch
-from app.okx_release import OKXReleaseAttempt, OKXReleaseDiagnostic, process_releases
+from app.okx_release import OKXReleaseAttempt, OKXReleaseDiagnostic, process_releases, notify_attempt
 from app.okx_sync import OKXOrderReceipt
 
 
@@ -144,6 +144,23 @@ def test_api_acceptance_alone_does_not_mark_released(setup):
     run(db, handler)
     assert db.get(OKXReleaseAttempt, order.id).state == "SUBMITTED"
     assert order.status != "RELEASED"
+
+
+@pytest.mark.parametrize("state,event", [("WAITING_BUYER_PAYMENT", "PAYMENT_DETECTED"),
+    ("SUBMITTED", "AUTO_MATCHED"), ("REVIEW_REQUIRED", "REVIEW_REQUIRED"),
+    ("UNKNOWN", "REVIEW_REQUIRED"), ("RELEASED", "CONFIRMED")])
+def test_manual_review_does_not_receive_waiting_or_submitted(setup, monkeypatch, state, event):
+    db, order, row = setup
+    attempt = OKXReleaseAttempt(order_id=order.id,
+        transaction_id=db.query(PaymentMatch).one().transaction_id, state=state)
+    db.add(attempt)
+    db.commit()
+    notifier = AsyncMock(return_value=True)
+    monkeypatch.setattr("app.okx_release.notify_event", notifier)
+    asyncio.run(notify_attempt(db, attempt, order))
+    assert notifier.call_args.args[0] == event
+    if state in {"SUBMITTED", "WAITING_BUYER_PAYMENT"}:
+        assert "Cần kiểm tra trên OKX" not in notifier.call_args.args[1]
 
 
 def test_bank_payment_waits_for_buyer_then_rechecks_and_releases_once(setup, monkeypatch):
