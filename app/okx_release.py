@@ -3,6 +3,8 @@ import base64
 import hashlib
 import hmac
 import json
+import re
+import httpx
 from datetime import datetime, timezone
 from decimal import Decimal
 from urllib.parse import urlencode
@@ -28,6 +30,41 @@ class OKXReleaseAttempt(Base):
     notified_state: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
 
+class OKXReleaseDiagnostic(Base):
+    __tablename__ = "okx_release_diagnostics"
+    order_id: Mapped[int] = mapped_column(ForeignKey("p2p_orders.id"), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(500))
+
+
+class OKXRequestError(RuntimeError):
+    pass
+
+
+def safe_code(value):
+    value = str(value)
+    return value if re.fullmatch(r"[0-9]{1,12}", value) else "không có mã hợp lệ"
+
+
+def failure_reason(error):
+    if isinstance(error, OKXRequestError):
+        return str(error)
+    if isinstance(error, httpx.TimeoutException):
+        return "Hết thời gian chờ OKX; chưa xác định yêu cầu đã được xử lý hay chưa."
+    if isinstance(error, httpx.RequestError):
+        return "Lỗi kết nối OKX; chưa xác định kết quả yêu cầu."
+    return "Phản hồi OKX không đọc được hoặc không đúng định dạng."
+
+
+def save_diagnostic(db, attempt, reason):
+    diagnostic = db.get(OKXReleaseDiagnostic, attempt.order_id)
+    if diagnostic is None:
+        diagnostic = OKXReleaseDiagnostic(order_id=attempt.order_id, reason=reason)
+        db.add(diagnostic)
+    else:
+        diagnostic.reason = reason
+    db.commit()
+
+
 async def request(client, method, path, body=None):
     timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     encoded = json.dumps(body, separators=(",", ":")) if body is not None else ""
@@ -37,11 +74,16 @@ async def request(client, method, path, body=None):
         content=encoded or None, headers={"OK-ACCESS-KEY": settings.okx_api_key,
         "OK-ACCESS-SIGN": signature, "OK-ACCESS-TIMESTAMP": timestamp,
         "OK-ACCESS-PASSPHRASE": settings.okx_api_passphrase, "Content-Type": "application/json"})
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        raise OKXRequestError(f"OKX HTTP {response.status_code}; phản hồi không phải JSON.") from None
+    if not isinstance(payload, dict):
+        raise OKXRequestError(f"OKX HTTP {response.status_code}; cấu trúc phản hồi không hợp lệ.")
     if response.status_code != 200:
-        raise RuntimeError("OKX request rejected")
-    payload = response.json()
+        raise OKXRequestError(f"OKX HTTP {response.status_code}; mã API: {safe_code(payload.get('code'))}.")
     if str(payload.get("code")) != "0":
-        raise RuntimeError("OKX API rejected request")
+        raise OKXRequestError(f"OKX từ chối yêu cầu; mã API: {safe_code(payload.get('code'))}.")
     data = payload.get("data")
     if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
         return data[0]
@@ -94,8 +136,13 @@ def preflight_reason(order, tx, row):
 
 
 async def notify_attempt(db, attempt, order, reason=None):
+    if reason:
+        save_diagnostic(db, attempt, reason)
     if attempt.state == attempt.notified_state or attempt.state == "READY":
         return
+    diagnostic = db.get(OKXReleaseDiagnostic, attempt.order_id)
+    if reason is None and diagnostic and attempt.state != "RELEASED":
+        reason = diagnostic.reason
     event = "CONFIRMED" if attempt.state == "RELEASED" else "REVIEW_REQUIRED"
     text = f"OKX P2P\nMã lệnh: {order.order_code}\nTrạng thái mở khóa: {attempt.state}"
     if reason:
@@ -143,11 +190,11 @@ async def process_releases(db, client):
                     db.commit()
                     await notify_attempt(db, attempt, order, reason)
                     continue
-            except Exception:
+            except Exception as error:
                 attempt.state = "REVIEW_REQUIRED"
                 db.commit()
                 await notify_attempt(db, attempt, order,
-                    "Không đọc được chi tiết lệnh OKX; cần kiểm tra kết nối hoặc quyền API.")
+                    "Không đọc được chi tiết lệnh: " + failure_reason(error))
                 continue
             # Persist uncertainty before POST. Crash/timeout cannot cause automatic resubmission.
             attempt.state = "UNKNOWN"
@@ -158,8 +205,10 @@ async def process_releases(db, client):
                 if str(result.get("orderId")) == order.order_code:
                     attempt.state = "SUBMITTED"
                     db.commit()
-            except Exception:
-                pass
+                else:
+                    save_diagnostic(db, attempt, "OKX trả mã lệnh khác hoặc thiếu mã lệnh; chưa xác định kết quả mở khóa.")
+            except Exception as error:
+                save_diagnostic(db, attempt, failure_reason(error))
         if attempt.state in {"SUBMITTING", "SUBMITTED", "UNKNOWN"}:
             try:
                 row = await detail(client, order.order_code)
