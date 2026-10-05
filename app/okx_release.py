@@ -143,12 +143,15 @@ async def notify_attempt(db, attempt, order, reason=None):
     diagnostic = db.get(OKXReleaseDiagnostic, attempt.order_id)
     if reason is None and diagnostic and attempt.state != "RELEASED":
         reason = diagnostic.reason
-    event = "CONFIRMED" if attempt.state == "RELEASED" else "REVIEW_REQUIRED"
+    event = {"RELEASED": "CONFIRMED", "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED",
+        "SUBMITTED": "AUTO_MATCHED"}.get(attempt.state, "REVIEW_REQUIRED")
     text = f"OKX P2P\nMã lệnh: {order.order_code}\nTrạng thái mở khóa: {attempt.state}"
     if reason:
         text += "\nLý do: " + reason
     if attempt.state == "WAITING_BUYER_PAYMENT":
         text += "\nChưa gửi yêu cầu mở khóa."
+    elif attempt.state == "SUBMITTED":
+        text += "\nOKX đã tiếp nhận yêu cầu; hệ thống đang chờ xác nhận hoàn tất."
     elif attempt.state != "RELEASED":
         text += "\nCần kiểm tra trên OKX. Không tự gửi lại yêu cầu mở khóa."
     if await notify_event(event, text):
