@@ -57,7 +57,9 @@ async def detail(client, code):
 def consistent(order, row):
     party = row.get("counterpartyDetail") or {}
     return (str(row.get("orderId")) == order.order_code
-        and row.get("side") == "sell" and row.get("isOwner") is True
+        # Get Order does not document isOwner; ad ownership is not order ownership.
+        # The authenticated detail response and imported receipt identify the order.
+        and row.get("side") == "sell"
         and row.get("cryptoCurrency") == "USDT" and row.get("fiatCurrency") == "VND"
         and Decimal(str(row.get("fiatAmount"))) == order.fiat_amount
         and Decimal(str(row.get("cryptoAmount"))) == order.crypto_amount
@@ -71,11 +73,32 @@ def releasable(order, row):
         and row.get("isFrozen") is False and str(row.get("disputeStatus")) == "0")
 
 
-async def notify_attempt(db, attempt, order):
+def preflight_reason(order, tx, row):
+    if not satisfies_payment_rules(order, tx):
+        return "Giao dịch ngân hàng không còn đáp ứng quy tắc đối chiếu."
+    try:
+        if not consistent(order, row):
+            return "Chi tiết OKX thiếu hoặc khác mã lệnh, bên bán, tiền tệ, số tiền hoặc họ tên đã nhập."
+    except (ValueError, TypeError, ArithmeticError, AttributeError):
+        return "Chi tiết OKX thiếu hoặc sai định dạng dữ liệu bắt buộc."
+    if row.get("orderStatus") != "new":
+        return "Lệnh OKX không còn ở trạng thái new."
+    if row.get("paymentStatus") not in {"paid", "unreceived"}:
+        return "OKX chưa ghi nhận trạng thái paid/unreceived."
+    if row.get("isFrozen") is not False:
+        return "Lệnh bị đóng băng hoặc API chưa xác nhận isFrozen=false."
+    if str(row.get("disputeStatus")) != "0":
+        return "Lệnh có tranh chấp hoặc API chưa xác nhận disputeStatus=0."
+    return None
+
+
+async def notify_attempt(db, attempt, order, reason=None):
     if attempt.state == attempt.notified_state or attempt.state == "READY":
         return
     event = "CONFIRMED" if attempt.state == "RELEASED" else "REVIEW_REQUIRED"
     text = f"OKX P2P\nMã lệnh: {order.order_code}\nTrạng thái mở khóa: {attempt.state}"
+    if reason:
+        text += "\nLý do: " + reason
     if attempt.state != "RELEASED":
         text += "\nCần kiểm tra trên OKX. Không tự gửi lại yêu cầu mở khóa."
     if await notify_event(event, text):
@@ -113,15 +136,17 @@ async def process_releases(db, client):
             db.refresh(attempt)
             try:
                 row = await detail(client, order.order_code)
-                if not satisfies_payment_rules(order, tx) or not releasable(order, row):
+                reason = preflight_reason(order, tx, row)
+                if reason:
                     attempt.state = "REVIEW_REQUIRED"
                     db.commit()
-                    await notify_attempt(db, attempt, order)
+                    await notify_attempt(db, attempt, order, reason)
                     continue
             except Exception:
                 attempt.state = "REVIEW_REQUIRED"
                 db.commit()
-                await notify_attempt(db, attempt, order)
+                await notify_attempt(db, attempt, order,
+                    "Không đọc được chi tiết lệnh OKX; cần kiểm tra kết nối hoặc quyền API.")
                 continue
             # Persist uncertainty before POST. Crash/timeout cannot cause automatic resubmission.
             attempt.state = "UNKNOWN"
