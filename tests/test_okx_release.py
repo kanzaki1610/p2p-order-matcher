@@ -80,7 +80,7 @@ def test_release_only_after_exchange_confirms_and_no_duplicate(setup):
 
 @pytest.mark.parametrize("field,value", [("isFrozen", True), ("disputeStatus", "1"),
     ("orderStatus", "cancelled"), ("paymentStatus", "unpaid"),
-    ("isOwner", False), ("fiatAmount", "99999"), ("cryptoAmount", "5")])
+    ("fiatAmount", "99999"), ("cryptoAmount", "5")])
 def test_unsafe_exchange_state_never_posts(setup, field, value):
     db, order, row = setup
     row[field] = value
@@ -115,3 +115,35 @@ def test_api_acceptance_alone_does_not_mark_released(setup):
     run(db, handler)
     assert db.get(OKXReleaseAttempt, order.id).state == "SUBMITTED"
     assert order.status != "RELEASED"
+
+
+@pytest.mark.parametrize("ownership", [None, False])
+def test_documented_order_detail_does_not_require_ad_ownership(setup, ownership):
+    db, order, row = setup
+    if ownership is None:
+        row.pop("isOwner")
+    else:
+        row["isOwner"] = ownership
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        data = {"orderId": "TEST001"} if request.method == "POST" else row
+        return httpx.Response(200, json={"code": "0", "data": [data]})
+    run(db, handler)
+    assert calls.count("POST") == 1
+
+
+@pytest.mark.parametrize("field", ["isFrozen", "disputeStatus", "paymentStatus", "fiatAmount", "counterpartyDetail"])
+def test_missing_required_detail_blocks_and_explains_without_post(setup, monkeypatch, field):
+    db, order, row = setup
+    row.pop(field)
+    notifier = AsyncMock(return_value=True)
+    monkeypatch.setattr("app.okx_release.notify_event", notifier)
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler)
+    run(db, handler)
+    assert db.get(OKXReleaseAttempt, order.id).state == "REVIEW_REQUIRED"
+    assert "Lý do:" in notifier.call_args.args[1]
+    assert notifier.call_count == 1
