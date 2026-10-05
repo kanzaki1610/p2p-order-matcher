@@ -147,7 +147,9 @@ async def notify_attempt(db, attempt, order, reason=None):
     text = f"OKX P2P\nMã lệnh: {order.order_code}\nTrạng thái mở khóa: {attempt.state}"
     if reason:
         text += "\nLý do: " + reason
-    if attempt.state != "RELEASED":
+    if attempt.state == "WAITING_BUYER_PAYMENT":
+        text += "\nChưa gửi yêu cầu mở khóa."
+    elif attempt.state != "RELEASED":
         text += "\nCần kiểm tra trên OKX. Không tự gửi lại yêu cầu mở khóa."
     if await notify_event(event, text):
         attempt.notified_state = attempt.state
@@ -173,10 +175,11 @@ async def process_releases(db, client):
             except IntegrityError:
                 db.rollback()
                 continue
-        if attempt.state == "READY":
+        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT"}:
             # Claim before any network request; a second worker cannot POST this order.
             claimed = db.execute(update(OKXReleaseAttempt).where(
-                OKXReleaseAttempt.order_id == order.id, OKXReleaseAttempt.state == "READY"
+                OKXReleaseAttempt.order_id == order.id,
+                OKXReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT"])
             ).values(state="SUBMITTING"))
             db.commit()
             if claimed.rowcount != 1:
@@ -184,6 +187,15 @@ async def process_releases(db, client):
             db.refresh(attempt)
             try:
                 row = await detail(client, order.order_code)
+                # Waiting is allowed only when unpaid is the sole blocking condition.
+                if row.get("paymentStatus") == "unpaid" and preflight_reason(
+                    order, tx, dict(row, paymentStatus="paid")
+                ) is None:
+                    attempt.state = "WAITING_BUYER_PAYMENT"
+                    db.commit()
+                    await notify_attempt(db, attempt, order,
+                        "Đã khớp tiền ngân hàng; đang chờ người mua bấm Đã thanh toán trên OKX. Hệ thống sẽ kiểm tra lại.")
+                    continue
                 reason = preflight_reason(order, tx, row)
                 if reason:
                     attempt.state = "REVIEW_REQUIRED"
@@ -197,6 +209,9 @@ async def process_releases(db, client):
                     "Không đọc được chi tiết lệnh: " + failure_reason(error))
                 continue
             # Persist uncertainty before POST. Crash/timeout cannot cause automatic resubmission.
+            diagnostic = db.get(OKXReleaseDiagnostic, attempt.order_id)
+            if diagnostic:
+                db.delete(diagnostic)
             attempt.state = "UNKNOWN"
             db.commit()
             try:
