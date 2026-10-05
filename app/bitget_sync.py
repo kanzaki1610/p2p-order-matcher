@@ -107,14 +107,21 @@ async def sync_bitget_p2p(db: Session, client: BitgetP2PClient | None = None) ->
 
 
 async def bitget_sync_loop() -> None:
+    from .notifications import notify_system_alert
     interval = max(15, settings.bitget_p2p_sync_seconds)
     await asyncio.sleep(5)
+    failed = False
     while True:
         try:
             with SessionLocal() as db:
                 await sync_bitget_p2p(db)
+            if failed:
+                await notify_system_alert("Bitget sync đã hoạt động trở lại")
+            failed = False
         except Exception:
             # The manual sync endpoint exposes a safe error. The background worker keeps retrying
             # without logging credentials or stopping the payment matcher.
-            pass
+            if not failed:
+                await notify_system_alert("Bitget sync lỗi; kiểm tra cấu hình và kết nối. Hệ thống sẽ thử lại.")
+            failed = True
         await asyncio.sleep(interval)
