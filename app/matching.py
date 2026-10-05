@@ -13,7 +13,7 @@ from .models import BankTransaction, P2POrder, PaymentMatch
 def normalize_text(value: str | None) -> str:
     if not value:
         return ""
-    value = unicodedata.normalize("NFD", value.upper())
+    value = unicodedata.normalize("NFD", value.upper().replace("Đ", "D"))
     value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
     return re.sub(r"[^A-Z0-9]", "", value)
 
@@ -29,6 +29,18 @@ def contains_five_digit_reference(description: str | None, reference: str | None
     if not description or not reference or not re.fullmatch(r"\d{5}", reference):
         return False
     return re.search(rf"(?<!\d){re.escape(reference)}(?!\d)", description) is not None
+
+
+def satisfies_payment_rules(order: P2POrder, tx: BankTransaction) -> bool:
+    description = normalize_text(tx.description)
+    name = normalize_text(order.counterparty_name)
+    return bool(
+        order.fiat_amount == tx.amount
+        and name
+        and (name == normalize_text(tx.sender_name) or name in description)
+        and tx.direction == "CREDIT"
+        and order.side == "SELL"
+    )
 
 
 def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
@@ -66,10 +78,19 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
         score += 5
         reasons.append("Đúng ngân hàng dự kiến +5")
 
-    return min(score, 100), reasons
+    if satisfies_payment_rules(order, tx):
+        reasons.append("Đạt quy tắc: số tiền và họ tên chính xác, tiền ghi có")
+        return 100, reasons
+    return min(score, 89), reasons
 
 
 def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder | None, int, list[str]]:
+    previous = db.scalar(select(PaymentMatch).where(
+        PaymentMatch.transaction_id == tx.id,
+        PaymentMatch.decision == "AUTO_MATCHED",
+    )) if tx.id is not None else None
+    if previous is not None:
+        return previous.decision, previous.order, previous.score, ["Giao dịch đã được dùng để đối chiếu lệnh; không sử dụng lại"]
     occurred = tx.occurred_at
     if occurred.tzinfo is not None:
         occurred = occurred.astimezone(timezone.utc).replace(tzinfo=None)
@@ -93,7 +114,13 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     best_score, reasons, best_order = ranked[0]
     ambiguous = len(ranked) > 1 and ranked[1][0] >= best_score - 5
 
-    if best_score >= settings.auto_match_threshold and not ambiguous:
+    eligible = [order for _, _, order in ranked if satisfies_payment_rules(order, tx)]
+    if len(eligible) == 1:
+        best_order = eligible[0]
+        best_score, reasons = evaluate(best_order, tx)
+    ambiguous = len(eligible) > 1 or (not eligible and ambiguous)
+
+    if eligible and not ambiguous and best_score >= settings.auto_match_threshold:
         decision = "AUTO_MATCHED"
         best_order.status = "PAYMENT_DETECTED"
         tx.status = decision
