@@ -2,6 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    multi_account_enabled: bool = False
+    database_schema: str = ""
     database_url: str = "sqlite:///./p2p_matcher.db"
     ingest_api_key: str = "change-this-to-a-long-random-key"
     sepay_webhook_secret: str = "change-this-to-a-different-long-random-key"
@@ -60,4 +62,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-settings = Settings()
+# Each mounted account is imported under its own package name. Environment and
+# dotenv values from the original account must never become another account's keys.
+settings = (Settings(_env_prefix="KAYHAP_", _env_file=None)
+            if __package__ == "app_kayhap" else Settings())
