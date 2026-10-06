@@ -3,9 +3,11 @@ services:
     name: p2p-order-matcher
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.shared:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      - key: MULTI_ACCOUNT_ENABLED
+        value: "false"
       - key: DATABASE_URL
         sync: false
       - key: INGEST_API_KEY
