@@ -93,6 +93,8 @@ async def process_mexc_releases(db, client):
             continue
         # A receipt is mandatory even for historical matches; syncing backfills it.
         attempt = db.get(MexcReleaseAttempt, order.id)
+        if attempt is not None and attempt.transaction_id != tx.id:
+            continue
         if attempt is None:
             if order.status != "PAYMENT_DETECTED" or not satisfies_payment_rules(order, tx):
                 continue
@@ -113,6 +115,15 @@ async def process_mexc_releases(db, client):
                 continue
             db.refresh(attempt)
             try:
+                matches = db.scalars(select(PaymentMatch).where(
+                    PaymentMatch.decision == "AUTO_MATCHED",
+                    (PaymentMatch.transaction_id == tx.id) | (PaymentMatch.order_id == order.id)
+                )).all()
+                if len(matches) != 1:
+                    attempt.state, attempt.reason = "REVIEW_REQUIRED", "Tiền hoặc lệnh có nhiều kết quả đối chiếu; cần kiểm tra thủ công."
+                    db.commit()
+                    await notify_attempt(db, attempt, order, tx)
+                    continue
                 row = await client.get_order_detail(order.order_code)
                 reason = preflight_reason(order, tx, receipt, row)
                 expected = {"BUY": "PAID", "SELL": "PROCESSING"}.get(receipt.api_side)

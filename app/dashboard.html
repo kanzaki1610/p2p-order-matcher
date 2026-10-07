@@ -136,8 +136,8 @@
       </section>
 
       <section class="tab" id="tab-advanced">
-        <div class="panel"><div class="section-title"><div><h2>Kết nối MEXC P2P</h2><p>Chỉ đọc đơn SELL USDT/VND để đối chiếu thanh toán SePay.</p></div></div>
-          <div class="notice">Khóa chỉ có quyền P2P Đọc thông tin tài khoản &amp; lệnh. Không bật Đặt lệnh, Nhà quảng cáo hoặc quyền rút tiền.</div>
+        <div class="panel"><div class="section-title"><div><h2>Kết nối MEXC P2P</h2><p>Đọc đơn SELL USDT/VND, đối chiếu SePay và mở khóa khi bật luồng tự động.</p></div></div>
+          <div class="notice">Đọc lệnh cần quyền P2P đọc. Mở khóa cần quyền P2P Đặt lệnh và Nhà quảng cáo; bật riêng bằng hai cờ trên Render.</div>
           <div class="grid three"><div class="status-card"><small>Base URL</small><b id="mexcBaseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret</small><b id="mexcCredentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Chu kỳ đọc đơn</small><b id="mexcSyncStatus" style="font-size:14px">—</b></div></div>
           <div class="actions"><button class="btn green" id="mexcSyncButton" onclick="syncMexc()">Kiểm tra và đọc lệnh MEXC</button></div>
         </div>
