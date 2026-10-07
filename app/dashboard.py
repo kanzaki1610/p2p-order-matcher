@@ -424,10 +424,10 @@ def dashboard_state(
             "base_url": settings.mexc_p2p_base_url,
             "key_configured": bool(settings.mexc_p2p_api_key),
             "secret_configured": bool(settings.mexc_p2p_api_secret),
-            "live_writes": False,
+            "live_writes": settings.mexc_p2p_live_writes and settings.mexc_auto_release_enabled,
             "sync_seconds": max(10, settings.mexc_p2p_sync_seconds),
             "incoming_side": settings.mexc_p2p_incoming_side.upper(),
-            "connector": "READ_ONLY" if settings.mexc_p2p_enabled else "DISABLED",
+            "connector": ("AUTO_RELEASE" if settings.mexc_p2p_live_writes and settings.mexc_auto_release_enabled else "READ_ONLY") if settings.mexc_p2p_enabled else "DISABLED",
         },
         "bridge": {
             "configured": bool(settings.okx_browser_bridge_secret),

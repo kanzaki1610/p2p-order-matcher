@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     mexc_p2p_incoming_side: str = "SELL"
     mexc_p2p_api_incoming_side: str = ""
     mexc_p2p_live_writes: bool = False
+    mexc_auto_release_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

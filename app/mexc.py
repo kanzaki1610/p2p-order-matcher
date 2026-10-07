@@ -91,7 +91,7 @@ class MexcP2PClient:
             hashlib.sha256,
         ).hexdigest()
 
-    async def _request_once(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
+    async def _request_once(self, path: str, *, params: dict[str, Any] | None = None, method: str = "GET") -> Any:
         if not self.configured:
             raise MexcAPIError("Chưa cấu hình đủ API Key và Secret Key của MEXC")
         signed_params = [(key, str(value)) for key, value in (params or {}).items() if value is not None]
@@ -106,7 +106,7 @@ class MexcP2PClient:
         request_path = f"{path}?{query}&signature={signature}"
         try:
             async def fetch(client):
-                return await client.get(request_path, headers={
+                return await client.request(method, request_path, headers={
                     'X-MEXC-APIKEY': self.credentials.api_key, 'Accept': 'application/json',
                 })
             if self._client is not None:
@@ -131,12 +131,22 @@ class MexcP2PClient:
         except (httpx.HTTPError, ValueError) as exc:
             raise MexcAPIError(f"Không thể kết nối MEXC: {type(exc).__name__}") from exc
 
+        if method == "POST" and (not isinstance(result, dict) or str(result.get("code")) != "0"):
+            raise MexcAPIError("MEXC chưa xác nhận tiếp nhận yêu cầu mở khóa")
         if isinstance(result, dict) and str(result.get("code", "0")) not in {"0", "200", "None"}:
             raise MexcAPIError(
                 f"MEXC {str(result.get('code', 'UNKNOWN'))[:50]}: "
                 f"{str(result.get('msg') or result.get('message') or 'API error')[:300]}"
             )
         return result.get("data") if isinstance(result, dict) and "data" in result else result
+
+    async def release_coin(self, order_code: str) -> None:
+        # Never retry a financial POST, including HTTP 429/5xx or timeouts.
+        # The coordinator persists UNKNOWN before calling this method.
+        if not (settings.mexc_auto_release_enabled and settings.mexc_p2p_live_writes):
+            raise MexcAPIError("MEXC auto release đang tắt")
+        await self._request_once("/api/v3/fiat/release_coin",
+            params={"advOrderNo": order_code}, method="POST")
 
     async def get_orders(
         self,

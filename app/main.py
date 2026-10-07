@@ -85,7 +85,7 @@ async def start_mexc_reader() -> None:
         and settings.mexc_p2p_api_key
         and settings.mexc_p2p_api_secret
     )
-    if configured and not settings.mexc_p2p_live_writes:
+    if configured:
         mexc_task = asyncio.create_task(mexc_sync_loop())
 
 

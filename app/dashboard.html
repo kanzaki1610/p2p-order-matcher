@@ -189,7 +189,7 @@ function render(){
   $('#bitgetSyncButton').disabled=!(bitget.enabled&&bitgetCredentials);
   const mexc=state.mexc||{};
   const mexcCredentials=mexc.key_configured&&mexc.secret_configured;
-  $('#mexcBadge').textContent=mexc.enabled&&mexcCredentials?'MEXC API: READ ONLY':'MEXC API chưa bật';
+  $('#mexcBadge').textContent=mexc.enabled&&mexcCredentials?`MEXC API: ${mexc.connector||'READ_ONLY'}`:'MEXC API chưa bật';
   $('#mexcBaseUrl').textContent=mexc.base_url||'https://api.mexc.com';
   $('#mexcCredentialsStatus').textContent=mexcCredentials?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
   $('#mexcSyncStatus').textContent=mexc.enabled?`Mỗi ${mexc.sync_seconds} giây · ${mexc.incoming_side}`:'MEXC_P2P_ENABLED=false';

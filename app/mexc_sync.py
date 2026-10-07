@@ -15,6 +15,7 @@ from .matching import match_transaction
 from .mexc import MexcAPIError, MexcP2PClient
 from .models import BankTransaction, OKXAuditLog, P2POrder, MexcNotification
 from .notifications import notify_match, notify_mexc_new_order, notify_system_alert
+from .mexc_release import MexcOrderReceipt, process_mexc_releases
 
 
 logger = logging.getLogger("uvicorn.error.mexc_sync")
@@ -159,7 +160,7 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
             expires_at=_milliseconds(detail.get("payTimeLimit")),
         )
         db.add(order)
-    else:
+    elif order.status == "WAITING_PAYMENT":
         order.side = str(detail.get("side") or order.side).upper()
         order.fiat_amount = _decimal(detail.get("amount"), str(order.fiat_amount))
         order.crypto_amount = _decimal(detail.get("tradableQuantity"), str(order.crypto_amount or 0))
@@ -178,8 +179,6 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             return await sync_mexc_orders(db, owned_client)
     if not settings.mexc_p2p_enabled:
         raise MexcAPIError("MEXC_P2P_ENABLED đang tắt")
-    if settings.mexc_p2p_live_writes:
-        raise MexcAPIError("Bản này chỉ hỗ trợ đọc; hãy đặt MEXC_P2P_LIVE_WRITES=false")
 
     client = client or MexcP2PClient()
     now = datetime.now(timezone.utc)
@@ -243,6 +242,14 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             continue
 
         # The API-side convention is configured independently of our accounting side.
+        from .okx_sync import OKXOrderReceipt
+        if db.get(OKXOrderReceipt, code) is not None:
+            continue
+        receipt = db.get(MexcOrderReceipt, code)
+        if receipt is None:
+            db.add(MexcOrderReceipt(order_code=code, api_side=str(detail.get("side"))))
+        elif receipt.api_side != str(detail.get("side")):
+            continue
         detail = {**detail, "side": settings.mexc_p2p_incoming_side.upper()}
         order, created = _upsert_order(db, detail)
         created_count += int(created)
@@ -337,6 +344,8 @@ async def mexc_sync_loop() -> None:
         try:
             with SessionLocal() as db:
                 result = await sync_mexc_orders(db)
+                async with MexcP2PClient() as release_client:
+                    await process_mexc_releases(db, release_client)
             if failed:
                 await notify_system_alert("MEXC sync đã hoạt động trở lại")
             failed = False
