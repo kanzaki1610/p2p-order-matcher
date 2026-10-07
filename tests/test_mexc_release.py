@@ -64,7 +64,7 @@ def test_success_query_post_confirm_done_once(setup):
 
 
 @pytest.mark.parametrize('field,value',[('amount','99999'),('tradableQuantity','5'),('complained',True),
-    ('blockUser',None),('coinName','BTC'),('fiatUnit','USD'),('side','BUY'),('state','CANCEL'),
+    ('blockUser',True),('coinName','BTC'),('fiatUnit','USD'),('side','BUY'),('state','CANCEL'),
     ('confirmPaymentInfo',{'bankName':'ACB'}),('userInfo',{'realName':'NGUYEN BA'})])
 def test_unsafe_detail_never_posts(setup,field,value):
     db,order,tx,row=setup;row[field]=value
@@ -179,3 +179,70 @@ def test_duplicate_matches_require_review(setup):
     db.commit()
     run(db,lambda request:pytest.fail('Ambiguous match called API'))
     assert db.get(MexcReleaseAttempt,order.id).state=='REVIEW_REQUIRED'
+
+
+@pytest.mark.parametrize('block',['null','missing'])
+def test_live_nullable_block_user_releases_with_no_appeal(setup,block):
+    db,order,tx,row=setup
+    if block=='null':row['blockUser']=None
+    else:row.pop('blockUser')
+    def handler(request):
+        if request.method=='POST':
+            row['state']='DONE';return httpx.Response(200,json={'code':0,'data':None})
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler)
+    assert order.status=='RELEASED'
+
+
+def test_legacy_preflight_block_is_rechecked_without_resetting_unknown(setup):
+    from app.mexc_release import LEGACY_BLOCK_REASON
+    db,order,tx,row=setup;row['blockUser']=None;posts=[]
+    db.add(MexcReleaseAttempt(order_id=order.id,transaction_id=tx.id,state='REVIEW_REQUIRED',reason=LEGACY_BLOCK_REASON))
+    db.commit()
+    def handler(request):
+        if request.method=='POST':
+            posts.append(request);row['state']='DONE';return httpx.Response(200,json={'code':0,'data':None})
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler);run(db,handler)
+    assert len(posts)==1 and order.status=='RELEASED'
+
+
+def test_done_legacy_order_is_reconciled_without_release_post(setup):
+    from app.mexc_release import LEGACY_BLOCK_REASON
+    db,order,tx,row=setup;row.update(state='DONE',blockUser=None)
+    db.add(MexcReleaseAttempt(order_id=order.id,transaction_id=tx.id,state='REVIEW_REQUIRED',reason=LEGACY_BLOCK_REASON))
+    db.commit()
+    def handler(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler)
+    assert order.status=='RELEASED'
+    assert 'không gửi' in db.get(MexcReleaseAttempt,order.id).reason
+
+
+@pytest.mark.parametrize('complained',[None,True,'false',0])
+def test_nullable_block_user_never_bypasses_appeal_check(setup,complained):
+    db,order,tx,row=setup;row.update(blockUser=None,complained=complained)
+    def handler(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler)
+    assert db.get(MexcReleaseAttempt,order.id).state=='REVIEW_REQUIRED'
+
+
+def test_manual_order_status_change_prevents_existing_attempt_post(setup):
+    db,order,tx,row=setup;order.status='CONFIRMED'
+    db.add(MexcReleaseAttempt(order_id=order.id,transaction_id=tx.id,state='WAITING_BUYER_PAYMENT'))
+    db.commit()
+    def handler(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler)
+    assert db.get(MexcReleaseAttempt,order.id).state=='REVIEW_REQUIRED'
+
+
+def test_review_for_other_reason_is_not_automatically_retried(setup):
+    db,order,tx,row=setup
+    db.add(MexcReleaseAttempt(order_id=order.id,transaction_id=tx.id,state='REVIEW_REQUIRED',reason='Wrong bank'))
+    db.commit()
+    run(db,lambda request:pytest.fail('Unrelated review was retried'))
