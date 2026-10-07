@@ -14,6 +14,8 @@ from .models import BankTransaction, P2POrder, PaymentMatch
 from .notifications import notify_event
 from .sepay import normalize_bank
 
+LEGACY_BLOCK_REASON = "Lệnh có tranh chấp, bị chặn hoặc thiếu trạng thái an toàn."
+
 
 class MexcOrderReceipt(Base):
     __tablename__ = "mexc_order_receipts"
@@ -41,13 +43,19 @@ def consistent(order, receipt, row):
 
 
 def preflight_reason(order, tx, receipt, row):
+    if order.status != "PAYMENT_DETECTED":
+        return "Trạng thái nội bộ của lệnh đã thay đổi; cần kiểm tra thủ công."
     if not satisfies_payment_rules(order, tx):
         return "Tiền ngân hàng không đáp ứng quy tắc đối chiếu."
     try:
         if not consistent(order, receipt, row):
             return "Chi tiết MEXC khác mã lệnh, tiền tệ, số tiền hoặc họ tên."
-        if row.get("complained") is not False or row.get("blockUser") is not False:
-            return "Lệnh có tranh chấp, bị chặn hoặc thiếu trạng thái an toàn."
+        if row.get("complained") is not False:
+            return "Lệnh có tranh chấp hoặc thiếu xác nhận complained=false."
+        # Live merchant detail omits blockUser (null) for unblocked users.
+        # This is a user-block indicator, not the order's appeal status.
+        if row.get("blockUser") is not None and row.get("blockUser") is not False:
+            return "MEXC báo người dùng bị chặn hoặc blockUser sai định dạng."
         payment = row.get("confirmPaymentInfo")
         bank = normalize_bank(payment.get("bankName")) if isinstance(payment, dict) else None
         if not bank or bank != normalize_bank(tx.bank):
@@ -105,10 +113,13 @@ async def process_mexc_releases(db, client):
             except IntegrityError:
                 db.rollback()
                 continue
-        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT"}:
+        retry_legacy_preflight = attempt.state == "REVIEW_REQUIRED" and attempt.reason == LEGACY_BLOCK_REASON
+        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT"} or retry_legacy_preflight:
             claimed = db.execute(update(MexcReleaseAttempt).where(
                 MexcReleaseAttempt.order_id == order.id,
-                MexcReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT"])
+                ((MexcReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT"])) |
+                 ((MexcReleaseAttempt.state == "REVIEW_REQUIRED") &
+                  (MexcReleaseAttempt.reason == LEGACY_BLOCK_REASON)))
             ).values(state="SUBMITTING"))
             db.commit()
             if claimed.rowcount != 1:
@@ -125,6 +136,14 @@ async def process_mexc_releases(db, client):
                     await notify_attempt(db, attempt, order, tx)
                     continue
                 row = await client.get_order_detail(order.order_code)
+                if satisfies_payment_rules(order, tx) and consistent(order, receipt, row) and row.get("state") == "DONE":
+                    # Completed manually/on exchange; do not issue a release POST.
+                    attempt.state = "RELEASED"
+                    attempt.reason = "Lệnh đã DONE trên MEXC; đồng bộ hoàn tất, không gửi yêu cầu mở khóa."
+                    order.status = "RELEASED"
+                    db.commit()
+                    await notify_attempt(db, attempt, order, tx)
+                    continue
                 reason = preflight_reason(order, tx, receipt, row)
                 expected = {"BUY": "PAID", "SELL": "PROCESSING"}.get(receipt.api_side)
                 if row.get("state") in {"NOT_PAID", "WAIT_PROCESS", "PAID"} and reason and preflight_reason(
