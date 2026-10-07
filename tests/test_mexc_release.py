@@ -171,3 +171,11 @@ def test_buy_api_side_requires_paid(setup):
         return httpx.Response(200,json={'code':0,'data':row})
     run(db,handler)
     assert order.status=='RELEASED'
+
+
+def test_duplicate_matches_require_review(setup):
+    db,order,tx,row=setup
+    db.add(PaymentMatch(order_id=order.id,transaction_id=tx.id,score=100,decision='AUTO_MATCHED',reasons='duplicate'))
+    db.commit()
+    run(db,lambda request:pytest.fail('Ambiguous match called API'))
+    assert db.get(MexcReleaseAttempt,order.id).state=='REVIEW_REQUIRED'
