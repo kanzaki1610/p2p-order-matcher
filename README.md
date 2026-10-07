@@ -1,3 +1,7 @@
+# MEXC auto release
+
+Luồng mở khóa MEXC sau đối chiếu SePay đã được bổ sung, mặc định tắt. Xem [MEXC-RELEASE.md](MEXC-RELEASE.md) để bật hai cờ và cấu hình quyền P2P. Các mô tả chỉ đọc bên dưới là hướng dẫn phiên bản cũ.
+
 # Discord notifications
 
 Xem [DISCORD-SETUP.md](DISCORD-SETUP.md) để cấu hình Discord, commands và Telegram fallback.

@@ -136,8 +136,8 @@
       </section>
 
       <section class="tab" id="tab-advanced">
-        <div class="panel"><div class="section-title"><div><h2>Kết nối MEXC P2P</h2><p>Chỉ đọc đơn SELL USDT/VND để đối chiếu thanh toán SePay.</p></div></div>
-          <div class="notice">Khóa chỉ có quyền P2P Đọc thông tin tài khoản &amp; lệnh. Không bật Đặt lệnh, Nhà quảng cáo hoặc quyền rút tiền.</div>
+        <div class="panel"><div class="section-title"><div><h2>Kết nối MEXC P2P</h2><p>Đọc đơn SELL USDT/VND, đối chiếu SePay và mở khóa khi bật luồng tự động.</p></div></div>
+          <div class="notice">Đọc lệnh cần quyền P2P đọc. Mở khóa cần quyền P2P Đặt lệnh và Nhà quảng cáo; bật riêng bằng hai cờ trên Render.</div>
           <div class="grid three"><div class="status-card"><small>Base URL</small><b id="mexcBaseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret</small><b id="mexcCredentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Chu kỳ đọc đơn</small><b id="mexcSyncStatus" style="font-size:14px">—</b></div></div>
           <div class="actions"><button class="btn green" id="mexcSyncButton" onclick="syncMexc()">Kiểm tra và đọc lệnh MEXC</button></div>
         </div>
@@ -151,7 +151,7 @@
           <div class="grid"><div class="status-card"><small>Base URL</small><b id="baseUrl" style="font-size:14px">—</b></div><div class="status-card"><small>API Key / Secret / Passphrase</small><b id="credentialsStatus" style="font-size:14px">—</b></div><div class="status-card"><small>Browser Bridge</small><b id="bridgeStatus" style="font-size:14px">—</b></div></div>
           <div class="actions"><button class="btn" disabled>Kết nối P2P — chưa có tài liệu merchant</button></div>
         </div>
-        <div class="panel"><div class="section-title"><div><h2>An toàn vận hành</h2></div></div><div class="grid three"><div class="status-card"><small>Release USDT</small><b style="color:#88f0ba">Thủ công</b></div><div class="status-card"><small>LIVE pricing</small><b style="color:#ffd28b">Đã khóa</b></div><div class="status-card"><small>API secret trong DB</small><b style="color:#88f0ba">Không lưu</b></div></div></div>
+        <div class="panel"><div class="section-title"><div><h2>An toàn vận hành</h2></div></div><div class="grid three"><div class="status-card"><small>MEXC release USDT</small><b id="mexcReleaseStatus" style="color:#88f0ba">Đang tắt</b></div><div class="status-card"><small>LIVE pricing</small><b style="color:#ffd28b">Đã khóa</b></div><div class="status-card"><small>API secret trong DB</small><b style="color:#88f0ba">Không lưu</b></div></div></div>
       </section>
 
       <section class="tab" id="tab-history"><div class="panel"><div class="section-title"><div><h2>Lịch sử hoạt động</h2><p>100 sự kiện cấu hình và mô phỏng gần nhất.</p></div><button class="btn" onclick="loadState()">Làm mới</button></div><div style="overflow:auto"><table class="history"><thead><tr><th>Hành động</th><th>Chi tiết</th><th>Thời gian</th></tr></thead><tbody id="historyBody"></tbody></table></div></div></section>
@@ -189,7 +189,8 @@ function render(){
   $('#bitgetSyncButton').disabled=!(bitget.enabled&&bitgetCredentials);
   const mexc=state.mexc||{};
   const mexcCredentials=mexc.key_configured&&mexc.secret_configured;
-  $('#mexcBadge').textContent=mexc.enabled&&mexcCredentials?'MEXC API: READ ONLY':'MEXC API chưa bật';
+  $('#mexcBadge').textContent=mexc.enabled&&mexcCredentials?`MEXC API: ${mexc.connector||'READ_ONLY'}`:'MEXC API chưa bật';
+  $('#mexcReleaseStatus').textContent=mexc.live_writes?'Tự động sau đối chiếu':'Đang tắt';
   $('#mexcBaseUrl').textContent=mexc.base_url||'https://api.mexc.com';
   $('#mexcCredentialsStatus').textContent=mexcCredentials?'Đã cấu hình đủ trên Render':'Chưa cấu hình đủ';
   $('#mexcSyncStatus').textContent=mexc.enabled?`Mỗi ${mexc.sync_seconds} giây · ${mexc.incoming_side}`:'MEXC_P2P_ENABLED=false';

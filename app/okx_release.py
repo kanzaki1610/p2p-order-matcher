@@ -165,6 +165,10 @@ async def process_releases(db, client):
         return
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
         order, tx = db.get(P2POrder, match.order_id), db.get(BankTransaction, match.transaction_id)
+        from .mexc_release import MexcOrderReceipt, MexcReleaseAttempt
+        if db.get(MexcOrderReceipt, order.order_code) is not None or db.scalar(
+            select(MexcReleaseAttempt).where(MexcReleaseAttempt.transaction_id == tx.id)):
+            continue
         if db.get(OKXOrderReceipt, order.order_code) is None:
             continue  # Only orders obtained from authenticated OKX API.
         attempt = db.get(OKXReleaseAttempt, order.id)
