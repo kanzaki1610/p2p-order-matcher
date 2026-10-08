@@ -15,6 +15,9 @@ from .notifications import notify_event
 from .sepay import normalize_bank
 
 LEGACY_BLOCK_REASON = "Lệnh có tranh chấp, bị chặn hoặc thiếu trạng thái an toàn."
+LEGACY_BANK_REASON = "Ngân hàng thanh toán trên MEXC chưa xác nhận hoặc khác tiền nhận."
+MISSING_BANK_REASON = "MEXC chưa trả ngân hàng thanh toán đã chọn."
+WRONG_BANK_REASON = "Ngân hàng thanh toán đã chọn trên MEXC khác tiền nhận."
 
 
 class MexcOrderReceipt(Base):
@@ -42,7 +45,7 @@ def consistent(order, receipt, row):
         and same_name((row.get("userInfo") or {}).get("realName"), order.counterparty_name))
 
 
-def preflight_reason(order, tx, receipt, row):
+def preflight_reason(order, tx, receipt, row, *, allow_missing_bank=False):
     if order.status != "PAYMENT_DETECTED":
         return "Trạng thái nội bộ của lệnh đã thay đổi; cần kiểm tra thủ công."
     if not satisfies_payment_rules(order, tx):
@@ -57,9 +60,12 @@ def preflight_reason(order, tx, receipt, row):
         if row.get("blockUser") is not None and row.get("blockUser") is not False:
             return "MEXC báo người dùng bị chặn hoặc blockUser sai định dạng."
         payment = row.get("confirmPaymentInfo")
-        bank = normalize_bank(payment.get("bankName")) if isinstance(payment, dict) else None
-        if not bank or bank != normalize_bank(tx.bank):
-            return "Ngân hàng thanh toán trên MEXC chưa xác nhận hoặc khác tiền nhận."
+        raw_bank = payment.get("bankName") if isinstance(payment, dict) else None
+        bank = normalize_bank(raw_bank) if isinstance(raw_bank, str) and raw_bank.strip() else None
+        if not bank and not allow_missing_bank:
+            return MISSING_BANK_REASON
+        if bank and bank != normalize_bank(tx.bank):
+            return WRONG_BANK_REASON
         # Official error 60029 documents the API-side state convention.
         expected = {"BUY": "PAID", "SELL": "PROCESSING"}.get(receipt.api_side)
         if row.get("state") != expected:
@@ -73,7 +79,8 @@ async def notify_attempt(db, attempt, order, tx):
     if attempt.state == attempt.notified_state or attempt.state == "READY":
         return
     event = {"RELEASED": "CONFIRMED", "SUBMITTED": "AUTO_MATCHED",
-        "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED"}.get(attempt.state, "REVIEW_REQUIRED")
+        "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED",
+        "WAITING_PAYMENT_INFO": "PAYMENT_DETECTED"}.get(attempt.state, "REVIEW_REQUIRED")
     now = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
     text = (f"MEXC P2P\nMã lệnh: {order.order_code}\nNgân hàng: {tx.bank}"
         f"\nSố tiền: {tx.amount:,.0f} VND\nNội dung: {tx.description or ''}"
@@ -113,13 +120,14 @@ async def process_mexc_releases(db, client):
             except IntegrityError:
                 db.rollback()
                 continue
-        retry_legacy_preflight = attempt.state == "REVIEW_REQUIRED" and attempt.reason == LEGACY_BLOCK_REASON
-        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT"} or retry_legacy_preflight:
+        legacy_reasons = [LEGACY_BLOCK_REASON, LEGACY_BANK_REASON]
+        retry_legacy_preflight = attempt.state == "REVIEW_REQUIRED" and attempt.reason in legacy_reasons
+        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT", "WAITING_PAYMENT_INFO"} or retry_legacy_preflight:
             claimed = db.execute(update(MexcReleaseAttempt).where(
                 MexcReleaseAttempt.order_id == order.id,
-                ((MexcReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT"])) |
+                ((MexcReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT", "WAITING_PAYMENT_INFO"])) |
                  ((MexcReleaseAttempt.state == "REVIEW_REQUIRED") &
-                  (MexcReleaseAttempt.reason == LEGACY_BLOCK_REASON)))
+                  (MexcReleaseAttempt.reason.in_(legacy_reasons))))
             ).values(state="SUBMITTING"))
             db.commit()
             if claimed.rowcount != 1:
@@ -146,6 +154,16 @@ async def process_mexc_releases(db, client):
                     continue
                 reason = preflight_reason(order, tx, receipt, row)
                 expected = {"BUY": "PAID", "SELL": "PROCESSING"}.get(receipt.api_side)
+                if (reason == MISSING_BANK_REASON
+                    and expected is not None
+                    and row.get("state") in {"NOT_PAID", "WAIT_PROCESS", "PAID", expected}
+                    and preflight_reason(order, tx, receipt, dict(row, state=expected),
+                        allow_missing_bank=True) is None):
+                    # Missing buyer selection is temporary; it never authorizes a POST.
+                    attempt.state, attempt.reason = "WAITING_PAYMENT_INFO", MISSING_BANK_REASON
+                    db.commit()
+                    await notify_attempt(db, attempt, order, tx)
+                    continue
                 if row.get("state") in {"NOT_PAID", "WAIT_PROCESS", "PAID"} and reason and preflight_reason(
                     order, tx, receipt, dict(row, state=expected)) is None:
                     attempt.state = "WAITING_BUYER_PAYMENT"
