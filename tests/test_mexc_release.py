@@ -246,3 +246,23 @@ def test_review_for_other_reason_is_not_automatically_retried(setup):
     db.add(MexcReleaseAttempt(order_id=order.id,transaction_id=tx.id,state='REVIEW_REQUIRED',reason='Wrong bank'))
     db.commit()
     run(db,lambda request:pytest.fail('Unrelated review was retried'))
+
+
+def test_documented_detail_order_id_supports_release_and_done_reconciliation(setup):
+    db, order, tx, row = setup
+    row.update(advNo=order.order_code, advOrderNo='a123456')
+    posts = []
+
+    def handler(request):
+        if request.method == 'POST':
+            posts.append(request)
+            assert request.url.params['advOrderNo'] == order.order_code
+            assert not request.content
+            row['state'] = 'DONE'
+            return httpx.Response(200, json={'code': 0, 'data': None})
+        return httpx.Response(200, json={'code': 0, 'data': row})
+
+    run(db, handler)
+    run(db, handler)
+    assert len(posts) == 1
+    assert order.status == 'RELEASED'
