@@ -180,4 +180,11 @@ class MexcP2PClient:
         )
         if not isinstance(data, dict):
             raise MexcAPIError("MEXC trả dữ liệu chi tiết lệnh không hợp lệ")
+        # The current P2P documentation names the order ID advNo and the
+        # advertisement ID advOrderNo. Some live responses use advOrderNo
+        # for the order instead. Normalize only an exact requested-ID match.
+        if str(data.get("advOrderNo") or "") != order_code:
+            if str(data.get("advNo") or "") != order_code:
+                raise MexcAPIError("MEXC trả chi tiết khác mã lệnh yêu cầu")
+            data = {**data, "advOrderNo": order_code}
         return data
