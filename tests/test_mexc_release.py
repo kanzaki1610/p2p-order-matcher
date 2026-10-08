@@ -266,3 +266,99 @@ def test_documented_detail_order_id_supports_release_and_done_reconciliation(set
     run(db, handler)
     assert len(posts) == 1
     assert order.status == 'RELEASED'
+
+
+@pytest.mark.parametrize('state', ['NOT_PAID', 'PAID'])
+@pytest.mark.parametrize('payment', [None, {}, {'bankName': ''}, {'bankName': ' '}])
+def test_missing_selected_bank_waits_then_rechecks_all_conditions(setup, state, payment):
+    db, order, tx, row = setup
+    db.get(MexcOrderReceipt, order.order_code).api_side = 'BUY'
+    db.commit()
+    row.update(side='BUY', state=state, confirmPaymentInfo=payment)
+    posts = []
+
+    def handler(request):
+        if request.method == 'POST':
+            posts.append(request)
+            row['state'] = 'DONE'
+            return httpx.Response(200, json={'code': 0, 'data': None})
+        return httpx.Response(200, json={'code': 0, 'data': row})
+
+    run(db, handler)
+    run(db, handler)
+    assert not posts
+    assert db.get(MexcReleaseAttempt, order.id).state == 'WAITING_PAYMENT_INFO'
+    row.update(state='PAID', confirmPaymentInfo={'bankName': 'MBBank'})
+    run(db, handler)
+    run(db, handler)
+    assert len(posts) == 1 and order.status == 'RELEASED'
+
+
+def test_legacy_bank_review_recovers_only_after_full_preflight(setup):
+    from app.mexc_release import LEGACY_BANK_REASON
+    db, order, tx, row = setup
+    db.add(MexcReleaseAttempt(order_id=order.id, transaction_id=tx.id,
+        state='REVIEW_REQUIRED', reason=LEGACY_BANK_REASON))
+    db.commit()
+
+    def handler(request):
+        if request.method == 'POST':
+            row['state'] = 'DONE'
+            return httpx.Response(200, json={'code': 0, 'data': None})
+        return httpx.Response(200, json={'code': 0, 'data': row})
+
+    run(db, handler)
+    assert order.status == 'RELEASED'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('amount', '1'), ('complained', True), ('blockUser', True),
+    ('confirmPaymentInfo', {'bankName': 'ACB'}), ('state', 'CANCEL'),
+])
+def test_legacy_bank_review_never_bypasses_invalid_preflight(setup, field, value):
+    from app.mexc_release import LEGACY_BANK_REASON
+    db, order, tx, row = setup
+    db.add(MexcReleaseAttempt(order_id=order.id, transaction_id=tx.id,
+        state='REVIEW_REQUIRED', reason=LEGACY_BANK_REASON))
+    db.commit()
+    row[field] = value
+
+    def handler(request):
+        assert request.method == 'GET'
+        return httpx.Response(200, json={'code': 0, 'data': row})
+
+    run(db, handler)
+    run(db, handler)
+    assert db.get(MexcReleaseAttempt, order.id).state == 'REVIEW_REQUIRED'
+
+
+def test_waiting_for_bank_still_rejects_bank_mismatch(setup):
+    db, order, tx, row = setup
+    db.add(MexcReleaseAttempt(order_id=order.id, transaction_id=tx.id,
+        state='WAITING_PAYMENT_INFO'))
+    db.commit()
+    row['confirmPaymentInfo'] = {'bankName': 'ACB'}
+
+    def handler(request):
+        assert request.method == 'GET'
+        return httpx.Response(200, json={'code': 0, 'data': row})
+
+    run(db, handler)
+    row['confirmPaymentInfo'] = {'bankName': 'MBBank'}
+    run(db, lambda request: pytest.fail('Confirmed bank mismatch was retried'))
+    assert db.get(MexcReleaseAttempt, order.id).state == 'REVIEW_REQUIRED'
+
+
+def test_unknown_bank_reason_does_not_retry_post(setup):
+    from app.mexc_release import LEGACY_BANK_REASON
+    db, order, tx, row = setup
+    db.add(MexcReleaseAttempt(order_id=order.id, transaction_id=tx.id,
+        state='UNKNOWN', reason=LEGACY_BANK_REASON))
+    db.commit()
+
+    def handler(request):
+        assert request.method == 'GET'
+        return httpx.Response(200, json={'code': 0, 'data': row})
+
+    run(db, handler)
+    assert db.get(MexcReleaseAttempt, order.id).state == 'UNKNOWN'
