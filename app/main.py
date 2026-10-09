@@ -1,7 +1,7 @@
 import asyncio
 import secrets
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -102,8 +102,8 @@ async def stop_mexc_reader() -> None:
 
 
 @app.get("/", include_in_schema=False)
-def root():
-    return RedirectResponse(url="/dashboard")
+def root(request: Request):
+    return RedirectResponse(url=request.scope.get("root_path", "") + "/dashboard")
 
 
 def verify_ingest_key(x_api_key: str = Header(default="")) -> None:
@@ -228,8 +228,8 @@ async def ingest_transaction(
     _: None = Depends(verify_ingest_key),
 ):
     bank = bank.upper()
-    if bank not in {"MB", "VIB", "VPBANK", "ACB"}:
-        raise HTTPException(status_code=422, detail="Chỉ hỗ trợ MB, VIB, VPBANK hoặc ACB")
+    if bank not in {"MB", "VIB", "VPBANK", "ACB", "OCB"}:
+        raise HTTPException(status_code=422, detail="Chỉ hỗ trợ MB, VIB, VPBANK, ACB hoặc OCB")
     tx = BankTransaction(bank=bank, **payload.model_dump())
     db.add(tx)
     try:

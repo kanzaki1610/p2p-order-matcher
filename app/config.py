@@ -2,6 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    multi_account_enabled: bool = False
+    database_schema: str = ""
     database_url: str = "sqlite:///./p2p_matcher.db"
     ingest_api_key: str = "change-this-to-a-long-random-key"
     sepay_webhook_secret: str = "change-this-to-a-different-long-random-key"
@@ -61,4 +63,5 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-settings = Settings()
+settings = (Settings(_env_prefix="KAYHAP_", _env_file=None)
+            if __package__ == "app_kayhap" else Settings())
