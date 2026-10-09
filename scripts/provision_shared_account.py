@@ -26,7 +26,11 @@ def provision(connection, password):
                 raise ValueError("Schema already exists; this script never overwrites existing data")
             cursor.execute(sql.SQL("CREATE ROLE p2p_kayhap LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT").format(sql.Literal(password)))
             cursor.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO p2p_kayhap").format(sql.Identifier(database)))
-            cursor.execute("CREATE SCHEMA kayhap AUTHORIZATION p2p_kayhap")
+            # Managed PostgreSQL can allow CREATEROLE without SET ROLE into the
+            # new role. Keep schema ownership with the provisioner and grant only
+            # the schema privileges needed to create the tenant's own tables.
+            cursor.execute("CREATE SCHEMA kayhap")
+            cursor.execute("GRANT USAGE, CREATE ON SCHEMA kayhap TO p2p_kayhap")
             cursor.execute("ALTER ROLE p2p_kayhap SET search_path TO kayhap")
             cursor.execute(sql.SQL("SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND has_table_privilege('p2p_kayhap', format('%I.%I', schemaname, tablename), 'SELECT,INSERT,UPDATE,DELETE'))"))
             if cursor.fetchone()[0]:
