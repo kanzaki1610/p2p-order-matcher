@@ -63,6 +63,23 @@ def test_success_query_post_confirm_done_once(setup):
     assert order.status=='RELEASED'
 
 
+def test_overpayment_releases_existing_order_once(setup):
+    db, order, tx, row = setup
+    tx.amount = Decimal("100001")
+    db.commit()
+    posts = []
+    def handler(request):
+        if request.method == 'POST':
+            posts.append(parse_qs(request.url.query.decode())['advOrderNo'])
+            row['state'] = 'DONE'
+            return httpx.Response(200, json={'code': 0, 'data': None})
+        return httpx.Response(200, json={'code': 0, 'data': row})
+    run(db, handler); run(db, handler)
+    assert posts == [['MEXC001']]
+    assert order.fiat_amount == Decimal('100000') and order.crypto_amount == Decimal('4')
+    assert order.status == 'RELEASED'
+
+
 @pytest.mark.parametrize('field,value',[('amount','99999'),('tradableQuantity','5'),('complained',True),
     ('blockUser',True),('coinName','BTC'),('fiatUnit','USD'),('side','BUY'),('state','CANCEL'),
     ('confirmPaymentInfo',{'bankName':'ACB'}),('userInfo',{'realName':'NGUYEN BA'})])

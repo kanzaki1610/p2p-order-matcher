@@ -31,7 +31,7 @@ def test_payment_notification_contains_only_requested_fields():
         "Nội dung: DUONG DUC HUY chuyen 32345\n"
         "Điểm khớp: 80/100\n"
         "Lý do:\n"
-        "Số tiền chính xác\n"
+        "Số tiền đủ (nhận ≥ tiền lệnh)\n"
         "Họ tên chính xác"
     )
     assert "Mã GD" not in message
@@ -56,5 +56,5 @@ def test_payment_notification_explicitly_marks_mismatches():
     )
 
     assert "Điểm khớp: 5/100" in message
-    assert "Số tiền KHÔNG KHỚP" in message
+    assert "Số tiền chưa đạt điều kiện" in message
     assert "Họ tên KHÔNG KHỚP" in message

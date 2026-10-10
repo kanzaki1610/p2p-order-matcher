@@ -60,6 +60,24 @@ def test_disabled_flag_makes_no_api_calls(setup, monkeypatch):
     assert db.get(OKXReleaseAttempt, order.id) is None
 
 
+def test_overpayment_releases_only_order_quantity_with_actual_received_fiat(setup):
+    db, order, row = setup
+    tx = db.get(BankTransaction, db.query(PaymentMatch).one().transaction_id)
+    tx.amount = Decimal("100001")
+    db.commit()
+    posts = []
+    def handler(request):
+        if request.method == "POST":
+            posts.append(json.loads(request.content))
+            row.update(orderStatus="completed", paymentStatus="confirmed")
+            return httpx.Response(200, json={"code": "0", "data": [{"orderId": order.order_code}]})
+        return httpx.Response(200, json={"code": "0", "data": [row]})
+    run(db, handler); run(db, handler)
+    assert posts == [{"orderId": order.order_code, "verificationType": "2", "amount": "100001"}]
+    assert order.fiat_amount == Decimal("100000") and order.crypto_amount == Decimal("4")
+    assert order.status == "RELEASED"
+
+
 def test_release_only_after_exchange_confirms_and_no_duplicate(setup):
     db, order, row = setup
     calls = []
