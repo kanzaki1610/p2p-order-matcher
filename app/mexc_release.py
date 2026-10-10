@@ -87,6 +87,7 @@ async def notify_attempt(db, attempt, order, tx):
     text = (f"MEXC P2P\nMã lệnh: {order.order_code}\nNgân hàng: {tx.bank}"
         f"\nMã GD ngân hàng: {tx.transaction_id}\nNgười mua: {order.counterparty_name or 'Thiếu họ tên'}"
         f"\nSố tiền: {tx.amount:,.0f} VND\nNội dung: {tx.description or ''}"
+        f"\nSố tiền lệnh: {order.fiat_amount:,.0f} VND\nTiền dư: {tx.amount - order.fiat_amount:,.0f} VND"
         f"\nTrạng thái mở khóa: {attempt.state}\nThời gian VN: {now:%d/%m/%Y %H:%M:%S}")
     if attempt.reason:
         text += "\nLý do: " + attempt.reason

@@ -63,7 +63,7 @@ def memo_contains_order_code(description: str | None, code: str | None) -> bool:
 
 def satisfies_payment_rules(order: P2POrder, tx: BankTransaction) -> bool:
     return bool(
-        order.fiat_amount == tx.amount
+        tx.amount >= order.fiat_amount
         and (memo_contains_order_code(tx.description, order.order_code)
              or same_name(order.counterparty_name, tx.sender_name)
              or memo_contains_name(tx.description, order.counterparty_name))
@@ -74,9 +74,13 @@ def satisfies_payment_rules(order: P2POrder, tx: BankTransaction) -> bool:
 
 def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
     score, reasons = 0, []
-    if order.fiat_amount == tx.amount:
+    if tx.amount >= order.fiat_amount:
         score += 50
-        reasons.append("Số tiền khớp chính xác +50")
+        if tx.amount == order.fiat_amount:
+            reasons.append("Số tiền khớp chính xác +50")
+        else:
+            reasons.append(f"Số tiền đủ: nhận {tx.amount:,.0f} VND ≥ lệnh {order.fiat_amount:,.0f} VND; "
+                           f"dư {tx.amount - order.fiat_amount:,.0f} VND +50")
 
     similarity = name_similarity(order.counterparty_name, tx.sender_name)
     if similarity >= 0.92:
@@ -107,7 +111,7 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
         reasons.append("Đúng ngân hàng dự kiến +5")
 
     if satisfies_payment_rules(order, tx):
-        reasons.append("Đạt quy tắc: số tiền chính xác và mã lệnh hoặc đủ họ tên (cho phép đảo thứ tự), tiền ghi có")
+        reasons.append("Đạt quy tắc: tiền nhận ≥ tiền lệnh và mã lệnh hoặc đủ họ tên (cho phép đảo thứ tự), tiền ghi có")
         return 100, reasons
     return min(score, 89), reasons
 
@@ -129,7 +133,7 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     candidates = db.scalars(
         select(P2POrder).where(
             P2POrder.status == "WAITING_PAYMENT",
-            P2POrder.fiat_amount == tx.amount,
+            P2POrder.fiat_amount <= tx.amount,
             P2POrder.created_at >= window_start,
             P2POrder.created_at <= window_end,
         )
@@ -139,7 +143,7 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         tx.status = "UNMATCHED"
         db.commit()
         return "UNMATCHED", None, 0, [
-            f"Không có đơn WAITING_PAYMENT cùng số tiền {tx.amount:,.0f} VND trong cửa sổ "
+            f"Không có đơn WAITING_PAYMENT có số tiền ≤ tiền nhận {tx.amount:,.0f} VND trong cửa sổ "
             f"{settings.match_window_minutes} phút trước / 15 phút sau giao dịch. "
             "Kiểm tra số tiền, thời gian, đồng bộ lệnh và lệnh đã được thanh toán trước đó."]
 
@@ -157,16 +161,19 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         conflicts = eligible or [item[2] for item in ranked if item[0] >= best_score - 5]
         same_buyer = all(same_name(conflicts[0].counterparty_name, item.counterparty_name)
                          for item in conflicts)
-        labels = "; ".join(f"{item.order_code} ({item.counterparty_name or 'thiếu họ tên'})"
+        labels = "; ".join(f"{item.order_code} ({item.counterparty_name or 'thiếu họ tên'}, {item.fiat_amount:,.0f} VND)"
                            for item in conflicts[:10])
+        amount_label = (f"cùng số tiền {conflicts[0].fiat_amount:,.0f} VND"
+                       if all(item.fiat_amount == conflicts[0].fiat_amount for item in conflicts)
+                       else f"có số tiền không vượt quá tiền nhận {tx.amount:,.0f} VND")
         reasons.append(
-            f"Không auto: có {len(conflicts)} lệnh chờ cùng số tiền {tx.amount:,.0f} VND"
+            f"Không auto: có {len(conflicts)} lệnh chờ {amount_label}"
             + (" của cùng một người mua" if same_buyer else " có kết quả đối chiếu tương đương")
             + f". Mã lệnh liên quan: {labels}. Giao dịch đang xét {tx.transaction_id} "
             f"chỉ ghi có {tx.amount:,.0f} VND một lần; chưa đủ căn cứ xác định tiền thuộc lệnh nào. "
             "Không dùng một giao dịch cho hai lệnh. Kiểm tra từng mã lệnh và lần chuyển tiền riêng.")
     elif not eligible:
-        reasons.append("Không auto: số tiền khớp nhưng chưa khớp đầy đủ mã lệnh hoặc họ tên người mua; "
+        reasons.append("Không auto: tiền nhận đủ nhưng chưa khớp đầy đủ mã lệnh hoặc họ tên người mua; "
                        "5 số cuối mã lệnh/tên gần giống không đủ điều kiện mở khóa.")
 
     if eligible and not ambiguous and best_score >= settings.auto_match_threshold:

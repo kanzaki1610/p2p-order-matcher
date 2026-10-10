@@ -37,6 +37,9 @@ async def notify_match(decision, order, tx, score, reasons):
         + f"\nNội dung đầy đủ: {tx.description or 'Không có dữ liệu'}"
         + "\nLý do đầy đủ: " + "; ".join(reasons)
     )
+    if order and order.fiat_amount is not None:
+        text += (f"\nSố tiền lệnh: {order.fiat_amount:,.0f} VND"
+                 f"\nChênh lệch tiền nhận - tiền lệnh: {tx.amount - order.fiat_amount:,.0f} VND")
     if decision in {"UNMATCHED", "REVIEW_REQUIRED"}:
         text += "\nXử lý: kiểm tra tiền thực nhận và từng lệnh trên sàn; chưa có căn cứ tự mở khóa."
     await notify_event(decision, text)

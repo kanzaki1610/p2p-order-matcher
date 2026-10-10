@@ -55,7 +55,7 @@ def format_payment_notification(tx: BankTransaction, score: int, reasons: list[s
     name_matches = False
     for reason in reasons:
         normalized = reason.casefold()
-        if "số tiền khớp chính xác" in normalized:
+        if "số tiền khớp chính xác" in normalized or "số tiền đủ:" in normalized:
             amount_matches = True
         if (
             ("tên người thanh toán" in normalized or "tên người chuyển" in normalized)
@@ -69,7 +69,7 @@ def format_payment_notification(tx: BankTransaction, score: int, reasons: list[s
         f"Nội dung: {content[:300]}",
         f"Điểm khớp: {score}/100",
         "Lý do:",
-        "Số tiền chính xác" if amount_matches else "Số tiền KHÔNG KHỚP",
+        "Số tiền đủ (nhận ≥ tiền lệnh)" if amount_matches else "Số tiền chưa đạt điều kiện",
         "Họ tên chính xác" if name_matches else "Họ tên KHÔNG KHỚP",
     ]
     return "\n".join(lines)

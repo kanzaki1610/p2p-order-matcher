@@ -152,7 +152,8 @@ async def notify_attempt(db, attempt, order, reason=None):
     text += f"\nNgười mua: {order.counterparty_name or 'Thiếu họ tên'}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}"
     if tx:
         text += (f"\nMã GD ngân hàng: {tx.transaction_id}\nNgân hàng: {tx.bank}"
-                 f"\nSố tiền: {tx.amount:,.0f} VND\nNội dung: {tx.description or 'Không có'}")
+                 f"\nSố tiền: {tx.amount:,.0f} VND\nSố tiền lệnh: {order.fiat_amount:,.0f} VND"
+                 f"\nTiền dư: {tx.amount - order.fiat_amount:,.0f} VND\nNội dung: {tx.description or 'Không có'}")
     if reason:
         text += "\nLý do: " + reason
     if attempt.state == "WAITING_BUYER_PAYMENT":

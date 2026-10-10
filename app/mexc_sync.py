@@ -285,7 +285,7 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
             unmatched_transactions = db.scalars(
                 select(BankTransaction).where(
                     BankTransaction.status == "UNMATCHED",
-                    BankTransaction.amount == order.fiat_amount,
+                    BankTransaction.amount >= order.fiat_amount,
                     BankTransaction.occurred_at >= start,
                     BankTransaction.occurred_at <= now + timedelta(minutes=15),
                 )
