@@ -372,7 +372,9 @@ async def mexc_sync_loop() -> None:
             # Never log chained HTTP exceptions: they may include signed URLs.
             logger.error("MEXC sync failed | error=%s", type(exc).__name__)
             if not failed:
-                await notify_system_alert("MEXC sync lỗi; hệ thống sẽ thử lại. Kiểm tra kết nối và cấu hình.")
+                from .diagnostics import error_detail
+                await notify_system_alert("MEXC đồng bộ/đối chiếu lỗi: " + error_detail(exc)
+                    + " Hệ thống sẽ kiểm tra lại; kiểm tra lệnh chưa được đồng bộ trên sàn.")
             failed = True
 
         await asyncio.sleep(interval)

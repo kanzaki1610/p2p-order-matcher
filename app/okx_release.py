@@ -19,6 +19,8 @@ from .matching import normalize_text, same_name, satisfies_payment_rules
 from .models import BankTransaction, P2POrder, PaymentMatch
 from .notifications import notify_event
 from .okx_sync import OKXOrderReceipt
+from .diagnostics import safe_status
+from .telegram_commands import format_vietnam_time
 
 
 class OKXReleaseAttempt(Base):
@@ -125,9 +127,9 @@ def preflight_reason(order, tx, row):
     except (ValueError, TypeError, ArithmeticError, AttributeError):
         return "Chi tiết OKX thiếu hoặc sai định dạng dữ liệu bắt buộc."
     if row.get("orderStatus") != "new":
-        return "Lệnh OKX không còn ở trạng thái new."
+        return f"Lệnh OKX không còn ở trạng thái new: orderStatus={safe_status(row.get('orderStatus'))}."
     if row.get("paymentStatus") not in {"paid", "unreceived"}:
-        return "OKX chưa ghi nhận trạng thái paid/unreceived."
+        return f"OKX chưa ghi nhận trạng thái paid/unreceived: paymentStatus={safe_status(row.get('paymentStatus'))}."
     if row.get("isFrozen") is not False:
         return "Lệnh bị đóng băng hoặc API chưa xác nhận isFrozen=false."
     if str(row.get("disputeStatus")) != "0":
@@ -146,6 +148,11 @@ async def notify_attempt(db, attempt, order, reason=None):
     event = {"RELEASED": "CONFIRMED", "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED",
         "SUBMITTED": "AUTO_MATCHED"}.get(attempt.state, "REVIEW_REQUIRED")
     text = f"OKX P2P\nMã lệnh: {order.order_code}\nTrạng thái mở khóa: {attempt.state}"
+    tx = db.get(BankTransaction, attempt.transaction_id)
+    text += f"\nNgười mua: {order.counterparty_name or 'Thiếu họ tên'}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}"
+    if tx:
+        text += (f"\nMã GD ngân hàng: {tx.transaction_id}\nNgân hàng: {tx.bank}"
+                 f"\nSố tiền: {tx.amount:,.0f} VND\nNội dung: {tx.description or 'Không có'}")
     if reason:
         text += "\nLý do: " + reason
     if attempt.state == "WAITING_BUYER_PAYMENT":
@@ -238,6 +245,9 @@ async def process_releases(db, client):
                     attempt.state = "RELEASED"
                     order.status = "RELEASED"
                     db.commit()
-            except Exception:
-                pass
+            except Exception as error:
+                diagnostic = db.get(OKXReleaseDiagnostic, attempt.order_id)
+                prior = diagnostic.reason if diagnostic else "Chưa xác định kết quả mở khóa."
+                save_diagnostic(db, attempt, (prior[:250] + " Kiểm tra trạng thái sau yêu cầu thất bại: "
+                    + failure_reason(error))[:500])
         await notify_attempt(db, attempt, order)

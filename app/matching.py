@@ -118,7 +118,9 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         PaymentMatch.decision == "AUTO_MATCHED",
     )) if tx.id is not None else None
     if previous is not None:
-        return previous.decision, previous.order, previous.score, ["Giao dịch đã được dùng để đối chiếu lệnh; không sử dụng lại"]
+        return previous.decision, previous.order, previous.score, [
+            f"Giao dịch {tx.transaction_id} đã dùng cho lệnh {previous.order.order_code}; "
+            "không được dùng một lần chuyển tiền để mở khóa thêm lệnh khác."]
     occurred = tx.occurred_at
     if occurred.tzinfo is not None:
         occurred = occurred.astimezone(timezone.utc).replace(tzinfo=None)
@@ -136,7 +138,10 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     if not candidates:
         tx.status = "UNMATCHED"
         db.commit()
-        return "UNMATCHED", None, 0, ["Không có đơn chờ nào cùng số tiền trong cửa sổ thời gian"]
+        return "UNMATCHED", None, 0, [
+            f"Không có đơn WAITING_PAYMENT cùng số tiền {tx.amount:,.0f} VND trong cửa sổ "
+            f"{settings.match_window_minutes} phút trước / 15 phút sau giao dịch. "
+            "Kiểm tra số tiền, thời gian, đồng bộ lệnh và lệnh đã được thanh toán trước đó."]
 
     ranked = sorted(((*evaluate(order, tx), order) for order in candidates), key=lambda x: x[0], reverse=True)
     best_score, reasons, best_order = ranked[0]
@@ -148,6 +153,22 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         best_score, reasons = evaluate(best_order, tx)
     ambiguous = len(eligible) > 1 or (not eligible and ambiguous)
 
+    if ambiguous:
+        conflicts = eligible or [item[2] for item in ranked if item[0] >= best_score - 5]
+        same_buyer = all(same_name(conflicts[0].counterparty_name, item.counterparty_name)
+                         for item in conflicts)
+        labels = "; ".join(f"{item.order_code} ({item.counterparty_name or 'thiếu họ tên'})"
+                           for item in conflicts[:10])
+        reasons.append(
+            f"Không auto: có {len(conflicts)} lệnh chờ cùng số tiền {tx.amount:,.0f} VND"
+            + (" của cùng một người mua" if same_buyer else " có kết quả đối chiếu tương đương")
+            + f". Mã lệnh liên quan: {labels}. Giao dịch đang xét {tx.transaction_id} "
+            f"chỉ ghi có {tx.amount:,.0f} VND một lần; chưa đủ căn cứ xác định tiền thuộc lệnh nào. "
+            "Không dùng một giao dịch cho hai lệnh. Kiểm tra từng mã lệnh và lần chuyển tiền riêng.")
+    elif not eligible:
+        reasons.append("Không auto: số tiền khớp nhưng chưa khớp đầy đủ mã lệnh hoặc họ tên người mua; "
+                       "5 số cuối mã lệnh/tên gần giống không đủ điều kiện mở khóa.")
+
     if eligible and not ambiguous and best_score >= settings.auto_match_threshold:
         decision = "AUTO_MATCHED"
         best_order.status = "PAYMENT_DETECTED"
@@ -157,6 +178,9 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         tx.status = decision
         if ambiguous:
             reasons.append("Có nhiều đơn có điểm gần bằng nhau; bắt buộc kiểm tra thủ công")
+        elif eligible:
+            reasons.append(f"Không auto: điểm {best_score}/100 thấp hơn ngưỡng auto "
+                           f"{settings.auto_match_threshold}; kiểm tra cấu hình ngưỡng.")
     else:
         decision = "UNMATCHED"
         tx.status = decision
