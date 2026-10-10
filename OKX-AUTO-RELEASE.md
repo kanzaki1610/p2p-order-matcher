@@ -4,7 +4,7 @@ This code is based on deployed commit 39cff663e53844b9b7bb10d13ac0cd52a5e4cc83. 
 
 Default: OKX_AUTO_RELEASE_ENABLED=false. The release coordinator returns before making any request when this flag is false. The production service has not been configured to enable real release.
 
-Matching policy: exact fiat amount plus exact normalized sender name, or full normalized buyer name in the transfer memo; CREDIT only and SELL only. Receiving bank is optional. Multiple matching orders require review. Credits received before order import are reconciled on polling.
+Matching policy: received fiat amount greater than or equal to the order amount, plus the full order code or exact normalized buyer name (including reordered name tokens); CREDIT only and SELL only. Overpayments have no upper tolerance cap. Underpayments fail. Multiple eligible orders require review, including differently priced orders covered by one credit. A credit is never reused for another order. Notifications show order amount, received amount and excess. This policy applies to both accounts and both OKX and MEXC. Credits received before order import are reconciled on polling.
 
 Release preflight: authenticated OKX provenance, exact order id, owned sell order, USDT/VND, matching fiat/crypto amounts and real name, new order, paid/unreceived, not frozen and no dispute. Missing fields fail closed.
 
