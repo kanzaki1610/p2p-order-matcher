@@ -13,6 +13,7 @@ from .matching import same_name, satisfies_payment_rules
 from .models import BankTransaction, P2POrder, PaymentMatch
 from .notifications import notify_event
 from .sepay import normalize_bank
+from .diagnostics import error_detail, safe_status
 
 LEGACY_BLOCK_REASON = "Lệnh có tranh chấp, bị chặn hoặc thiếu trạng thái an toàn."
 LEGACY_BANK_REASON = "Ngân hàng thanh toán trên MEXC chưa xác nhận hoặc khác tiền nhận."
@@ -69,7 +70,8 @@ def preflight_reason(order, tx, receipt, row, *, allow_missing_bank=False):
         # Official error 60029 documents the API-side state convention.
         expected = {"BUY": "PAID", "SELL": "PROCESSING"}.get(receipt.api_side)
         if row.get("state") != expected:
-            return "MEXC chưa ở trạng thái cho phép mở khóa."
+            return (f"MEXC chưa ở trạng thái cho phép mở khóa: state={safe_status(row.get('state'))}; "
+                    f"cần {expected}. Kiểm tra người mua đã bấm Đã thanh toán và trạng thái lệnh trên sàn.")
     except (ValueError, TypeError, ArithmeticError, AttributeError):
         return "Chi tiết MEXC thiếu hoặc sai dữ liệu bắt buộc."
     return None
@@ -83,6 +85,7 @@ async def notify_attempt(db, attempt, order, tx):
         "WAITING_PAYMENT_INFO": "PAYMENT_DETECTED"}.get(attempt.state, "REVIEW_REQUIRED")
     now = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
     text = (f"MEXC P2P\nMã lệnh: {order.order_code}\nNgân hàng: {tx.bank}"
+        f"\nMã GD ngân hàng: {tx.transaction_id}\nNgười mua: {order.counterparty_name or 'Thiếu họ tên'}"
         f"\nSố tiền: {tx.amount:,.0f} VND\nNội dung: {tx.description or ''}"
         f"\nTrạng thái mở khóa: {attempt.state}\nThời gian VN: {now:%d/%m/%Y %H:%M:%S}")
     if attempt.reason:
@@ -167,7 +170,9 @@ async def process_mexc_releases(db, client):
                 if row.get("state") in {"NOT_PAID", "WAIT_PROCESS", "PAID"} and reason and preflight_reason(
                     order, tx, receipt, dict(row, state=expected)) is None:
                     attempt.state = "WAITING_BUYER_PAYMENT"
-                    attempt.reason = "Đã khớp tiền; chờ MEXC ghi nhận trạng thái thanh toán cho phép mở khóa."
+                    attempt.reason = ("Đã khớp tiền; chờ MEXC ghi nhận trạng thái thanh toán cho phép mở khóa. "
+                        f"Hiện tại state={safe_status(row.get('state'))}; cần {expected}. "
+                        "Chưa gửi yêu cầu mở khóa; kiểm tra người mua đã bấm Đã thanh toán.")
                     db.commit()
                     await notify_attempt(db, attempt, order, tx)
                     continue
@@ -176,8 +181,9 @@ async def process_mexc_releases(db, client):
                     db.commit()
                     await notify_attempt(db, attempt, order, tx)
                     continue
-            except Exception:
-                attempt.state, attempt.reason = "REVIEW_REQUIRED", "Không đọc được chi tiết MEXC trước mở khóa."
+            except Exception as error:
+                attempt.state, attempt.reason = "REVIEW_REQUIRED", ("Không đọc được chi tiết MEXC trước mở khóa. "
+                    + error_detail(error))
                 db.commit()
                 await notify_attempt(db, attempt, order, tx)
                 continue
@@ -187,9 +193,10 @@ async def process_mexc_releases(db, client):
                 await client.release_coin(order.order_code)
                 attempt.state, attempt.reason = "SUBMITTED", "MEXC tiếp nhận; chờ xác nhận DONE."
                 db.commit()
-            except Exception:
+            except Exception as error:
                 # Never expose signed URLs, credentials or untrusted API messages.
-                pass
+                attempt.reason = "Yêu cầu mở khóa MEXC chưa được xác nhận: " + error_detail(error)
+                db.commit()
         if attempt.state in {"SUBMITTING", "SUBMITTED", "UNKNOWN"}:
             try:
                 row = await client.get_order_detail(order.order_code)
@@ -197,6 +204,8 @@ async def process_mexc_releases(db, client):
                     attempt.state, attempt.reason = "RELEASED", None
                     order.status = "RELEASED"
                     db.commit()
-            except Exception:
-                pass
+            except Exception as error:
+                attempt.reason = ((attempt.reason or "Chưa xác định kết quả mở khóa.")[:250]
+                    + " Kiểm tra trạng thái sau yêu cầu thất bại: " + error_detail(error))[:500]
+                db.commit()
         await notify_attempt(db, attempt, order, tx)

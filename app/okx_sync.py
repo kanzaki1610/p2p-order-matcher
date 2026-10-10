@@ -146,6 +146,8 @@ async def okx_sync_loop():
             except Exception as exc:
                 logger.error("OKX polling failed: %s", type(exc).__name__)
                 if not failed:
-                    await notify_system_alert("Không đọc được lệnh OKX. Kiểm tra khóa API và kết nối dịch vụ.")
+                    from .diagnostics import error_detail
+                    await notify_system_alert("OKX đồng bộ/đối chiếu lỗi: " + error_detail(exc)
+                        + " Kiểm tra khóa API và lệnh chưa được đồng bộ trên sàn.")
                 failed = True
             await asyncio.sleep(max(10, settings.okx_p2p_sync_seconds))

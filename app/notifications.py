@@ -37,6 +37,8 @@ async def notify_match(decision, order, tx, score, reasons):
         + f"\nNội dung đầy đủ: {tx.description or 'Không có dữ liệu'}"
         + "\nLý do đầy đủ: " + "; ".join(reasons)
     )
+    if decision in {"UNMATCHED", "REVIEW_REQUIRED"}:
+        text += "\nXử lý: kiểm tra tiền thực nhận và từng lệnh trên sàn; chưa có căn cứ tự mở khóa."
     await notify_event(decision, text)
     if decision == "AUTO_MATCHED" and order and order.status == "PAYMENT_DETECTED":
         await notify_event("PAYMENT_DETECTED", text.replace("Trạng thái: AUTO_MATCHED", "Trạng thái: PAYMENT_DETECTED", 1))
