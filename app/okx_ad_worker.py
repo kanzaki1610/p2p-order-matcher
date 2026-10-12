@@ -1,0 +1,229 @@
+"""Original-account ad repricing, disabled until the user activates its flag."""
+import asyncio
+import hashlib
+import logging
+import re
+from datetime import datetime, timezone
+from decimal import Decimal
+
+import httpx
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Mapped, mapped_column
+
+from .config import settings
+from .database import Base, SessionLocal
+from .diagnostics import error_detail
+from .discord_notifications import send_discord_message, valid_webhook
+from .models import OKXSlot, OKXAuditLog
+from .okx_ads import read_ad, number
+from .okx_cost import read_last_buy_cost
+from .okx_rank import read_rank_plan
+from .okx_release import request, failure_reason
+from .telegram_commands import format_vietnam_time
+
+logger = logging.getLogger("uvicorn.error.okx_ad_pricing")
+
+
+class OKXAdPriceAttempt(Base):
+    __tablename__ = "okx_ad_price_attempts"
+    slot_id: Mapped[int] = mapped_column(ForeignKey("okx_slots.id"), primary_key=True)
+    state: Mapped[str] = mapped_column(String(30), default="IDLE")
+    action: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    old_ad_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    result_ad_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    hidden: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    paused_by_floor: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    notified_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+def safe_failure(error):
+    # Do not expose arbitrary exception text, signed URLs or API response messages.
+    from .okx_release import OKXRequestError
+    return failure_reason(error) if isinstance(error, OKXRequestError) else error_detail(error)
+
+
+async def notice(db, attempt, slot, kind, reason, plan=None):
+    key = hashlib.sha256((kind + reason).encode()).hexdigest()
+    if attempt.notified_key == key:
+        return
+    text = (f"OKX · VNTrader · cảnh báo giá {kind}\nMã quảng cáo: {slot.adv_id}\n"
+            f"Chiều: {slot.side}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\nLý do: {reason}")
+    if plan:
+        text += f"\nGiá vị trí 10: {plan.get('proposed_price')}đ/USDT"
+        if plan.get("cost_source"):
+            text += f"\nLệnh mua giá vốn: {plan['cost_source']['order_id']}"
+        if plan.get("minimum_sell_price"):
+            text += f"\nGiá vốn: {plan['cost_basis']}đ · giá bán tối thiểu: {plan['minimum_sell_price']}đ"
+    if await send_discord_message("PRICING_ALERT", text):
+        attempt.notified_key = key
+        db.commit()
+
+
+async def confirm(db, client, attempt, slot, plan=None):
+    db.refresh(slot)
+    if slot.adv_id != attempt.old_ad_id:
+        await notice(db, attempt, slot, "REVIEW_REQUIRED", "Slot đã được đổi quảng cáo trong lúc chờ kết quả; không ghi đè cấu hình mới.")
+        return False
+    if not attempt.result_ad_id:
+        await notice(db, attempt, slot, "UNKNOWN", "Chưa xác định kết quả sửa/ẩn quảng cáo. Kiểm tra OKX; không tự gửi lại yêu cầu.")
+        return False
+    row = await read_ad(client, attempt.result_ad_id)
+    collision = db.scalar(select(OKXSlot.id).where(OKXSlot.id != slot.id,
+        OKXSlot.adv_id == attempt.result_ad_id, OKXSlot.auto_enabled.is_(True)))
+    if collision is not None:
+        await notice(db, attempt, slot, "REVIEW_REQUIRED", "ID quảng cáo mới đang gán cho slot khác; chưa cập nhật slot.")
+        return False
+    if (row.get("side") != slot.side.lower() or row.get("type") != "limit" or row.get("status") != "new"
+            or row.get("isHidden") is not attempt.hidden or number(row.get("unitPrice")) != attempt.price):
+        await notice(db, attempt, slot, "REVIEW_REQUIRED", "Quảng cáo sau yêu cầu chưa khớp giá, chiều hoặc trạng thái dự kiến; chỉ kiểm tra lại, không gửi lại.")
+        return False
+    was_paused = attempt.paused_by_floor
+    slot.adv_id = attempt.result_ad_id
+    slot.current_price = attempt.price
+    attempt.state = "IDLE"
+    attempt.reason = None
+    if attempt.action == "HIDE_AD":
+        attempt.paused_by_floor = True
+    elif was_paused:
+        attempt.paused_by_floor = False
+    db.add(OKXAuditLog(action="OKX_AD_PRICE_CONFIRMED", actor="okx-ad-pricer",
+        detail=f"{slot.side} {attempt.old_ad_id} -> {slot.adv_id}; action={attempt.action}; price={attempt.price}; hidden={attempt.hidden}"))
+    db.commit()
+    if attempt.action == "HIDE_AD":
+        await notice(db, attempt, slot, "HIDDEN", "Đã xác minh quảng cáo tạm ẩn vì giá bán vị trí 10 dưới giá vốn +10đ.", plan)
+    elif was_paused:
+        await notice(db, attempt, slot, "RESUMED", "Đã xác minh giá mới đạt giá vốn +10đ và quảng cáo do bot tạm ẩn đã hiển thị lại.", plan)
+    return True
+
+
+async def process_ad_pricing(db, client):
+    if not settings.okx_ad_pricing_enabled or settings.database_schema == "kayhap":
+        return
+    try:
+        if not valid_webhook(settings.discord_webhook_pricing_alerts):
+            logger.error("Ad pricing blocked: dedicated price-alert webhook missing/invalid")
+            return
+    except ValueError:
+        return
+    slots = db.scalars(select(OKXSlot).where(OKXSlot.auto_enabled.is_(True))).all()
+    used_ids = {slot.adv_id for slot in slots if slot.adv_id}
+    duplicate_ids = {code for code in used_ids if sum(slot.adv_id == code for slot in slots) > 1}
+    cost = None
+    cost_error = None
+    for slot in slots:
+        attempt = db.get(OKXAdPriceAttempt, slot.id)
+        if attempt is None:
+            attempt = OKXAdPriceAttempt(slot_id=slot.id)
+            db.add(attempt)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                attempt = db.get(OKXAdPriceAttempt, slot.id)
+        plan = None
+        try:
+            if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"}:
+                await confirm(db, client, attempt, slot)
+                continue
+            if not re.fullmatch(r"[0-9]{1,30}", slot.adv_id or "") or slot.adv_id in duplicate_ids:
+                await notice(db, attempt, slot, "BLOCKED", "ID quảng cáo thiếu/sai hoặc được gán cho nhiều slot; chưa chỉnh giá.")
+                continue
+            row = await read_ad(client, slot.adv_id)
+            if (row.get("side") != slot.side.lower() or row.get("type") != "limit"
+                    or row.get("status") != "new" or type(row.get("isHidden")) is not bool):
+                await notice(db, attempt, slot, "BLOCKED", "Quảng cáo sai chiều, không còn hoạt động, không phải giá cố định hoặc thiếu trạng thái hiển thị.")
+                continue
+            if slot.side == "SELL":
+                if cost is None and cost_error is None:
+                    try:
+                        cost = await read_last_buy_cost(client)
+                    except Exception as error:
+                        cost_error = safe_failure(error)
+                if cost_error:
+                    await notice(db, attempt, slot, "COST_UNVERIFIED", "Không xác minh được lệnh mua hoàn tất gần nhất: " + cost_error)
+                    continue
+            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None)
+            if slot.side == "SELL":
+                plan["cost_source"] = cost
+            if plan["action"] == "BLOCKED":
+                await notice(db, attempt, slot, "BLOCKED", plan["reason"], plan)
+                continue
+            current = number(row.get("unitPrice"))
+            hidden = row["isHidden"]
+            if plan["action"] == "HIDE_AD" and hidden:
+                await notice(db, attempt, slot, "ALREADY_HIDDEN", "Quảng cáo đang ẩn và giá vị trí 10 chưa đạt giá vốn +10đ; giữ ẩn.", plan)
+                continue
+            proposed = Decimal(plan["proposed_price"])
+            resume = attempt.paused_by_floor and plan["action"] == "UPDATE_PRICE"
+            if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume:
+                continue
+            now = datetime.now(timezone.utc)
+            last = attempt.last_action_at
+            last_utc = (last.astimezone(timezone.utc) if last.tzinfo else last.replace(tzinfo=timezone.utc)) if last else None
+            if last_utc and (now - last_utc).total_seconds() < max(60, settings.okx_ad_pricing_seconds):
+                continue
+            is_hide = plan["action"] == "HIDE_AD"
+            wanted_price = current if is_hide else proposed
+            wanted_hidden = True if is_hide else (False if resume else hidden)
+            claim = db.execute(update(OKXAdPriceAttempt).where(
+                OKXAdPriceAttempt.slot_id == slot.id, OKXAdPriceAttempt.state == "IDLE").values(
+                    state="SUBMITTING", old_ad_id=slot.adv_id, result_ad_id=None, action=plan["action"],
+                    price=wanted_price, hidden=wanted_hidden, last_action_at=now, reason=None))
+            db.commit()
+            if claim.rowcount != 1:
+                continue
+            db.refresh(attempt)
+            db.refresh(slot)
+            if not slot.auto_enabled or slot.adv_id != attempt.old_ad_id:
+                attempt.state = "IDLE"
+                db.commit()
+                await notice(db, attempt, slot, "BLOCKED", "Cấu hình slot đã thay đổi trước khi gửi; chưa sửa quảng cáo.")
+                continue
+            attempt.state = "UNKNOWN"
+            db.commit()  # A crash/timeout never authorizes automatic resubmission.
+            if is_hide:
+                result = await request(client, "POST", "/api/v5/p2p/ad/update-active-status", {"adId": slot.adv_id, "status": "hidden"})
+                result_id = str(result.get("adId") or "")
+                if result_id != slot.adv_id:
+                    raise ValueError("Sai mã quảng cáo sau yêu cầu ẩn")
+            else:
+                body = {"adId": slot.adv_id, "unitPrice": str(proposed)}
+                if resume:
+                    body["online"] = "true"
+                result = await request(client, "POST", "/api/v5/p2p/ad/update", body)
+                if str(result.get("oldAdId")) != slot.adv_id:
+                    raise ValueError("Sai mã quảng cáo cũ trong phản hồi sửa")
+                result_id = str(result.get("newAdId") or "")
+                if not re.fullmatch(r"[0-9]{1,30}", result_id):
+                    raise ValueError("Chưa có ID quảng cáo thay thế hợp lệ")
+            attempt.result_ad_id = result_id
+            attempt.state = "CONFIRMING"
+            db.commit()
+            await confirm(db, client, attempt, slot, plan)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            db.rollback()
+            attempt = db.get(OKXAdPriceAttempt, slot.id)
+            if attempt:
+                attempt.reason = safe_failure(error)[:500]
+                db.commit()
+                kind = "UNKNOWN" if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"} else "ERROR"
+                await notice(db, attempt, slot, kind, "Chỉnh giá bị chặn/chưa xác định kết quả: " + attempt.reason + "; kiểm tra OKX, không tự gửi lại yêu cầu chưa rõ kết quả.", plan)
+
+
+async def pricing_loop():
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        while True:
+            try:
+                with SessionLocal() as db:
+                    await process_ad_pricing(db, client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error("OKX ad pricing cycle failed: %s", type(error).__name__)
+            await asyncio.sleep(max(60, settings.okx_ad_pricing_seconds))
