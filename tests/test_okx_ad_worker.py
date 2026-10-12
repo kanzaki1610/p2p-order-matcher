@@ -102,3 +102,21 @@ def test_cost_failure_never_hides_or_writes(db, setup, monkeypatch):
     write=AsyncMock(); monkeypatch.setattr(worker,'request',write)
     run(db); write.assert_not_awaited()
     assert 'private payload' not in worker.send_discord_message.call_args.args[1]
+
+
+def test_new_slot_ad_does_not_inherit_resume_permission(db, setup, monkeypatch):
+    attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',old_ad_id='999',result_ad_id='999',paused_by_floor=True)
+    db.add(attempt); db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(hidden=True),ad('456','26070',True)]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}); monkeypatch.setattr(worker,'request',write)
+    run(db); assert 'online' not in write.call_args.args[3]
+
+
+def test_replacement_collision_does_not_overwrite(db, setup, monkeypatch):
+    db.add(OKXSlot(side='BUY',slot_number=1,auto_enabled=True,adv_id='456'))
+    attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='CONFIRMING',old_ad_id='123',result_ad_id='456',price=26070,hidden=False)
+    db.add(attempt); db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad('456','26070')))
+    assert asyncio.run(worker.confirm(db,None,attempt,setup)) is False
+    assert setup.adv_id=='123'
