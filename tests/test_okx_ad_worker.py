@@ -7,13 +7,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app import okx_ad_worker as worker
-from app.models import OKXSlot, OKXAuditLog
+from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences
 
 
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
-    for table in (OKXSlot.__table__, OKXAuditLog.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
+    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
 
@@ -120,3 +120,23 @@ def test_replacement_collision_does_not_overwrite(db, setup, monkeypatch):
     monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad('456','26070')))
     assert asyncio.run(worker.confirm(db,None,attempt,setup)) is False
     assert setup.adv_id=='123'
+
+
+def test_worker_uses_persisted_side_rank(db,setup,monkeypatch):
+    from app.okx_price_controls import save_ranks
+    save_ranks(db,{'sell_rank':6})
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    source=AsyncMock(return_value=plan());monkeypatch.setattr(worker,'read_rank_plan',source)
+    monkeypatch.setattr(worker,'request',AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}))
+    run(db);assert source.call_args.kwargs['target_rank']==6
+
+
+def test_rank_changed_while_reading_cancels_stale_write(db,setup,monkeypatch):
+    from app.okx_price_controls import save_ranks
+    async def changed(*args,**kwargs):
+        save_ranks(db,{'sell_rank':7})
+        return plan()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',changed)
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db);write.assert_not_awaited()
