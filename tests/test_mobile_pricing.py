@@ -46,7 +46,7 @@ def test_pending_attempt_cannot_be_reset_or_enabled(db):
     slot=db.query(OKXSlot).one()
     db.add(worker.OKXAdPriceAttempt(slot_id=slot.id,state='UNKNOWN')); db.commit()
     for cmd in [command('quangcao',chieu='BUY',slot=1,id='456'),command('auto',chieu='BUY',slot=1,bat=True)]:
-        with pytest.raises(ValueError): asyncio.run(controls.execute_price_command(cmd,db,'owner'))
+        assert 'Chưa thay đổi' in asyncio.run(controls.execute_price_command(cmd,db,'owner'))
     asyncio.run(controls.execute_price_command(command('auto',chieu='BUY',slot=1,bat=False),db,'owner'))
     db.expire_all(); assert not db.query(OKXSlot).one().auto_enabled
 
