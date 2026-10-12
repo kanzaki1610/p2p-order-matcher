@@ -7,13 +7,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app import okx_ad_worker as worker
-from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences
+from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwitch
 
 
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
-    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
+    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
 

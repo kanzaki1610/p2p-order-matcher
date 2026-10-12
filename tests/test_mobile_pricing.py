@@ -1,0 +1,56 @@
+import asyncio
+from unittest.mock import AsyncMock
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from app.database import Base
+from app.models import OKXSlot, OKXPricingSwitch
+from app import okx_price_controls as controls, okx_ad_worker as worker
+
+@pytest.fixture
+def db(monkeypatch):
+    monkeypatch.setattr(controls.settings,'database_schema','public')
+    monkeypatch.setattr(controls.settings,'okx_ad_pricing_enabled',True)
+    engine=create_engine('sqlite://')
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(OKXSlot(side='BUY',slot_number=1,adv_id='123',auto_enabled=True))
+        session.commit()
+        yield session
+    engine.dispose()
+
+def command(name,**options):
+    return {'options':[{'name':name,'options':[{'name':k,'value':v} for k,v in options.items()]}]}
+
+def test_pause_blocks_worker_and_resume_keeps_slots(db,monkeypatch):
+    request=AsyncMock()
+    monkeypatch.setattr(worker,'request',request)
+    asyncio.run(controls.execute_price_command(command('bamtat',bat=False),db,'owner'))
+    assert not controls.pricing_active(db)
+    asyncio.run(worker.process_ad_pricing(db,None))
+    request.assert_not_called()
+    assert db.query(OKXSlot).one().auto_enabled
+    asyncio.run(controls.execute_price_command(command('bamtat',bat=True),db,'owner'))
+    assert controls.pricing_active(db)
+
+def test_select_owned_id_turns_auto_off_and_never_posts(db,monkeypatch):
+    read=AsyncMock(return_value={'side':'buy','status':'new','type':'limit','unitPrice':'26100'})
+    monkeypatch.setattr(controls,'read_ad',read)
+    asyncio.run(controls.execute_price_command(command('quangcao',chieu='BUY',slot=1,id='456'),db,'owner'))
+    db.expire_all(); slot=db.query(OKXSlot).one()
+    assert slot.adv_id=='456' and not slot.auto_enabled
+    asyncio.run(controls.execute_price_command(command('auto',chieu='BUY',slot=1,bat=True),db,'owner'))
+    db.expire_all(); assert db.query(OKXSlot).one().auto_enabled
+
+def test_pending_attempt_cannot_be_reset_or_enabled(db):
+    slot=db.query(OKXSlot).one()
+    db.add(worker.OKXAdPriceAttempt(slot_id=slot.id,state='UNKNOWN')); db.commit()
+    for cmd in [command('quangcao',chieu='BUY',slot=1,id='456'),command('auto',chieu='BUY',slot=1,bat=True)]:
+        with pytest.raises(ValueError): asyncio.run(controls.execute_price_command(cmd,db,'owner'))
+    asyncio.run(controls.execute_price_command(command('auto',chieu='BUY',slot=1,bat=False),db,'owner'))
+    db.expire_all(); assert not db.query(OKXSlot).one().auto_enabled
+
+def test_friend_cannot_modify_original(db,monkeypatch):
+    monkeypatch.setattr(controls.settings,'database_schema','kayhap')
+    assert 'tài khoản gốc' in asyncio.run(controls.execute_price_command(command('bamtat',bat=False),db,'friend'))
+    assert db.get(OKXPricingSwitch,1) is None
