@@ -18,6 +18,7 @@ from .discord_notifications import send_discord_message, valid_webhook
 from .models import OKXSlot, OKXAuditLog
 from .okx_ads import read_ad, number
 from .okx_cost import read_last_buy_cost
+from .okx_price_controls import selected_rank
 from .okx_rank import read_rank_plan
 from .okx_release import request, failure_reason
 from .telegram_commands import format_vietnam_time
@@ -53,7 +54,7 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
     text = (f"OKX · VNTrader · cảnh báo giá {kind}\nMã quảng cáo: {slot.adv_id}\n"
             f"Chiều: {slot.side}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\nLý do: {reason}")
     if plan:
-        text += f"\nGiá vị trí 10: {plan.get('proposed_price')}đ/USDT"
+        text += f"\nGiá vị trí {plan.get('target_rank', 10)}: {plan.get('proposed_price')}đ/USDT"
         if plan.get("cost_source"):
             text += f"\nLệnh mua giá vốn: {plan['cost_source']['order_id']}"
         if plan.get("minimum_sell_price"):
@@ -94,7 +95,7 @@ async def confirm(db, client, attempt, slot, plan=None):
         detail=f"{slot.side} {attempt.old_ad_id} -> {slot.adv_id}; action={attempt.action}; price={attempt.price}; hidden={attempt.hidden}"))
     db.commit()
     if attempt.action == "HIDE_AD":
-        await notice(db, attempt, slot, "HIDDEN", "Đã xác minh quảng cáo tạm ẩn vì giá bán vị trí 10 dưới giá vốn +10đ.", plan)
+        await notice(db, attempt, slot, "HIDDEN", "Đã xác minh quảng cáo tạm ẩn vì giá bán vị trí đã chọn dưới giá vốn +10đ.", plan)
     elif was_paused:
         await notice(db, attempt, slot, "RESUMED", "Đã xác minh giá mới đạt giá vốn +10đ và quảng cáo do bot tạm ẩn đã hiển thị lại.", plan)
     return True
@@ -150,7 +151,8 @@ async def process_ad_pricing(db, client):
                 if cost_error:
                     await notice(db, attempt, slot, "COST_UNVERIFIED", "Không xác minh được lệnh mua hoàn tất gần nhất: " + cost_error)
                     continue
-            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None)
+            rank = selected_rank(db, slot.side)
+            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None, target_rank=rank)
             if slot.side == "SELL":
                 plan["cost_source"] = cost
             if plan["action"] == "BLOCKED":
@@ -159,7 +161,7 @@ async def process_ad_pricing(db, client):
             current = number(row.get("unitPrice"))
             hidden = row["isHidden"]
             if plan["action"] == "HIDE_AD" and hidden:
-                await notice(db, attempt, slot, "ALREADY_HIDDEN", "Quảng cáo đang ẩn và giá vị trí 10 chưa đạt giá vốn +10đ; giữ ẩn.", plan)
+                await notice(db, attempt, slot, "ALREADY_HIDDEN", "Quảng cáo đang ẩn và giá vị trí đã chọn chưa đạt giá vốn +10đ; giữ ẩn.", plan)
                 continue
             proposed = Decimal(plan["proposed_price"])
             resume = attempt.paused_by_floor and plan["action"] == "UPDATE_PRICE"
@@ -182,6 +184,11 @@ async def process_ad_pricing(db, client):
                 continue
             db.refresh(attempt)
             db.refresh(slot)
+            db.expire_all()
+            if selected_rank(db, slot.side) != rank:
+                attempt.state = "IDLE"
+                db.commit()
+                continue
             if not slot.auto_enabled or slot.adv_id != attempt.old_ad_id:
                 attempt.state = "IDLE"
                 db.commit()

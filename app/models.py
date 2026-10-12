@@ -124,6 +124,14 @@ class OKXDashboardConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class OKXPricePreferences(Base):
+    __tablename__ = "okx_price_preferences"
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    buy_rank: Mapped[int] = mapped_column(Integer, default=10)
+    sell_rank: Mapped[int] = mapped_column(Integer, default=10)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class OKXSlot(Base):
     __tablename__ = "okx_slots"
     __table_args__ = (UniqueConstraint("side", "slot_number", name="uq_okx_slot"),)

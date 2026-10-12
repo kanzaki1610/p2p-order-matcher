@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     okx_ad_pricing_enabled: bool = False
     okx_ad_pricing_seconds: int = 60
     discord_commands_enabled: bool = False
+    discord_pricing_commands_enabled: bool = False
     discord_application_id: str = ""
     discord_public_key: str = ""
     discord_bot_token: str = ""

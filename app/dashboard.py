@@ -31,6 +31,7 @@ from .okx_pricing import CompetitorOffer, parse_name_list, propose_price
 from .okx_ads import read_ad, summary as ad_summary, price_preview
 from .okx_rank import read_rank_plan, send_preview_alert
 from .okx_cost import read_last_buy_cost
+from .okx_price_controls import preferences_dict, save_ranks, selected_rank
 from .okx_release import failure_reason
 import httpx
 
@@ -51,6 +52,12 @@ class RankPricePreview(BaseModel):
     cost_basis: Decimal | None = Field(default=None, gt=0)
     notify_preview: bool = False
     use_latest_purchase: bool = True
+    target_rank: int | None = Field(default=None, ge=1, le=50, strict=True)
+
+
+class RankPreferencesUpdate(BaseModel):
+    buy_rank: int | None = Field(default=None, ge=1, le=50, strict=True)
+    sell_rank: int | None = Field(default=None, ge=1, le=50, strict=True)
 
 
 class ConfigUpdate(BaseModel):
@@ -138,6 +145,17 @@ def verify_dashboard_key(x_admin_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Khóa quản trị không hợp lệ")
 
 
+@router.patch("/dashboard/api/okx/pricing-preferences")
+def update_rank_preferences(payload: RankPreferencesUpdate, db: Session = Depends(get_db), _: None = Depends(verify_dashboard_key)):
+    if settings.database_schema == "kayhap":
+        raise HTTPException(403, "Bám giá chỉ hỗ trợ tài khoản gốc")
+    try:
+        prefs = save_ranks(db, payload.model_dump(exclude_none=True))
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    return {"success": True, **prefs, "enabled": settings.okx_ad_pricing_enabled}
+
+
 @router.get("/dashboard/api/okx/ads/{ad_id}")
 async def inspect_okx_ad(ad_id: str, _: None = Depends(verify_dashboard_key)):
     if settings.database_schema == "kayhap":
@@ -157,13 +175,16 @@ async def preview_rank_price(payload: RankPricePreview, _: None = Depends(verify
     if settings.database_schema == "kayhap":
         raise HTTPException(status_code=403, detail="Bám giá hiện chỉ chuẩn bị cho tài khoản gốc")
     try:
+        from .database import SessionLocal
+        with SessionLocal() as db:
+            rank = payload.target_rank if payload.target_rank is not None else selected_rank(db, payload.side)
         async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
             cost = None
             basis = payload.cost_basis
             if payload.side == "SELL" and payload.use_latest_purchase:
                 cost = await read_last_buy_cost(client)
                 basis = Decimal(cost["unit_price"])
-            plan = await read_rank_plan(client, payload.side, basis)
+            plan = await read_rank_plan(client, payload.side, basis, target_rank=rank)
         if cost:
             plan["cost_source"] = cost
         if payload.notify_preview:
@@ -487,7 +508,8 @@ def dashboard_state(
             "enabled": settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap",
             "interval_seconds": max(60, settings.okx_ad_pricing_seconds),
             "cost_mode": "LAST_COMPLETED_BUY",
-            "rank": 10,
+            "rank_mode": "USER_SELECTED",
+            **preferences_dict(db),
             "minimum_spread_vnd": 10,
             "alert_configured": bool(settings.discord_webhook_pricing_alerts),
         },

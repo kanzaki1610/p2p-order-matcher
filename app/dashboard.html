@@ -37,7 +37,7 @@
         <button class="active" data-tab="overview">Tổng quan</button>
         <button data-tab="arbitrage">So sánh 4 sàn</button>
         <button data-tab="slots">Cấu hình</button>
-        <button data-tab="pricing">Đề giá</button>
+        <button data-tab="pricing">Bám giá</button>
         <button data-tab="content">Nội dung</button>
         <button data-tab="advanced">Nâng cao</button>
         <button data-tab="history">Lịch sử</button>
@@ -47,7 +47,7 @@
       <section class="tab active" id="tab-overview">
         <div class="panel">
           <div class="section-title"><div><h2>Tổng quan hệ thống</h2><p>Dữ liệu chỉ đọc từ Extension, AutoP2P hoặc API Bitget khi tài khoản đủ điều kiện.</p></div><button class="btn" onclick="loadState()">Làm mới</button></div>
-          <div class="notice">LIVE đang bị khóa ở cấp mã nguồn. Không tạo/sửa quảng cáo, không xác nhận thanh toán và không release USDT.</div>
+          <div class="notice">Trạng thái bám giá OKX được hiển thị riêng phía trên. Các công cụ so sánh và mô phỏng bên dưới không thực hiện giao dịch thật.</div>
           <div class="grid three">
             <div class="status-card"><small>Chế độ</small><b style="color:#ffd28b">DRY RUN</b></div>
             <div class="status-card"><small>Bitget P2P API</small><b id="connectorStatus">Chưa kết nối</b></div>
@@ -100,6 +100,17 @@
       </section>
 
       <section class="tab" id="tab-pricing">
+        <div class="panel" id="rankPreferencesPanel">
+          <div class="section-title"><div><h2>Chọn vị trí bám giá OKX</h2><p>Mua và bán có thể theo hai vị trí khác nhau trên AutoP2P, sau khi loại VNTrader.</p></div></div>
+          <div class="grid">
+            <div class="field"><label for="buyRank">Vị trí mua</label><input id="buyRank" type="number" min="1" max="50" step="1" value="10"><button class="btn primary" onclick="saveRank('BUY')">Lưu vị trí mua</button></div>
+            <div class="field"><label for="sellRank">Vị trí bán</label><input id="sellRank" type="number" min="1" max="50" step="1" value="10"><button class="btn primary" onclick="saveRank('SELL')">Lưu vị trí bán</button></div>
+          </div>
+          <p class="hint">Nhập từ 1 đến 50. Nếu nguồn không có đủ quảng cáo cho vị trí bạn chọn, bot dừng điều chỉnh và báo lỗi. Giá bán luôn phải đạt giá mua hoàn tất gần nhất +10đ; quảng cáo ẩn thủ công được giữ ẩn.</p>
+          <div class="actions"><button class="btn" onclick="previewRank('BUY')">Xem giá mua dự kiến</button><button class="btn" onclick="previewRank('SELL')">Xem giá bán dự kiến</button></div>
+          <pre class="result" id="rankResult">Chọn vị trí rồi xem giá dự kiến. Khi bám giá đang tắt, lưu vị trí chưa làm thay đổi quảng cáo.</pre>
+          <p class="hint">Trên Discord: /gia vitri → chọn Mua/Bán → nhập vị trí. /gia xem để xem giá tham chiếu; /gia trangthai để kiểm tra cấu hình.</p>
+        </div>
         <div class="panel">
           <div class="section-title"><div><h2>Phạm vi đối thủ và chu kỳ đề giá</h2><p>Chỉ so sánh với quảng cáo đối thủ có hạn mức giao dịch giao nhau với khoảng Target.</p></div></div>
           <div class="grid three">
@@ -177,7 +188,10 @@ function slotCard(slot,editor=false){const id=`${slot.side}-${slot.slot_number}`
 function bridgeSnapshotCard(snapshot){const suggestions=snapshot.suggestions.map(item=>`<div class="status-card"><small>${snapshot.side} Slot ${item.slot_number}</small><b>${item.proposed_price==null?'—':fmt(item.proposed_price)+' ₫'}</b><span class="hint">${item.reason}</span></div>`).join('');return `<div class="slot"><div class="slot-head"><strong>${snapshot.side} · ${snapshot.offer_count} quảng cáo</strong><span class="hint">${vnTime(snapshot.received_at)}</span></div><div class="grid">${suggestions}</div><div class="hint" style="margin-top:12px">Nguồn chỉ đọc từ tab OKX · Không có hành động LIVE</div></div>`}
 function render(){
   if(!$('#adPricingBadge')){const badge=document.createElement('span');badge.id='adPricingBadge';badge.className='badge';$('.badges').appendChild(badge)}
-  $('#adPricingBadge').textContent=state.ad_pricing?.enabled?'OKX bám giá vị trí 10: ĐANG BẬT':'OKX bám giá vị trí 10: ĐANG TẮT';
+  const pricing=state.ad_pricing||{};
+  $('#adPricingBadge').textContent=`OKX bám giá: ${pricing.enabled?'ĐANG BẬT':'ĐANG TẮT'} · Mua #${pricing.buy_rank||10} / Bán #${pricing.sell_rank||10}`;
+  $('#buyRank').value=pricing.buy_rank||10;$('#sellRank').value=pricing.sell_rank||10;
+  $('#rankPreferencesPanel').classList.toggle('hidden',location.pathname.startsWith('/accounts/kayhap'));
   const cfg=state.config;
   $$('[data-config]').forEach(el=>{const v=cfg[el.dataset.config];if(el.type==='checkbox')el.checked=!!v;else el.value=v??''});
   $('#overviewSlots').innerHTML=state.slots.map(s=>slotCard(s,false)).join('');
@@ -221,6 +235,9 @@ function renderArbitrage(){
   $('#lockedTradeList').innerHTML=locked.length?locked.map(item=>{const t=item.trade,b=item.best_comparison,open=t.status==='OPEN';return `<div class="slot" style="margin-bottom:12px"><div class="slot-head"><strong>#${t.id} · ĐÃ ${t.side==='BUY'?'MUA':'BÁN'} ${number(t.amount_usdt).toFixed(4)} USDT · ${t.exchange}</strong><span class="badge">${t.status}</span></div><div class="grid"><div><span class="hint">Giá đã chốt</span><b style="display:block;font-size:18px">${fmt(t.price)} ₫</b><span class="hint">${vnTime(t.created_at)}${t.note?' · '+t.note:''}</span></div><div>${b?`<span class="hint">Đối ứng tốt nhất</span><b style="display:block;font-size:18px">${b.target_side==='SELL'?'BÁN':'MUA'} tại ${b.target_exchange} · ${fmt(b.target_price)} ₫</b><span class="hint">${b.merchant}</span>`:`<span class="hint">Đối ứng tốt nhất</span><b style="display:block">${open?'Chưa có giá phù hợp':'Đã đóng theo dõi'}</b>`}</div>${b?`<div><span class="hint">Chênh lệch gộp</span><b style="display:block">${fmt(b.gross_difference_vnd)} ₫</b></div><div><span class="hint">Ước tính sau phí</span><b style="display:block;color:${b.profitable?'#88f0ba':'#ff929a'}">${fmt(b.estimated_net_vnd)} ₫</b></div>`:''}</div>${open?`<div class="actions"><button class="btn" onclick="closeLockedTrade(${t.id})">Đóng theo dõi</button></div>`:''}</div>`}).join(''):'<div class="empty">Chưa có giá nào được chốt.</div>';
 }
 async function loadState(){state=await api('/dashboard/api/state');render();return state}
+function rankInput(side){const rank=Number($(side==='BUY'?'#buyRank':'#sellRank').value);if(!Number.isInteger(rank)||rank<1||rank>50)throw new Error('Vị trí phải là số nguyên từ 1 đến 50');return rank}
+async function saveRank(side){try{const rank=rankInput(side);const payload={[side==='BUY'?'buy_rank':'sell_rank']:rank};const result=await api('/dashboard/api/okx/pricing-preferences',{method:'PATCH',body:JSON.stringify(payload)});await loadState();$('#rankResult').textContent=`Đã lưu vị trí ${side==='BUY'?'mua':'bán'}: ${rank}.\n${result.enabled?'Bám giá đang bật; bot áp dụng ở chu kỳ kế tiếp.':'Bám giá đang tắt; chưa sửa quảng cáo thật.'}`;toast('Đã lưu vị trí')}catch(e){toast(e.message,true)}}
+async function previewRank(side){try{const rank=rankInput(side);$('#rankResult').textContent='Đang đọc giá và xác minh giá vốn…';const result=await api('/dashboard/api/okx/rank-preview',{method:'POST',body:JSON.stringify({side,target_rank:rank})});$('#rankResult').textContent=`${side==='BUY'?'MUA':'BÁN'} · vị trí ${rank}\nGiá tham chiếu: ${result.proposed_price?fmt(result.proposed_price)+'đ/USDT':'chưa đủ dữ liệu'}\n${result.cost_basis?'Giá vốn: '+fmt(result.cost_basis)+'đ · bán tối thiểu: '+fmt(result.minimum_sell_price)+'đ\n':''}${result.reason}\nChỉ xem trước; chưa gửi yêu cầu sửa/ẩn thật.`}catch(e){$('#rankResult').textContent=e.message;toast(e.message,true)}}
 async function syncBitget(){const button=$('#bitgetSyncButton');button.disabled=true;button.textContent='Đang kết nối…';try{const r=await api('/dashboard/api/bitget/sync',{method:'POST'});await loadState();toast(`Bitget OK · BUY ${r.offers.BUY} · SELL ${r.offers.SELL}`)}catch(e){toast(e.message,true)}finally{button.textContent='Kiểm tra và đồng bộ Bitget';button.disabled=!(state?.bitget?.enabled&&state?.bitget?.key_configured&&state?.bitget?.secret_configured&&state?.bitget?.passphrase_configured)}}
 async function syncMexc(){const button=$('#mexcSyncButton');button.disabled=true;button.textContent='Đang đọc lệnh…';try{const r=await api('/dashboard/api/mexc/sync',{method:'POST'});await loadState();toast(`MEXC OK · nhận ${r.orders_received} lệnh · mới ${r.orders_created}`)}catch(e){toast(e.message,true)}finally{button.textContent='Kiểm tra và đọc lệnh MEXC';button.disabled=!(state?.mexc?.enabled&&state?.mexc?.key_configured&&state?.mexc?.secret_configured)}}
 function collectConfig(){const out={...state.config};$$('[data-config]').forEach(el=>out[el.dataset.config]=el.type==='checkbox'?el.checked:(el.type==='number'?number(el.value):el.value));out.dry_run=true;return out}
