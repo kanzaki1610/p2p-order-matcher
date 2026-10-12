@@ -17,10 +17,13 @@ ROUTES = {
     "CONFIRMED": "discord_webhook_confirmed",
     "REJECTED": "discord_webhook_review_required",
     "SYSTEM_ALERT": "discord_webhook_system_alerts",
+    "PRICING_ALERT": "discord_webhook_pricing_alerts",
 }
 
 
 def webhook_url(event: str) -> str:
+    if event == "PRICING_ALERT":
+        return settings.discord_webhook_pricing_alerts
     return getattr(settings, ROUTES.get(event, "discord_webhook_system_alerts")) or settings.discord_webhook_url
 
 

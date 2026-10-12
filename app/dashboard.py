@@ -29,6 +29,7 @@ from .models import (
 )
 from .okx_pricing import CompetitorOffer, parse_name_list, propose_price
 from .okx_ads import read_ad, summary as ad_summary, price_preview
+from .okx_rank import read_rank_plan, send_preview_alert
 from .okx_release import failure_reason
 import httpx
 
@@ -42,6 +43,12 @@ class AdPricePreview(BaseModel):
     price: Decimal = Field(gt=0)
     min_price: Decimal = Field(gt=0)
     max_price: Decimal = Field(gt=0)
+
+
+class RankPricePreview(BaseModel):
+    side: Literal["BUY", "SELL"]
+    cost_basis: Decimal | None = Field(default=None, gt=0)
+    notify_preview: bool = False
 
 
 class ConfigUpdate(BaseModel):
@@ -141,6 +148,24 @@ async def inspect_okx_ad(ad_id: str, _: None = Depends(verify_dashboard_key)):
         raise HTTPException(status_code=422, detail=str(error)) from None
     except Exception as error:
         raise HTTPException(status_code=502, detail=failure_reason(error)) from None
+
+
+@router.post("/dashboard/api/okx/rank-preview")
+async def preview_rank_price(payload: RankPricePreview, _: None = Depends(verify_dashboard_key)):
+    if settings.database_schema == "kayhap":
+        raise HTTPException(status_code=403, detail="Bám giá hiện chỉ chuẩn bị cho tài khoản gốc")
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
+            plan = await read_rank_plan(client, payload.side, payload.cost_basis)
+        if payload.notify_preview:
+            plan["preview_alert_sent"] = await send_preview_alert(plan)
+        return plan
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=502, detail=f"AutoP2P HTTP {error.response.status_code}; chưa điều chỉnh quảng cáo") from None
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Không kết nối được AutoP2P; chưa điều chỉnh quảng cáo") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Dữ liệu giá vốn hoặc phản hồi AutoP2P không hợp lệ") from None
 
 
 @router.post("/dashboard/api/okx/ads/{ad_id}/preview")
