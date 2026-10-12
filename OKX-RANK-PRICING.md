@@ -1,21 +1,38 @@
-# OKX rank-10 preparation
+# OKX rank-10 pricing — original account only
 
-This connector is **preview-only**. It never changes a price, hides an ad, reopens an ad, or calls an OKX write endpoint. The existing payment/release bot is unaffected.
+The repricing worker defaults OFF. Existing payment matching and OKX/MEXC release settings are independent. The friend account cannot enable this feature.
 
-AutoP2P source: the public panel requests observed on its rendered dashboard, `https://autop2p.biz/?api=panel&panel=okx_buy` and `panel=okx_sell`. Render can read both without credentials. No OKX credentials are sent to AutoP2P.
+Source: public AutoP2P panels https://autop2p.biz/?api=panel&panel=okx_buy and panel=okx_sell. No exchange credentials are sent to AutoP2P. The worker rejects stale/error data (>30 seconds), wrong panels, malformed rows, and fewer than ten competitors.
 
-Policy for the original account only:
+Policy:
+- Follow the tenth displayed competitor advertisement after excluding every case-insensitive VNTrader row. Preserve source order; count advertisements, not distinct nicknames. No additional ±1 VND, re-sort or restriction/amount filtering. Matching its price does not guarantee actual exchange position when prices tie.
+- BUY: use that rank-10 price on an existing owned advertisement. This does not create an order or transfer money.
+- SELL: use the latest authenticated completed, payment-confirmed USDT/VND BUY unit price, ordered by completion timestamp, plus 10 VND/USDT as the floor. Read all history pages (maximum 100 pages of 20), then verify detail. Missing/inconsistent history or reaching the cap blocks changes; canceled orders are excluded.
+- When rank-10 SELL falls below the floor, temporarily hide the SELL advertisement. Equality is allowed. Only advertisements hidden by this worker for the floor can be shown again automatically. Manually hidden advertisements retain their hidden state when their price is updated.
+- The 10 VND spread is before fees and uses the latest purchase, not average inventory cost.
 
-- Follow the tenth displayed competitor ad after excluding every case-insensitive `VNTrader` row. Preserve the source's row order and count ads, not unique nicknames. No extra ±1 VND step, no silent re-sort or restriction/amount filtering.
-- BUY: propose the rank-10 price. This does not create a BUY advertisement or perform a bank payment.
-- SELL: require a real positive cost basis. Propose the rank-10 price only when it is at least cost basis +10 VND/USDT. Otherwise return `HIDE_AD` as a **proposed** action. Equality is allowed.
-- For the example cost 26,050, sell price 26,059 proposes hiding; 26,060 is permitted. The spread is before fees.
-- Unknown cost basis, fewer than ten competitors, stale/error source, missing timestamps, wrong panel, or malformed prices return `BLOCKED`. They never imply hiding an ad based on bad data.
+The authenticated preview POST /dashboard/api/okx/rank-preview accepts side, use_latest_purchase (default true), optional cost_basis for explicit simulations with use_latest_purchase=false, and notify_preview (default false). Preview never calls exchange writes. Preview notifications are labeled simulation.
 
-Authenticated preview endpoint:
+## Configuration and activation
 
-`POST /dashboard/api/okx/rank-preview` with the existing `X-Admin-Key`, JSON `side` (BUY/SELL), optional `cost_basis`, and optional `notify_preview` (default false). Cost-basis accounting mode is awaiting user choice; the example value is not stored as a real holding cost.
+Use the original Render service's Environment:
 
-`DISCORD_WEBHOOK_PRICING_ALERTS` routes only to the original account's dedicated `#price-alerts` channel. It has no fallback to another channel or the friend's server. With `notify_preview=true`, a `HIDE_AD` preview may send a message clearly labeled simulation; no exchange operation is performed.
+```
+OKX_AD_PRICING_ENABLED=false
+OKX_AD_PRICING_SECONDS=60
+DISCORD_WEBHOOK_PRICING_ALERTS=<original server #price-alerts webhook>
+```
 
-Live activation remains unimplemented pending the BUY ad ID, cost-basis source/accounting, persistent tracking of OKX replacement ad IDs, and user activation of financial writes. The preparatory read/preview endpoints are not an autonomous repricing worker.
+Existing OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE authenticate OKX. Keep secrets only in Render Environment. Configure original BUY/SELL slots with valid owned fixed-price USDT/VND advertisements and auto_enabled=true; leave unused slots false. Review the real-cost rank preview before the user changes OKX_AD_PRICING_ENABLED=true and saves/redeploys. To stop, set it false and redeploy. Do not change release flags to control this worker.
+
+Minimum cycle/action interval is 60 seconds. Dashboard badge explicitly reports rank pricing state, separate from legacy simulation controls. The legacy dashboard dry_run setting does not control this worker.
+
+## Confirmation and recovery
+
+OKX price updates can cancel/replace an advertisement. The worker persists an operation before sending, accepts only matching oldAdId and a valid newAdId, verifies owned advertisement detail, then stores replacement ID in the slot. Omitted fields retain OKX's existing values; online=true is sent only when resuming a worker-paused SELL.
+
+Durable okx_ad_price_attempts states prevent automatic write retries after timeout, crash, or uncertain response. A known result ID is only read again to confirm; a missing result ID remains blocked until an operator verifies OKX and repairs the attempt/slot. Do not blindly clear UNKNOWN or CONFIRMING records. Slot reconfiguration or replacement-ID collision blocks automatic overwrite. OKX_AD_PRICE_CONFIRMED audit rows record confirmed actions.
+
+PRICING_ALERT routes only to original #price-alerts, with no fallback to other channels or the friend's server. Missing/invalid webhook blocks pricing. Notifications cover hiding, resuming, missing cost, source failures, and uncertain operations; identical notices are deduplicated. Responses, signed URLs and credentials are not included.
+
+Tests use mock exchange writes and isolated SQLite. Live preparation only reads exchange data; an actual financial price/hide operation is not claimed tested until the user activates and observes it.
