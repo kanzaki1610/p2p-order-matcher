@@ -132,6 +132,12 @@ class OKXPricePreferences(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class OKXPricingSwitch(Base):
+    __tablename__ = "okx_pricing_switch"
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class OKXSlot(Base):
     __tablename__ = "okx_slots"
     __table_args__ = (UniqueConstraint("side", "slot_number", name="uq_okx_slot"),)

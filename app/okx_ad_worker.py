@@ -18,7 +18,7 @@ from .discord_notifications import send_discord_message, valid_webhook
 from .models import OKXSlot, OKXAuditLog
 from .okx_ads import read_ad, number
 from .okx_cost import read_last_buy_cost
-from .okx_price_controls import selected_rank
+from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
 from .okx_release import request, failure_reason
 from .telegram_commands import format_vietnam_time
@@ -102,7 +102,7 @@ async def confirm(db, client, attempt, slot, plan=None):
 
 
 async def process_ad_pricing(db, client):
-    if not settings.okx_ad_pricing_enabled or settings.database_schema == "kayhap":
+    if not pricing_active(db) or settings.database_schema == "kayhap":
         return
     try:
         if not valid_webhook(settings.discord_webhook_pricing_alerts):
@@ -189,7 +189,7 @@ async def process_ad_pricing(db, client):
                 attempt.state = "IDLE"
                 db.commit()
                 continue
-            if not slot.auto_enabled or slot.adv_id != attempt.old_ad_id:
+            if not pricing_active(db) or not slot.auto_enabled or slot.adv_id != attempt.old_ad_id:
                 attempt.state = "IDLE"
                 db.commit()
                 await notice(db, attempt, slot, "BLOCKED", "Cấu hình slot đã thay đổi trước khi gửi; chưa sửa quảng cáo.")

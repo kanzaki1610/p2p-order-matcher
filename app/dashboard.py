@@ -31,7 +31,7 @@ from .okx_pricing import CompetitorOffer, parse_name_list, propose_price
 from .okx_ads import read_ad, summary as ad_summary, price_preview
 from .okx_rank import read_rank_plan, send_preview_alert
 from .okx_cost import read_last_buy_cost
-from .okx_price_controls import preferences_dict, save_ranks, selected_rank
+from .okx_price_controls import preferences_dict, save_ranks, selected_rank, pricing_active
 from .okx_release import failure_reason
 import httpx
 
@@ -153,7 +153,7 @@ def update_rank_preferences(payload: RankPreferencesUpdate, db: Session = Depend
         prefs = save_ranks(db, payload.model_dump(exclude_none=True))
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
-    return {"success": True, **prefs, "enabled": settings.okx_ad_pricing_enabled}
+    return {"success": True, **prefs, "enabled": pricing_active(db)}
 
 
 @router.get("/dashboard/api/okx/ads/{ad_id}")
@@ -505,7 +505,7 @@ def dashboard_state(
             "p2p_connector": "NOT_CONNECTED",
         },
         "ad_pricing": {
-            "enabled": settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap",
+            "enabled": pricing_active(db) and settings.database_schema != "kayhap",
             "interval_seconds": max(60, settings.okx_ad_pricing_seconds),
             "cost_mode": "LAST_COMPLETED_BUY",
             "rank_mode": "USER_SELECTED",
