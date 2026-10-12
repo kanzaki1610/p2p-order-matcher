@@ -10,13 +10,15 @@ MIN_SPREAD = Decimal("10")
 SOURCE_MAX_AGE = 30
 
 
-def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None):
+def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK):
+    if type(target_rank) is not int or not 1 <= target_rank <= 50:
+        raise ValueError("Vị trí phải là số nguyên từ 1 đến 50")
     side = side.upper()
     if side not in {"BUY", "SELL"}:
         raise ValueError("Chiều quảng cáo phải là BUY hoặc SELL")
     now = time.time() if now is None else now
     base = {"mode": "PREVIEW_ONLY", "live_action_performed": False, "side": side,
-            "target_rank": TARGET_RANK, "own_nickname": own_nickname,
+            "target_rank": target_rank, "own_nickname": own_nickname,
             "min_spread_vnd": str(MIN_SPREAD), "source": "https://autop2p.biz/",
             "proposed_price": None, "action": "BLOCKED"}
     if not isinstance(data, dict) or data.get("ok") is not True or data.get("error"):
@@ -51,9 +53,9 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
         return {**base, "reason": "Có dòng giá thiếu/sai dữ liệu; không tự bỏ dòng làm thay đổi thứ hạng."}
     # Use the displayed table order, so rank 10 follows the user's source.
     # Only remove our own ads; no silent condition/amount filtering or re-sorting.
-    if len(competitors) < TARGET_RANK:
-        return {**base, "reason": "Chưa có đủ 10 quảng cáo đối thủ sau khi loại quảng cáo của mình."}
-    chosen = competitors[TARGET_RANK - 1]
+    if len(competitors) < target_rank:
+        return {**base, "reason": f"Chưa có đủ {target_rank} quảng cáo đối thủ sau khi loại quảng cáo của mình."}
+    chosen = competitors[target_rank - 1]
     price = chosen["price"]
     base.update(source_age_seconds=round(age, 2), own_ads_excluded=excluded,
                 competitor={"nickname": chosen["nickname"], "price": str(price)},
@@ -67,20 +69,20 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
                     spread_vnd=str(price - cost))
         if price < floor:
             return {**base, "action": "HIDE_AD", "reason":
-                f"Giá bán vị trí 10 là {price:,.0f}đ, thấp hơn giá vốn {cost:,.0f}đ +10đ = {floor:,.0f}đ. "
+                f"Giá bán vị trí {target_rank} là {price:,.0f}đ, thấp hơn giá vốn {cost:,.0f}đ +10đ = {floor:,.0f}đ. "
                 "Đề xuất tạm ẩn quảng cáo và báo kênh cảnh báo giá; chưa gửi yêu cầu ẩn thật."}
     return {**base, "action": "UPDATE_PRICE", "reason":
-        "Đề xuất bám cùng giá đối thủ vị trí 10 sau khi loại VNTrader; không cộng/trừ thêm 1đ. "
+        f"Đề xuất bám cùng giá đối thủ vị trí {target_rank} sau khi loại VNTrader; không cộng/trừ thêm 1đ. "
         "Chênh giá 10đ là trước phí nếu có. Chưa gửi yêu cầu sửa thật."}
 
 
-async def read_rank_plan(client, side, cost_basis=None):
+async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK):
     side = side.upper()
     if side not in {"BUY", "SELL"}:
         raise ValueError("Chiều quảng cáo phải là BUY hoặc SELL")
     response = await client.get("https://autop2p.biz/", params={"api": "panel", "panel": "okx_" + side.lower()})
     response.raise_for_status()
-    return plan_rank_price(response.json(), side, cost_basis)
+    return plan_rank_price(response.json(), side, cost_basis, target_rank=target_rank)
 
 
 async def send_preview_alert(plan):
@@ -93,7 +95,7 @@ async def send_preview_alert(plan):
     message = ("[MÔ PHỎNG CẢNH BÁO GIÁ — chưa ẩn quảng cáo thật]\nOKX · VNTrader\n"
         f"Thời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\n"
         f"Giá vốn: {plan['cost_basis']}đ/USDT\n"
-        f"Giá bán vị trí 10: {plan['proposed_price']}đ/USDT\n"
+        f"Giá bán vị trí {plan['target_rank']}: {plan['proposed_price']}đ/USDT\n"
         f"Giá bán tối thiểu: {plan['minimum_sell_price']}đ/USDT\n"
         f"Lý do: {plan['reason']}")
     return await send_discord_message("PRICING_ALERT", message)

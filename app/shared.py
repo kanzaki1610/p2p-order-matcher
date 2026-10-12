@@ -28,7 +28,7 @@ def validate_account(primary: Settings, secondary: Settings) -> None:
         raise ValueError("kayhap requires three distinct authentication keys separate from the original account")
     if secondary.telegram_fallback_enabled or secondary.telegram_commands_enabled:
         raise ValueError("kayhap Telegram must be explicitly disabled")
-    if secondary.discord_commands_enabled:
+    if secondary.discord_commands_enabled or secondary.discord_pricing_commands_enabled:
         raise ValueError("Configure interactive Discord commands separately before enabling")
     if secondary.bitget_p2p_enabled:
         raise ValueError("kayhap supports OKX and MEXC only")

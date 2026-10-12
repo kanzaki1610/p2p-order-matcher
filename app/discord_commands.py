@@ -13,6 +13,7 @@ from .database import SessionLocal
 from .models import DiscordInteractionReceipt
 from .notifications import notify_command_result
 from .telegram_commands import handle_command
+from .okx_price_controls import parse_price_command, execute_price_command
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ def authorized(payload):
 
 
 def command_text(data):
+    if data.get("name") == "gia":
+        parse_price_command(data)
+        return "/gia"
     options = {item["name"]: item.get("value", "") for item in data.get("options", [])}
     if data.get("name") == "confirm":
         code = str(options.get("order_code", "")).strip()
@@ -57,11 +61,14 @@ async def run_command(payload, text):
     reply = "Không thể xử lý lệnh; hãy kiểm tra trạng thái đơn trước khi thử lại."
     try:
         with SessionLocal() as db:
-            reply = handle_command(text, db,
+            if payload.get("data", {}).get("name") == "gia":
+                reply = await execute_price_command(payload["data"], db, str(user["id"]))
+            else:
+                reply = handle_command(text, db,
                 telegram_user_id=f"discord:{user['id']}",
                 telegram_username=None,
                 telegram_display_name=f"Discord: {member.get('nick') or user.get('global_name') or user.get('username') or user['id']}")
-            await notify_command_result(reply, db)
+                await notify_command_result(reply, db)
     except Exception:
         # Exception bodies may contain connection strings or tokens.
         logger.error("Discord command execution failed")
@@ -77,7 +84,7 @@ async def run_command(payload, text):
 
 @router.post("/webhooks/discord")
 async def discord_interaction(request: Request, background_tasks: BackgroundTasks):
-    if not settings.discord_commands_enabled:
+    if not settings.discord_public_key or not settings.discord_application_id:
         raise HTTPException(404, "Discord commands disabled")
     body = await request.body()
     timestamp = request.headers.get("X-Signature-Timestamp", "")
@@ -96,8 +103,14 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
         raise HTTPException(400, "Invalid JSON")
     if payload.get("type") == 1:
         return {"type": 1}
+    if not (settings.discord_commands_enabled or settings.discord_pricing_commands_enabled):
+        raise HTTPException(404, "Discord commands disabled")
     if payload.get("type") != 2 or not authorized(payload):
         return {"type": 4, "data": {"content": "Bạn không có quyền dùng lệnh trong server/kênh này.", "flags": 64}}
+    pricing = payload.get("data", {}).get("name") == "gia"
+    if ((pricing and (not settings.discord_pricing_commands_enabled or settings.database_schema == "kayhap"))
+            or (not pricing and not settings.discord_commands_enabled)):
+        return {"type": 4, "data": {"content": "Lệnh này chưa được bật cho tài khoản này.", "flags": 64}}
     try:
         text = command_text(payload.get("data", {}))
         if not payload.get("id") or not payload.get("token"):
