@@ -19,6 +19,15 @@ PRICE_COMMAND = {"name":"gia", "description":"Chọn vị trí bám giá OKX và
     {"name":"xem", "description":"Xem giá theo vị trí đã lưu; không sửa quảng cáo", "type":1, "options":[SIDE_OPTION]},
     {"name":"trangthai", "description":"Xem vị trí mua/bán và trạng thái bám giá", "type":1}]}
 
+SLOT_OPTION = {"name":"slot","description":"Slot quảng cáo 1 hoặc 2","type":4,"required":True,"min_value":1,"max_value":2}
+ON_OPTION = {"name":"bat","description":"True để bật, False để tắt","type":5,"required":True}
+PRICE_COMMAND['options'] += [
+    {"name":"danhsach","description":"Xem ID và giá các quảng cáo của bạn trên OKX","type":1,"options":[SIDE_OPTION]},
+    {"name":"quangcao","description":"Chọn ID quảng cáo cho slot; tắt Auto để bạn kiểm tra","type":1,"options":[SIDE_OPTION,SLOT_OPTION,{"name":"id","description":"ID quảng cáo OKX của bạn","type":3,"required":True}]},
+    {"name":"auto","description":"Bật hoặc tắt bám giá một slot","type":1,"options":[SIDE_OPTION,SLOT_OPTION,ON_OPTION]},
+    {"name":"bamtat","description":"Bật hoặc tạm dừng bám giá toàn bộ; không ẩn quảng cáo","type":1,"options":[ON_OPTION]},
+]
+
 async def main(pricing_only=False):
     if not all((settings.discord_application_id, settings.discord_guild_id, settings.discord_bot_token)):
         raise SystemExit("Thiếu DISCORD_APPLICATION_ID, DISCORD_GUILD_ID hoặc DISCORD_BOT_TOKEN")
