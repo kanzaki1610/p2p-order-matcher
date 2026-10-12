@@ -129,6 +129,10 @@ async def process_ad_pricing(db, client):
             if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"}:
                 await confirm(db, client, attempt, slot)
                 continue
+            if attempt.paused_by_floor and attempt.result_ad_id != slot.adv_id:
+                attempt.paused_by_floor = False
+                db.commit()
+                await notice(db, attempt, slot, "CONFIG_CHANGED", "Slot đã đổi ID; không dùng trạng thái bot tạm ẩn của quảng cáo cũ để mở quảng cáo mới.")
             if not re.fullmatch(r"[0-9]{1,30}", slot.adv_id or "") or slot.adv_id in duplicate_ids:
                 await notice(db, attempt, slot, "BLOCKED", "ID quảng cáo thiếu/sai hoặc được gán cho nhiều slot; chưa chỉnh giá.")
                 continue
