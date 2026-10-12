@@ -1,14 +1,14 @@
-# OKX rank-10 pricing — original account only
+# OKX configurable-rank pricing — original account only
 
 The repricing worker defaults OFF. Existing payment matching and OKX/MEXC release settings are independent. The friend account cannot enable this feature.
 
 Source: public AutoP2P panels https://autop2p.biz/?api=panel&panel=okx_buy and panel=okx_sell. No exchange credentials are sent to AutoP2P. The worker rejects stale/error data (>30 seconds), wrong panels, malformed rows, and fewer than ten competitors.
 
 Policy:
-- Follow the tenth displayed competitor advertisement after excluding every case-insensitive VNTrader row. Preserve source order; count advertisements, not distinct nicknames. No additional ±1 VND, re-sort or restriction/amount filtering. Matching its price does not guarantee actual exchange position when prices tie.
-- BUY: use that rank-10 price on an existing owned advertisement. This does not create an order or transfer money.
+- Follow the selected displayed competitor advertisement (default rank 10) after excluding every case-insensitive VNTrader row. Preserve source order; count advertisements, not distinct nicknames. No additional ±1 VND, re-sort or restriction/amount filtering. Matching its price does not guarantee actual exchange position when prices tie.
+- BUY: use that selected-rank price on an existing owned advertisement. This does not create an order or transfer money.
 - SELL: use the latest authenticated completed, payment-confirmed USDT/VND BUY unit price, ordered by completion timestamp, plus 10 VND/USDT as the floor. Read all history pages (maximum 100 pages of 20), then verify detail. Missing/inconsistent history or reaching the cap blocks changes; canceled orders are excluded.
-- When rank-10 SELL falls below the floor, temporarily hide the SELL advertisement. Equality is allowed. Only advertisements hidden by this worker for the floor can be shown again automatically. Manually hidden advertisements retain their hidden state when their price is updated.
+- When selected-rank SELL falls below the floor, temporarily hide the SELL advertisement. Equality is allowed. Only advertisements hidden by this worker for the floor can be shown again automatically. Manually hidden advertisements retain their hidden state when their price is updated.
 - The 10 VND spread is before fees and uses the latest purchase, not average inventory cost.
 
 The authenticated preview POST /dashboard/api/okx/rank-preview accepts side, use_latest_purchase (default true), optional cost_basis for explicit simulations with use_latest_purchase=false, and notify_preview (default false). Preview never calls exchange writes. Preview notifications are labeled simulation.
@@ -64,3 +64,4 @@ Configure the original application's existing settings in Render:
 Set the app's Interactions Endpoint URL to https://p2p-order-matcher.onrender.com/webhooks/discord. A valid signed PING is supported once application ID/public key are configured, even while commands are disabled. Authorize the app on the original guild with applications.commands scope. Register only this command with python -m scripts.register_discord_commands --pricing-only. This upserts /gia without replacing unrelated commands. Discord admin/operator integration permissions and the server-side operator allowlist both apply. Enable DISCORD_PRICING_COMMANDS_ENABLED only after verifying the account, channel and operator.
 
 Webhook-only outbound notifications cannot receive slash commands; missing app credentials or installation must be completed before /gia is usable. Bot credentials are used for registration only; interaction signature checks and user/channel restrictions remain mandatory.
+
