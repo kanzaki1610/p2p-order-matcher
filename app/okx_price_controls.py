@@ -153,7 +153,14 @@ async def execute_price_command(data, db, user_id):
         return "Bám giá hiện chỉ hỗ trợ tài khoản gốc."
     commands=data.get('options',[])
     if len(commands)==1 and commands[0].get('name') in {'bamtat','danhsach','quangcao','auto'}:
-        return await manage_price_command(data,db,user_id)
+        try:
+            return await manage_price_command(data,db,user_id)
+        except ValueError as error:
+            db.rollback()
+            return 'Chưa thay đổi cấu hình: ' + str(error)
+        except Exception as error:
+            db.rollback()
+            return 'Chưa hoàn tất thao tác. Dùng /gia trangthai để kiểm tra trước khi thử lại: ' + error_detail(error)
     action, side, rank = parse_price_command(data)
     if action == "vitri":
         save_ranks(db, {side.lower()+"_rank": rank}, actor="discord:"+user_id)
