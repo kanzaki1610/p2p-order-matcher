@@ -32,6 +32,8 @@ def validate_account(primary: Settings, secondary: Settings) -> None:
         raise ValueError("Configure interactive Discord commands separately before enabling")
     if secondary.bitget_p2p_enabled:
         raise ValueError("kayhap supports OKX and MEXC only")
+    if secondary.okx_ad_pricing_enabled:
+        raise ValueError("Ad pricing is available only for the original account")
     if secondary.notification_provider != "discord":
         raise ValueError("kayhap notifications must use Discord")
     hooks = ("discord_webhook_orders", "discord_webhook_payment_detected",

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     discord_webhook_confirmed: str = ""
     discord_webhook_system_alerts: str = ""
     discord_webhook_pricing_alerts: str = ""
+    okx_ad_pricing_enabled: bool = False
+    okx_ad_pricing_seconds: int = 60
     discord_commands_enabled: bool = False
     discord_application_id: str = ""
     discord_public_key: str = ""

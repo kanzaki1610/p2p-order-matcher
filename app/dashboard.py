@@ -30,6 +30,7 @@ from .models import (
 from .okx_pricing import CompetitorOffer, parse_name_list, propose_price
 from .okx_ads import read_ad, summary as ad_summary, price_preview
 from .okx_rank import read_rank_plan, send_preview_alert
+from .okx_cost import read_last_buy_cost
 from .okx_release import failure_reason
 import httpx
 
@@ -49,6 +50,7 @@ class RankPricePreview(BaseModel):
     side: Literal["BUY", "SELL"]
     cost_basis: Decimal | None = Field(default=None, gt=0)
     notify_preview: bool = False
+    use_latest_purchase: bool = True
 
 
 class ConfigUpdate(BaseModel):
@@ -156,7 +158,14 @@ async def preview_rank_price(payload: RankPricePreview, _: None = Depends(verify
         raise HTTPException(status_code=403, detail="Bám giá hiện chỉ chuẩn bị cho tài khoản gốc")
     try:
         async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
-            plan = await read_rank_plan(client, payload.side, payload.cost_basis)
+            cost = None
+            basis = payload.cost_basis
+            if payload.side == "SELL" and payload.use_latest_purchase:
+                cost = await read_last_buy_cost(client)
+                basis = Decimal(cost["unit_price"])
+            plan = await read_rank_plan(client, payload.side, basis)
+        if cost:
+            plan["cost_source"] = cost
         if payload.notify_preview:
             plan["preview_alert_sent"] = await send_preview_alert(plan)
         return plan
@@ -166,6 +175,8 @@ async def preview_rank_price(payload: RankPricePreview, _: None = Depends(verify
         raise HTTPException(status_code=502, detail="Không kết nối được AutoP2P; chưa điều chỉnh quảng cáo") from None
     except ValueError:
         raise HTTPException(status_code=422, detail="Dữ liệu giá vốn hoặc phản hồi AutoP2P không hợp lệ") from None
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=failure_reason(error)) from None
 
 
 @router.post("/dashboard/api/okx/ads/{ad_id}/preview")
@@ -471,6 +482,14 @@ def dashboard_state(
             "secret_configured": bool(settings.okx_api_secret),
             "passphrase_configured": bool(settings.okx_api_passphrase),
             "p2p_connector": "NOT_CONNECTED",
+        },
+        "ad_pricing": {
+            "enabled": settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap",
+            "interval_seconds": max(60, settings.okx_ad_pricing_seconds),
+            "cost_mode": "LAST_COMPLETED_BUY",
+            "rank": 10,
+            "minimum_spread_vnd": 10,
+            "alert_configured": bool(settings.discord_webhook_pricing_alerts),
         },
         "bitget": {
             "enabled": settings.bitget_p2p_enabled,

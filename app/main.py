@@ -12,6 +12,7 @@ from .bitget_sync import bitget_sync_loop
 from .mexc_sync import mexc_sync_loop
 from .okx_sync import okx_sync_loop
 from .okx_release import OKXReleaseAttempt
+from .okx_ad_worker import pricing_loop
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -31,6 +32,26 @@ app.include_router(discord_router)
 bitget_task: asyncio.Task | None = None
 mexc_task: asyncio.Task | None = None
 okx_task: asyncio.Task | None = None
+pricing_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def start_ad_pricing():
+    global pricing_task
+    if settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap":
+        pricing_task = asyncio.create_task(pricing_loop())
+
+
+@app.on_event("shutdown")
+async def stop_ad_pricing():
+    global pricing_task
+    if pricing_task:
+        pricing_task.cancel()
+        try:
+            await pricing_task
+        except asyncio.CancelledError:
+            pass
+        pricing_task = None
 
 
 @app.on_event("startup")
