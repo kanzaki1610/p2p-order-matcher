@@ -28,10 +28,20 @@ from .models import (
     OKXSlot,
 )
 from .okx_pricing import CompetitorOffer, parse_name_list, propose_price
+from .okx_ads import read_ad, summary as ad_summary, price_preview
+from .okx_release import failure_reason
+import httpx
 
 
 router = APIRouter()
 DASHBOARD_FILE = Path(__file__).with_name("dashboard.html")
+
+
+class AdPricePreview(BaseModel):
+    side: Literal["BUY", "SELL"]
+    price: Decimal = Field(gt=0)
+    min_price: Decimal = Field(gt=0)
+    max_price: Decimal = Field(gt=0)
 
 
 class ConfigUpdate(BaseModel):
@@ -117,6 +127,34 @@ def verify_dashboard_key(x_admin_key: str = Header(default="")) -> None:
         )
     if not secrets.compare_digest(x_admin_key, settings.dashboard_admin_key):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Khóa quản trị không hợp lệ")
+
+
+@router.get("/dashboard/api/okx/ads/{ad_id}")
+async def inspect_okx_ad(ad_id: str, _: None = Depends(verify_dashboard_key)):
+    if settings.database_schema == "kayhap":
+        raise HTTPException(status_code=403, detail="Kết nối quảng cáo hiện chỉ chuẩn bị cho tài khoản gốc")
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
+            row = await read_ad(client, ad_id)
+        return {"mode": "READ_ONLY", "ad": ad_summary(row), "live_action_performed": False}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=failure_reason(error)) from None
+
+
+@router.post("/dashboard/api/okx/ads/{ad_id}/preview")
+async def preview_okx_ad(ad_id: str, payload: AdPricePreview, _: None = Depends(verify_dashboard_key)):
+    if settings.database_schema == "kayhap":
+        raise HTTPException(status_code=403, detail="Kết nối quảng cáo hiện chỉ chuẩn bị cho tài khoản gốc")
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
+            row = await read_ad(client, ad_id)
+        return price_preview(row, payload.side, payload.price, payload.min_price, payload.max_price)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=failure_reason(error)) from None
 
 
 def verify_browser_bridge_key(x_bridge_key: str = Header(default="")) -> None:
