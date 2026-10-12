@@ -81,7 +81,7 @@ async def execute_price_command(data, db, user_id):
     status = "ĐANG BẬT" if settings.okx_ad_pricing_enabled else "ĐANG TẮT — chỉ lưu vị trí, chưa sửa quảng cáo thật"
     reply = f"Bám giá OKX: {status}.\nVị trí mua: {prefs['buy_rank']} · vị trí bán: {prefs['sell_rank']}.\nGiá bán luôn phải đạt giá mua hoàn tất gần nhất +10đ."
     if action == "trangthai": return reply
-    if action == "vitri": reply = "Đã lưu vị trí. Worker sẽ đọc ở chu kỳ kế tiếp khi được bật.\n"+reply
+    if action == "vitri": reply = "Đã lưu vị trí. Bot sẽ áp dụng ở lần quét kế tiếp khi bám giá được bật.\n"+reply
     rank = selected_rank(db, side)
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
@@ -89,7 +89,7 @@ async def execute_price_command(data, db, user_id):
             plan = await read_rank_plan(client, side, cost["unit_price"] if cost else None, target_rank=rank)
         reply += f"\n{side} · vị trí {rank} · giá tham chiếu: {plan.get('proposed_price') or 'chưa có'}đ/USDT."
         if cost: reply += f"\nGiá vốn {cost['unit_price']}đ · bán tối thiểu {plan.get('minimum_sell_price') or 'chưa xác minh'}đ."
-        reply += "\n" + {"UPDATE_PRICE":"Đủ điều kiện về nguồn giá và giá vốn để bám giá khi worker bật.","HIDE_AD":"Giá bán dưới mức tối thiểu; worker sẽ giữ/tạm ẩn khi bật.","BLOCKED":"Chưa đủ dữ liệu; chưa sửa/ẩn theo nguồn này."}[plan["action"]]
+        reply += "\n" + {"UPDATE_PRICE":"Nguồn giá hợp lệ để bám theo khi tính năng được bật.","HIDE_AD":"Giá bán dưới mức tối thiểu; bot sẽ giữ/tạm ẩn khi bám giá được bật.","BLOCKED":"Chưa đủ dữ liệu; chưa sửa/ẩn theo nguồn này."}[plan["action"]]
     except Exception as error:
         reply += "\nVị trí vẫn đã lưu; chưa xác minh được giá tham chiếu: " + error_detail(error)
-    return reply + "\nLệnh Discord này không gửi yêu cầu sửa/ẩn trực tiếp lên OKX."
+    return reply + "\nGiá hiển thị là giá dự kiến; bot áp dụng theo trạng thái bám giá ở trên."
