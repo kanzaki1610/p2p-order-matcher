@@ -36,3 +36,31 @@ Durable okx_ad_price_attempts states prevent automatic write retries after timeo
 PRICING_ALERT routes only to original #price-alerts, with no fallback to other channels or the friend's server. Missing/invalid webhook blocks pricing. Notifications cover hiding, resuming, missing cost, source failures, and uncertain operations; identical notices are deduplicated. Responses, signed URLs and credentials are not included.
 
 Tests use mock exchange writes and isolated SQLite. Live preparation only reads exchange data; an actual financial price/hide operation is not claimed tested until the user activates and observes it.
+
+## User-selected rank and mobile Discord controls
+
+Ranks are stored in the original database's okx_price_preferences singleton: buy_rank and sell_rank, both default 10, integers 1–50. PATCH /dashboard/api/okx/pricing-preferences changes only supplied fields, authenticated with X-Admin-Key. Dashboard > Bám giá provides separate buy/sell inputs, save buttons and real-source preview. Existing release flags and the pricing master switch are unchanged by rank edits.
+
+The worker reads the same stored side rank each cycle, and abandons a pending pre-submit plan if that rank changed during its API reads. Fewer competitors than the selected rank blocks adjustments; there is no fallback rank. Equal prices do not guarantee an exact exchange ranking.
+
+Discord guild-only slash commands:
+- /gia vitri chieu:BUY vitri:6 — save BUY rank 6 and show reference price.
+- /gia vitri chieu:SELL vitri:12 — save SELL rank 12 and verify latest BUY cost +10 floor.
+- /gia xem chieu:BUY or SELL — preview without changing preferences or exchange ads.
+- /gia trangthai — show both ranks and master flag.
+
+Discord shows localized Mua USDT / Bán USDT choices. Replies are ephemeral. Requests require a valid Ed25519 signature, recent timestamp, matching application/guild, allowed channel and operator ID/role. Interaction receipts prevent replay. /gia is rejected for kayhap; no remote enable, release, create-order or bank-payment command is added. A rank save applies on the next worker cycle only if the user has already enabled OKX_AD_PRICING_ENABLED.
+
+Configure the original application's existing settings in Render:
+- DISCORD_APPLICATION_ID and DISCORD_PUBLIC_KEY from Developer Portal General Information.
+- DISCORD_BOT_TOKEN entered directly by the user; never share in chat or commit.
+- DISCORD_GUILD_ID=368802651904802818.
+- DISCORD_COMMAND_CHANNEL_IDS=1559226664012095598 (#price-alerts).
+- DISCORD_ALLOWED_USER_IDS=<verified original operator's Discord user ID>.
+- DISCORD_ALLOWED_ROLE_IDS empty unless explicitly approved.
+- DISCORD_PRICING_COMMANDS_ENABLED=false until interactive access is approved/configured.
+- Keep DISCORD_COMMANDS_ENABLED=false if legacy confirm/p2p commands should remain disabled.
+
+Set the app's Interactions Endpoint URL to https://p2p-order-matcher.onrender.com/webhooks/discord. A valid signed PING is supported once application ID/public key are configured, even while commands are disabled. Authorize the app on the original guild with applications.commands scope. Register only this command with python -m scripts.register_discord_commands --pricing-only. This upserts /gia without replacing unrelated commands. Discord admin/operator integration permissions and the server-side operator allowlist both apply. Enable DISCORD_PRICING_COMMANDS_ENABLED only after verifying the account, channel and operator.
+
+Webhook-only outbound notifications cannot receive slash commands; missing app credentials or installation must be completed before /gia is usable. Bot credentials are used for registration only; interaction signature checks and user/channel restrictions remain mandatory.
