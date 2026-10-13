@@ -67,6 +67,34 @@ def test_panel_and_modals_fit_discord_limits():
         assert len(row['components'])<=5
         assert all(len(x['custom_id'])<=100 for x in row['components'])
     assert ui.modal('price','BUY')['type']==9
+    fields=ui.modal('price','BUY')['data']['components']
+    assert len(fields)==5
+    assert all(len(row['components'][0]['label'])<=45 for row in fields)
+
+def test_expanded_preview_keeps_original_when_blank(db,monkeypatch):
+    original=ad();original.update(minOrderSize='1000000',maxOrderSize='10000000',availableAmount='500',completedOrderCryptoAmount='10',onHoldAmount='0')
+    monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=original))
+    result=asyncio.run(ui.manual_preview(db,'owner','BUY',1,Decimal(26050),{'cryptoAmount':'1000','minOrderLimit':'2.000.000','maxOrderLimit':'5000000'}))
+    terms=__import__('json').loads(db.query(ui.ManualAdTerms).one().terms_json)
+    assert terms=={'cryptoAmount':'1000','minOrderLimit':'2000000','maxOrderLimit':'5000000'}
+    assert '510' in result['content'] and 'Số lượng USDT' in result['content']
+
+@pytest.mark.parametrize('terms',[{'minOrderLimit':'6000000','maxOrderLimit':'5000000'},{'cryptoAmount':'1','minOrderLimit':'1000000'},{'cryptoAmount':'0'},{'maxOrderLimit':'2.5'}])
+def test_invalid_terms_never_create_draft(db,monkeypatch,terms):
+    monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=ad()))
+    with pytest.raises(ValueError):asyncio.run(ui.manual_preview(db,'owner','BUY',1,Decimal(26050),terms))
+    assert db.query(ui.ManualPriceDraft).count()==0
+
+def test_unverified_limits_never_report_success(db,monkeypatch):
+    row=ad();row.update(minOrderSize='1000000',maxOrderSize='10000000')
+    monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=row))
+    asyncio.run(ui.manual_preview(db,'owner','BUY',1,Decimal(26060),{'maxOrderLimit':'5000000'}))
+    draft=db.query(ui.ManualPriceDraft).one()
+    request=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(ui,'request',request)
+    result=asyncio.run(ui.manual_confirm(db,'owner',draft.id))
+    assert request.call_args.args[3]['maxOrderLimit']=='5000000'
+    assert 'chưa xác minh đúng' in result
+    assert db.query(ui.OKXAdPriceAttempt).one().state=='CONFIRMING'
 
 def test_timeout_is_not_retried(db,monkeypatch):
     monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=ad()))

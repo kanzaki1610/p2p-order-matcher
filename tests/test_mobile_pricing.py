@@ -61,3 +61,24 @@ def test_friend_cannot_modify_original(db,monkeypatch):
     monkeypatch.setattr(controls.settings,'database_schema','kayhap')
     assert 'tài khoản gốc' in asyncio.run(controls.execute_price_command(command('bamtat',bat=False),db,'friend'))
     assert db.get(OKXPricingSwitch,1) is None
+
+@pytest.mark.parametrize('old_closed',[True,False])
+def test_rebind_stale_ad_only_after_verified_closed_old_and_auto_off(db,monkeypatch,old_closed):
+    from datetime import datetime,timezone,timedelta
+    from app.okx_release import OKXRequestError
+    slot=db.query(OKXSlot).one();slot.auto_enabled=False
+    db.add(worker.OKXAdPriceAttempt(slot_id=slot.id,state='UNKNOWN',old_ad_id='123',last_action_at=datetime.now(timezone.utc)-timedelta(minutes=5),reason='old unknown'))
+    db.commit()
+    new={'side':'buy','status':'new','type':'limit','unitPrice':'26100'}
+    old_error=OKXRequestError('OKX HTTP 400; mã API: 55651.' if old_closed else 'OKX HTTP 400; mã API: 55349.')
+    read=AsyncMock(side_effect=[new,old_error]);monkeypatch.setattr(controls,'read_ad',read)
+    reply=asyncio.run(controls.execute_price_command(command('quangcao',chieu='BUY',slot=1,id='456'),db,'owner'))
+    db.expire_all()
+    if old_closed:
+        assert db.query(OKXSlot).one().adv_id=='456'
+        assert db.query(worker.OKXAdPriceAttempt).one().state=='IDLE'
+        assert not db.query(OKXSlot).one().auto_enabled
+    else:
+        assert 'Chưa thay đổi' in reply
+        assert db.query(worker.OKXAdPriceAttempt).one().state=='UNKNOWN'
+        assert db.query(OKXSlot).one().adv_id=='123'
