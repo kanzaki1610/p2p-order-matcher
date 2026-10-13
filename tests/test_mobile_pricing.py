@@ -82,3 +82,16 @@ def test_rebind_stale_ad_only_after_verified_closed_old_and_auto_off(db,monkeypa
         assert 'Chưa thay đổi' in reply
         assert db.query(worker.OKXAdPriceAttempt).one().state=='UNKNOWN'
         assert db.query(OKXSlot).one().adv_id=='123'
+
+def test_dashboard_changed_id_can_recover_when_globally_paused(db,monkeypatch):
+    from datetime import datetime,timezone,timedelta
+    from app.okx_release import OKXRequestError
+    slot=db.query(OKXSlot).one();slot.adv_id='456';slot.auto_enabled=True
+    db.add(OKXPricingSwitch(id=1,enabled=False))
+    db.add(worker.OKXAdPriceAttempt(slot_id=slot.id,state='UNKNOWN',old_ad_id='123',last_action_at=datetime.now(timezone.utc)-timedelta(minutes=5)));db.commit()
+    monkeypatch.setattr(controls,'read_ad',AsyncMock(side_effect=[{'side':'buy','status':'new','type':'limit','unitPrice':'26038'},OKXRequestError('OKX HTTP 400; mã API: 55651.')]))
+    reply=asyncio.run(controls.execute_price_command(command('quangcao',chieu='BUY',slot=1,id='456'),db,'owner'))
+    db.expire_all()
+    assert 'Đã lưu' in reply and not db.query(OKXSlot).one().auto_enabled
+    assert db.query(worker.OKXAdPriceAttempt).one().state=='IDLE'
+    assert not controls.pricing_active(db)
