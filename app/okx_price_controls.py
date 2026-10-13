@@ -61,7 +61,7 @@ async def manage_price_command(data, db, user_id):
                 if not re.fullmatch(r'[0-9]{1,30}',code): continue
                 row=await read_ad(client,code)
                 if row['side'] == side.lower():
-                    result.append(f"ID {code} · giá {number(row['unitPrice'])}đ · {'đang ẩn' if row.get('isHidden') else 'đang hiển thị'}")
+                    result.append(f"ID {code} · giá {number(row['unitPrice'])}đ · {'đang ẩn' if row.get('isHidden') else 'đang hiển thị'}\nUSDT khả dụng: {row.get('availableAmount','chưa có')} · hạn mức: {row.get('minOrderSize','chưa có')}–{row.get('maxOrderSize','chưa có')} VND")
         return '\n'.join(result) or 'Chưa có quảng cáo hoạt động cho chiều này.'
     slot_number = options.get('slot')
     if type(slot_number) is not int or slot_number not in {1,2}: raise ValueError('Chọn slot 1 hoặc 2.')
@@ -81,10 +81,34 @@ async def manage_price_command(data, db, user_id):
     elif action == 'quangcao':
         code=options.get('id')
         if not isinstance(code,str) or not re.fullmatch(r'[0-9]{1,30}',code): raise ValueError('ID quảng cáo phải là số.')
-        if attempt and attempt.state != 'IDLE': raise ValueError('Không đổi ID khi yêu cầu cũ chưa xác định kết quả.')
-        async with httpx.AsyncClient(timeout=30) as client: row=await read_ad(client,code)
+        if attempt and attempt.state!='IDLE':
+            from datetime import datetime,timezone
+            last=attempt.last_action_at
+            last=last.replace(tzinfo=timezone.utc) if last and not last.tzinfo else last
+            if slot.auto_enabled or attempt.state=='SUBMITTING' or not last or (datetime.now(timezone.utc)-last).total_seconds()<120 or code==slot.adv_id:
+                raise ValueError('Tắt Auto của slot và chờ yêu cầu cũ kết thúc trước khi chọn ID khác. Không gửi lại yêu cầu cũ.')
+        async with httpx.AsyncClient(timeout=30) as client:
+            row=await read_ad(client,code)
+            if attempt and attempt.state != 'IDLE':
+                from datetime import datetime,timezone
+                from .okx_release import OKXRequestError, failure_reason
+                last=attempt.last_action_at
+                last=last.replace(tzinfo=timezone.utc) if last and not last.tzinfo else last
+                if slot.auto_enabled or attempt.state=='SUBMITTING' or not last or (datetime.now(timezone.utc)-last).total_seconds()<120 or code==slot.adv_id:
+                    raise ValueError('Tắt Auto của slot và chờ yêu cầu cũ kết thúc trước khi chọn ID khác. Không gửi lại yêu cầu cũ.')
+                closed=False
+                try:
+                    old=await read_ad(client,slot.adv_id)
+                    closed=old.get('status') in {'cancelled','canceled','closed'}
+                except OKXRequestError as error:
+                    closed='mã API: 55651.' in failure_reason(error)
+                if not closed: raise ValueError('Chưa xác minh quảng cáo cũ đã ngừng tồn tại; không thay ID để bỏ qua trạng thái chưa rõ.')
         if row['side'] != side.lower() or row.get('type')!='limit' or row.get('status')!='new': raise ValueError('Quảng cáo sai chiều hoặc không còn hoạt động với giá cố định.')
         if db.scalar(select(OKXSlot.id).where(OKXSlot.id!=slot.id,OKXSlot.adv_id==code)): raise ValueError('ID này đã được gán cho slot khác.')
+        if attempt and attempt.state!='IDLE':
+            db.add(OKXAuditLog(action='OKX_OLD_AD_ATTEMPT_ARCHIVED',actor=actor,detail=f'Old ad={attempt.old_ad_id}; result={attempt.result_ad_id}; state={attempt.state}; action={attempt.action}; price={attempt.price}; reason={attempt.reason}; user-selected new ad={code}. Old request never resubmitted.'))
+            reset=db.execute(update(OKXAdPriceAttempt).where(OKXAdPriceAttempt.slot_id==slot.id,OKXAdPriceAttempt.state==attempt.state,OKXAdPriceAttempt.old_ad_id==attempt.old_ad_id).values(state='IDLE',action=None,old_ad_id=None,result_ad_id=None,price=None,hidden=None,paused_by_floor=False,last_action_at=None,reason=None,notified_key=None))
+            if reset.rowcount!=1: db.rollback();raise ValueError('Yêu cầu đang thay đổi trạng thái; kiểm tra lại trước khi chọn ID.')
         db.execute(update(OKXSlot).where(OKXSlot.id==slot.id).values(adv_id=code,current_price=number(row['unitPrice']),auto_enabled=False))
         detail=f'{side} slot {slot_number}: ID={code}; Auto=False'
     else: raise ValueError('Lệnh không được hỗ trợ.')

@@ -73,6 +73,10 @@ async def confirm(db, client, attempt, slot, plan=None):
         await notice(db, attempt, slot, "UNKNOWN", "Chưa xác định kết quả sửa/ẩn quảng cáo. Kiểm tra OKX; không tự gửi lại yêu cầu.")
         return False
     row = await read_ad(client, attempt.result_ad_id)
+    db.refresh(slot)
+    if slot.adv_id != attempt.old_ad_id:
+        await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'Slot đã đổi ID trong lúc đọc kết quả; không ghi đè quảng cáo mới.')
+        return False
     collision = db.scalar(select(OKXSlot.id).where(OKXSlot.id != slot.id,
         OKXSlot.adv_id == attempt.result_ad_id, OKXSlot.auto_enabled.is_(True)))
     if collision is not None:
