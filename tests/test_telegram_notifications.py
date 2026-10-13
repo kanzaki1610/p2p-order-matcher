@@ -29,10 +29,8 @@ def test_payment_notification_contains_only_requested_fields():
         "Ngân hàng: VPBANK\n"
         "Số tiền: 2,003 VND\n"
         "Nội dung: DUONG DUC HUY chuyen 32345\n"
-        "Điểm khớp: 80/100\n"
-        "Lý do:\n"
         "Số tiền đủ (nhận ≥ tiền lệnh)\n"
-        "Họ tên chính xác"
+        "Có thông tin họ tên đối chiếu"
     )
     assert "Mã GD" not in message
     assert "Hành động" not in message
@@ -55,6 +53,5 @@ def test_payment_notification_explicitly_marks_mismatches():
         reasons=["Đúng ngân hàng dự kiến +5"],
     )
 
-    assert "Điểm khớp: 5/100" in message
-    assert "Số tiền chưa đạt điều kiện" in message
-    assert "Họ tên KHÔNG KHỚP" in message
+    assert "Điểm khớp" not in message and '+5' not in message
+    assert "Họ tên KHÔNG KHỚP" not in message
