@@ -85,7 +85,7 @@ async def manage_price_command(data, db, user_id):
             from datetime import datetime,timezone
             last=attempt.last_action_at
             last=last.replace(tzinfo=timezone.utc) if last and not last.tzinfo else last
-            if slot.auto_enabled or attempt.state=='SUBMITTING' or not last or (datetime.now(timezone.utc)-last).total_seconds()<120 or code==slot.adv_id:
+            if (slot.auto_enabled and pricing_active(db)) or attempt.state=='SUBMITTING' or not last or (datetime.now(timezone.utc)-last).total_seconds()<120 or code==(attempt.old_ad_id or slot.adv_id):
                 raise ValueError('Tắt Auto của slot và chờ yêu cầu cũ kết thúc trước khi chọn ID khác. Không gửi lại yêu cầu cũ.')
         async with httpx.AsyncClient(timeout=30) as client:
             row=await read_ad(client,code)
@@ -94,11 +94,11 @@ async def manage_price_command(data, db, user_id):
                 from .okx_release import OKXRequestError, failure_reason
                 last=attempt.last_action_at
                 last=last.replace(tzinfo=timezone.utc) if last and not last.tzinfo else last
-                if slot.auto_enabled or attempt.state=='SUBMITTING' or not last or (datetime.now(timezone.utc)-last).total_seconds()<120 or code==slot.adv_id:
+                if (slot.auto_enabled and pricing_active(db)) or attempt.state=='SUBMITTING' or not last or (datetime.now(timezone.utc)-last).total_seconds()<120 or code==(attempt.old_ad_id or slot.adv_id):
                     raise ValueError('Tắt Auto của slot và chờ yêu cầu cũ kết thúc trước khi chọn ID khác. Không gửi lại yêu cầu cũ.')
                 closed=False
                 try:
-                    old=await read_ad(client,slot.adv_id)
+                    old=await read_ad(client,attempt.old_ad_id or slot.adv_id)
                     closed=old.get('status') in {'cancelled','canceled','closed'}
                 except OKXRequestError as error:
                     closed='mã API: 55651.' in failure_reason(error)
