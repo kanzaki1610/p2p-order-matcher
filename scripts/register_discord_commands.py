@@ -22,6 +22,7 @@ PRICE_COMMAND = {"name":"gia", "description":"Chọn vị trí bám giá OKX và
 SLOT_OPTION = {"name":"slot","description":"Slot quảng cáo 1 hoặc 2","type":4,"required":True,"min_value":1,"max_value":2}
 ON_OPTION = {"name":"bat","description":"True để bật, False để tắt","type":5,"required":True}
 PRICE_COMMAND['options'] += [
+    {"name":"bang","description":"Mở bảng nút điều khiển giá trên điện thoại","type":1},
     {"name":"danhsach","description":"Xem ID và giá các quảng cáo của bạn trên OKX","type":1,"options":[SIDE_OPTION]},
     {"name":"quangcao","description":"Chọn ID quảng cáo cho slot; tắt Auto để bạn kiểm tra","type":1,"options":[SIDE_OPTION,SLOT_OPTION,{"name":"id","description":"ID quảng cáo OKX của bạn","type":3,"required":True}]},
     {"name":"auto","description":"Bật hoặc tắt bám giá một slot","type":1,"options":[SIDE_OPTION,SLOT_OPTION,ON_OPTION]},
