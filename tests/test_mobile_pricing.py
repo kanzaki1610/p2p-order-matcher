@@ -22,6 +22,13 @@ def db(monkeypatch):
 def command(name,**options):
     return {'options':[{'name':name,'options':[{'name':k,'value':v} for k,v in options.items()]}]}
 
+@pytest.mark.parametrize('action',['danhsach','auto','quangcao','bamtat'])
+def test_new_commands_pass_interaction_parser(action):
+    from app.discord_commands import command_text
+    data=command(action,chieu='BUY',slot=1,id='123',bat=False)
+    data['name']='gia'
+    assert command_text(data)=='/gia'
+
 def test_pause_blocks_worker_and_resume_keeps_slots(db,monkeypatch):
     request=AsyncMock()
     monkeypatch.setattr(worker,'request',request)
