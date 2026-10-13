@@ -147,3 +147,18 @@ def test_release_warning_same_state_reason_not_repeated_after_transition(db,monk
     attempt.notified_state=None;db.commit()
     asyncio.run(okx_release.notify_attempt(db,attempt,o,'Lỗi kiểm thử'))
     assert sender.await_count==1
+
+
+def test_bank_aliases_in_payment_rules():
+    from types import SimpleNamespace
+    from app.matching import payment_identity, satisfies_payment_rules
+    from app.mexc_sync import _bank_name
+    order=SimpleNamespace(side='SELL',expected_bank='MBBANK',order_code='123456789',counterparty_name='NGUYEN VAN BA',fiat_amount=Decimal(100000))
+    for bank in ('MB','MBbank','MBBank','MB Bank'):
+        tx=SimpleNamespace(bank=bank,direction='CREDIT',amount=Decimal(100000),description='123456789',sender_name=None)
+        assert payment_identity(order,tx)
+        assert satisfies_payment_rules(order,tx)
+        assert _bank_name({'confirmPaymentInfo':{'bankName':bank}})=='MB'
+    tx.bank='ACB'
+    assert not payment_identity(order,tx)
+    assert not satisfies_payment_rules(order,tx)
