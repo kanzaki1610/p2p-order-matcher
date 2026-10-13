@@ -55,6 +55,21 @@ def command_text(data):
     raise ValueError("Lệnh không được hỗ trợ")
 
 
+async def claim_and_run_command(payload, text):
+    try:
+        with SessionLocal() as db:
+            db.add(DiscordInteractionReceipt(interaction_id=str(payload['id'])))
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                return
+    except Exception:
+        logger.error('Discord interaction claim failed')
+        return
+    await run_command(payload, text)
+
+
 async def run_command(payload, text):
     member = payload["member"]
     user = member["user"]
@@ -117,12 +132,5 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
             raise ValueError("Interaction không hợp lệ")
     except ValueError as exc:
         return {"type": 4, "data": {"content": str(exc), "flags": 64}}
-    with SessionLocal() as db:
-        db.add(DiscordInteractionReceipt(interaction_id=str(payload["id"])))
-        try:
-            db.commit()
-        except IntegrityError:
-            db.rollback()
-            return {"type": 5, "data": {"flags": 64}}
-    background_tasks.add_task(run_command, payload, text)
+    background_tasks.add_task(claim_and_run_command, payload, text)
     return {"type": 5, "data": {"flags": 64}}
