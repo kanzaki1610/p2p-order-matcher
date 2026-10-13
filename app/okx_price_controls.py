@@ -138,11 +138,11 @@ def parse_price_command(data):
         raise ValueError("Dùng /gia vitri, /gia xem hoặc /gia trangthai.")
     command = commands[0]
     action = command.get("name")
-    if action not in {"vitri", "xem", "trangthai"}:
+    if action not in {"vitri", "xem", "trangthai", "danhsach", "auto", "quangcao", "bamtat"}:
         raise ValueError("Lệnh giá không được hỗ trợ.")
     options = {item.get("name"): item.get("value") for item in command.get("options", []) if isinstance(item, dict)}
     side = options.get("chieu")
-    if action != "trangthai" and side not in {"BUY", "SELL"}:
+    if action not in {"trangthai", "bamtat"} and side not in {"BUY", "SELL"}:
         raise ValueError("Chọn chiều Mua hoặc Bán.")
     rank = validate_rank(options.get("vitri")) if action == "vitri" else None
     return action, side, rank
