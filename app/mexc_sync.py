@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .sepay import normalize_bank
 from .database import SessionLocal
 from .matching import match_transaction
 from .mexc import MexcAPIError, MexcP2PClient
@@ -54,7 +55,7 @@ def _bank_name(detail: dict[str, Any]) -> str | None:
         payments = detail.get("paymentInfo") or []
         selected = payments[0] if payments and isinstance(payments[0], dict) else {}
     name = str(selected.get("bankName") or "").strip().upper().replace(" ", "")
-    return name or None
+    return normalize_bank(name) if name else None
 
 
 def _last_five(order_code: str) -> str | None:

@@ -11,12 +11,13 @@ from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .sepay import normalize_bank
 from .models import BankTransaction, P2POrder, PaymentMatch, PaymentAllocation
 
 
 def payment_identity(order, tx):
     return bool(tx.direction == 'CREDIT' and tx.amount > 0 and order.side == 'SELL'
-        and (not order.expected_bank or order.expected_bank == tx.bank)
+        and (not order.expected_bank or normalize_bank(order.expected_bank) == normalize_bank(tx.bank))
         and (memo_contains_order_code(tx.description, order.order_code)
             or same_name(order.counterparty_name, tx.sender_name)
             or memo_contains_name(tx.description, order.counterparty_name)))
@@ -32,7 +33,7 @@ def payment_for_order(db, order, tx):
     if not parts: return tx
     values={column.name:getattr(tx,column.name) for column in BankTransaction.__table__.columns}
     values['amount']=Decimal(0)
-    if tx.id not in {part.id for part in parts} or len({part.bank for part in parts})!=1:
+    if tx.id not in {part.id for part in parts} or len({normalize_bank(part.bank) for part in parts})!=1:
         return SimpleNamespace(**values)
     for part in parts:
         occurred=part.occurred_at.replace(tzinfo=None) if part.occurred_at.tzinfo is None else part.occurred_at.astimezone(timezone.utc).replace(tzinfo=None)
@@ -50,7 +51,7 @@ def reserve_payment(db, order, tx):
     if allocation is not None and allocation.order_id!=order.id:
         return 'REVIEW_REQUIRED',order,0,['Khoản chuyển này đã được giữ cho lệnh khác; không cộng lại.']
     parts=funding_parts(db,order)
-    if parts and any(part.bank!=tx.bank for part in parts):
+    if parts and any(normalize_bank(part.bank)!=normalize_bank(tx.bank) for part in parts):
         tx.status='REVIEW_REQUIRED';db.commit()
         return 'REVIEW_REQUIRED',order,0,['Các khoản chuyển khác ngân hàng nhận; cần kiểm tra trước khi cộng tiền.']
     if allocation is None:
@@ -148,7 +149,7 @@ def satisfies_payment_rules(order: P2POrder, tx: BankTransaction) -> bool:
              or memo_contains_name(tx.description, order.counterparty_name))
         and tx.direction == "CREDIT"
         and order.side == "SELL"
-        and (not order.expected_bank or order.expected_bank == tx.bank)
+        and (not order.expected_bank or normalize_bank(order.expected_bank) == normalize_bank(tx.bank))
     )
 
 
@@ -186,7 +187,7 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
         score += 30
         reasons.append("Nội dung có đúng 5 số cuối ID lệnh +30")
 
-    if order.expected_bank and order.expected_bank == tx.bank:
+    if order.expected_bank and normalize_bank(order.expected_bank) == normalize_bank(tx.bank):
         score += 5
         reasons.append("Đúng ngân hàng dự kiến +5")
 
@@ -272,7 +273,7 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
             f"chỉ ghi có {tx.amount:,.0f} VND một lần; chưa đủ căn cứ xác định tiền thuộc lệnh nào. "
             "Không dùng một giao dịch cho hai lệnh. Kiểm tra từng mã lệnh và lần chuyển tiền riêng.")
     elif not eligible:
-        if best_order.expected_bank and best_order.expected_bank!=tx.bank:
+        if best_order.expected_bank and normalize_bank(best_order.expected_bank)!=normalize_bank(tx.bank):
             reasons.append(f'Không auto: ngân hàng nhận {tx.bank} khác ngân hàng lệnh {best_order.expected_bank}.')
         else:
             reasons.append((f'Không auto: còn thiếu {best_order.fiat_amount-tx.amount:,.0f} VND; ' if tx.amount<best_order.fiat_amount else 'Không auto: ')+"chưa khớp đầy đủ mã lệnh hoặc họ tên người mua; "
