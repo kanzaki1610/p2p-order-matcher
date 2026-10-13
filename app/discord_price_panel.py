@@ -117,7 +117,8 @@ async def execute_panel(payload,db,owner):
         data=command('vitri',chieu=side,vitri=int(value)) if action=='rank' else command('quangcao',chieu=side,slot=int(values.get('slot','0')),id=value)
     elif action=='confirm': return {'content':await manual_confirm(db,owner,code[2]),'components':[]}
     elif action=='cancel':
-        db.execute(update(ManualPriceDraft).where(ManualPriceDraft.id==code[2],ManualPriceDraft.owner==owner).values(used=True));db.commit()
+        changed=db.execute(update(ManualPriceDraft).where(ManualPriceDraft.id==code[2],ManualPriceDraft.owner==owner,ManualPriceDraft.used.is_(False)).values(used=True));db.commit()
+        if changed.rowcount!=1: return {'content':'Xác nhận không tồn tại hoặc đã xử lý. Không thể hủy yêu cầu đã gửi; xem trạng thái trên OKX.','components':[]}
         return {'content':'Đã hủy xác nhận; không gửi yêu cầu sửa giá.','components':[]}
     elif action=='status': data=command('trangthai')
     elif action=='list': data=command('danhsach',chieu=code[2])
