@@ -76,6 +76,19 @@ class PaymentMatch(Base):
     transaction: Mapped[BankTransaction] = relationship(back_populates="matches")
 
 
+class PaymentAllocation(Base):
+    __tablename__ = 'payment_allocations'
+    transaction_id: Mapped[int] = mapped_column(ForeignKey('bank_transactions.id'), primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey('p2p_orders.id'), index=True)
+
+
+class NotificationDelivery(Base):
+    __tablename__ = 'notification_deliveries'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), default='PENDING')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class OrderConfirmation(Base):
     __tablename__ = "order_confirmations"
     __table_args__ = (UniqueConstraint("order_id", name="uq_order_confirmation"),)

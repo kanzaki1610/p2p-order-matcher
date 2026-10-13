@@ -67,11 +67,10 @@ def format_payment_notification(tx: BankTransaction, score: int, reasons: list[s
         f"Ngân hàng: {tx.bank}",
         f"Số tiền: {tx.amount:,.0f} VND",
         f"Nội dung: {content[:300]}",
-        f"Điểm khớp: {score}/100",
-        "Lý do:",
-        "Số tiền đủ (nhận ≥ tiền lệnh)" if amount_matches else "Số tiền chưa đạt điều kiện",
-        "Họ tên chính xác" if name_matches else "Họ tên KHÔNG KHỚP",
     ]
+    if amount_matches: lines.append('Số tiền đủ (nhận ≥ tiền lệnh)')
+    if name_matches and any('có trong nội dung' in reason.casefold() or 'tên người chuyển khớp' in reason.casefold() for reason in reasons):
+        lines.append('Có thông tin họ tên đối chiếu')
     return "\n".join(lines)
 
 

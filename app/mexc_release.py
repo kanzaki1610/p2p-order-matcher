@@ -9,9 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import settings
 from .database import Base
-from .matching import same_name, satisfies_payment_rules
+from .matching import same_name, satisfies_payment_rules, payment_for_order
 from .models import BankTransaction, P2POrder, PaymentMatch
-from .notifications import notify_event
+from .notifications import notify_event, notify_once, release_text
 from .sepay import normalize_bank
 from .diagnostics import error_detail, safe_status
 
@@ -78,22 +78,16 @@ def preflight_reason(order, tx, receipt, row, *, allow_missing_bank=False):
 
 
 async def notify_attempt(db, attempt, order, tx):
+    tx=payment_for_order(db,order,tx)
     if attempt.state == attempt.notified_state or attempt.state == "READY":
         return
     event = {"RELEASED": "CONFIRMED", "SUBMITTED": "AUTO_MATCHED",
         "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED",
         "WAITING_PAYMENT_INFO": "PAYMENT_DETECTED"}.get(attempt.state, "REVIEW_REQUIRED")
-    now = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Ho_Chi_Minh"))
-    text = (f"MEXC P2P\nMã lệnh: {order.order_code}\nNgân hàng: {tx.bank}"
-        f"\nMã GD ngân hàng: {tx.transaction_id}\nNgười mua: {order.counterparty_name or 'Thiếu họ tên'}"
-        f"\nSố tiền: {tx.amount:,.0f} VND\nNội dung: {tx.description or ''}"
-        f"\nSố tiền lệnh: {order.fiat_amount:,.0f} VND\nTiền dư: {tx.amount - order.fiat_amount:,.0f} VND"
-        f"\nTrạng thái mở khóa: {attempt.state}\nThời gian VN: {now:%d/%m/%Y %H:%M:%S}")
-    if attempt.reason:
-        text += "\nLý do: " + attempt.reason
+    text=release_text(db,'MEXC',order,tx,attempt.state,attempt.reason)
     if attempt.state in {"UNKNOWN", "SUBMITTING", "REVIEW_REQUIRED"}:
         text += "\nKiểm tra thủ công trên MEXC. Không tự gửi lại yêu cầu mở khóa."
-    if await notify_event(event, text):
+    if await notify_once(db,f'mexc-release:{order.id}',event,text,f'{attempt.state}|{attempt.reason or ""}',sender=notify_event):
         attempt.notified_state = attempt.state
         db.commit()
 
@@ -105,6 +99,7 @@ async def process_mexc_releases(db, client):
     from .okx_release import OKXReleaseAttempt
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
         order, tx = db.get(P2POrder, match.order_id), db.get(BankTransaction, match.transaction_id)
+        tx=payment_for_order(db,order,tx)
         receipt = db.get(MexcOrderReceipt, order.order_code)
         if receipt is None or db.get(OKXOrderReceipt, order.order_code) is not None:
             continue

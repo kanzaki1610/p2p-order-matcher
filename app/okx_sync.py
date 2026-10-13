@@ -119,12 +119,13 @@ async def reconcile_bank_transactions(db):
     from .notifications import notify_match
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.match_window_minutes)
     transactions = db.scalars(select(BankTransaction).where(
-        BankTransaction.status == "UNMATCHED", BankTransaction.direction == "CREDIT",
+        BankTransaction.status.in_(['UNMATCHED','PARTIAL_PAYMENT','REVIEW_REQUIRED']), BankTransaction.direction == "CREDIT",
         BankTransaction.occurred_at >= cutoff,
     ).order_by(BankTransaction.occurred_at).limit(200)).all()
     for tx in transactions:
+        previous=tx.status
         decision, order, score, reasons = match_transaction(db, tx)
-        if decision != "UNMATCHED":
+        if decision != "UNMATCHED" and decision!=previous:
             await notify_match(decision, order, tx, score, reasons)
 
 

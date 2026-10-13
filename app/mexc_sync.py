@@ -284,15 +284,15 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
         if created and order.status == "WAITING_PAYMENT":
             unmatched_transactions = db.scalars(
                 select(BankTransaction).where(
-                    BankTransaction.status == "UNMATCHED",
-                    BankTransaction.amount >= order.fiat_amount,
+                    BankTransaction.status.in_(['UNMATCHED','PARTIAL_PAYMENT','REVIEW_REQUIRED']),
                     BankTransaction.occurred_at >= start,
                     BankTransaction.occurred_at <= now + timedelta(minutes=15),
                 )
             ).all()
             for tx in unmatched_transactions:
+                previous=tx.status
                 decision, matched_order, score, reasons = match_transaction(db, tx)
-                if matched_order is not None:
+                if matched_order is not None and decision!=previous:
                     reconciled_count += 1
                     await notify_match(decision, matched_order, tx, score, reasons)
 

@@ -10,6 +10,7 @@ from .config import settings
 logger = logging.getLogger(__name__)
 ROUTES = {
     "PAYMENT_DETECTED": "discord_webhook_payment_detected",
+    "PARTIAL_PAYMENT": "discord_webhook_payment_detected",
     "AUTO_MATCHED": "discord_webhook_orders",
     "ORDER_CREATED": "discord_webhook_orders",
     "UNMATCHED": "discord_webhook_review_required",

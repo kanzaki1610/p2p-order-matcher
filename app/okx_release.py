@@ -15,9 +15,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import settings
 from .database import Base
-from .matching import normalize_text, same_name, satisfies_payment_rules
+from .matching import normalize_text, same_name, satisfies_payment_rules, payment_for_order
 from .models import BankTransaction, P2POrder, PaymentMatch
-from .notifications import notify_event
+from .notifications import notify_event, notify_once, release_text
 from .okx_sync import OKXOrderReceipt
 from .diagnostics import safe_status
 from .telegram_commands import format_vietnam_time
@@ -147,22 +147,16 @@ async def notify_attempt(db, attempt, order, reason=None):
         reason = diagnostic.reason
     event = {"RELEASED": "CONFIRMED", "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED",
         "SUBMITTED": "AUTO_MATCHED"}.get(attempt.state, "REVIEW_REQUIRED")
-    text = f"OKX P2P\nMã lệnh: {order.order_code}\nTrạng thái mở khóa: {attempt.state}"
     tx = db.get(BankTransaction, attempt.transaction_id)
-    text += f"\nNgười mua: {order.counterparty_name or 'Thiếu họ tên'}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}"
-    if tx:
-        text += (f"\nMã GD ngân hàng: {tx.transaction_id}\nNgân hàng: {tx.bank}"
-                 f"\nSố tiền: {tx.amount:,.0f} VND\nSố tiền lệnh: {order.fiat_amount:,.0f} VND"
-                 f"\nTiền dư: {tx.amount - order.fiat_amount:,.0f} VND\nNội dung: {tx.description or 'Không có'}")
-    if reason:
-        text += "\nLý do: " + reason
+    if tx: tx=payment_for_order(db,order,tx)
+    text=release_text(db,'OKX',order,tx,attempt.state,reason)
     if attempt.state == "WAITING_BUYER_PAYMENT":
         text += "\nChưa gửi yêu cầu mở khóa."
     elif attempt.state == "SUBMITTED":
         text += "\nOKX đã tiếp nhận yêu cầu; hệ thống đang chờ xác nhận hoàn tất."
     elif attempt.state != "RELEASED":
         text += "\nCần kiểm tra trên OKX. Không tự gửi lại yêu cầu mở khóa."
-    if await notify_event(event, text):
+    if await notify_once(db,f'okx-release:{order.id}',event,text,f'{attempt.state}|{reason or ""}',sender=notify_event):
         attempt.notified_state = attempt.state
         db.commit()
 
@@ -173,6 +167,7 @@ async def process_releases(db, client):
         return
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
         order, tx = db.get(P2POrder, match.order_id), db.get(BankTransaction, match.transaction_id)
+        tx=payment_for_order(db,order,tx)
         from .mexc_release import MexcOrderReceipt, MexcReleaseAttempt
         if db.get(MexcOrderReceipt, order.order_code) is not None or db.scalar(
             select(MexcReleaseAttempt).where(MexcReleaseAttempt.transaction_id == tx.id)):

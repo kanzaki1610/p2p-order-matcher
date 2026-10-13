@@ -4,11 +4,90 @@ from collections import Counter
 from datetime import timedelta, timezone
 from difflib import SequenceMatcher
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from decimal import Decimal
+from types import SimpleNamespace
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import BankTransaction, P2POrder, PaymentMatch
+from .models import BankTransaction, P2POrder, PaymentMatch, PaymentAllocation
+
+
+def payment_identity(order, tx):
+    return bool(tx.direction == 'CREDIT' and tx.amount > 0 and order.side == 'SELL'
+        and (not order.expected_bank or order.expected_bank == tx.bank)
+        and (memo_contains_order_code(tx.description, order.order_code)
+            or same_name(order.counterparty_name, tx.sender_name)
+            or memo_contains_name(tx.description, order.counterparty_name)))
+
+
+def funding_parts(db, order):
+    ids=db.scalars(select(PaymentAllocation.transaction_id).where(PaymentAllocation.order_id==order.id)).all()
+    return db.scalars(select(BankTransaction).where(BankTransaction.id.in_(ids)).order_by(BankTransaction.id)).all() if ids else []
+
+
+def payment_for_order(db, order, tx):
+    parts=funding_parts(db,order)
+    if not parts: return tx
+    values={column.name:getattr(tx,column.name) for column in BankTransaction.__table__.columns}
+    values['amount']=Decimal(0)
+    if tx.id not in {part.id for part in parts} or len({part.bank for part in parts})!=1:
+        return SimpleNamespace(**values)
+    for part in parts:
+        occurred=part.occurred_at.replace(tzinfo=None) if part.occurred_at.tzinfo is None else part.occurred_at.astimezone(timezone.utc).replace(tzinfo=None)
+        created=order.created_at.replace(tzinfo=None) if order.created_at.tzinfo is None else order.created_at.astimezone(timezone.utc).replace(tzinfo=None)
+        if not payment_identity(order,part) or not created-timedelta(minutes=15)<=occurred<=created+timedelta(minutes=settings.match_window_minutes):
+            return SimpleNamespace(**values)
+        if db.scalar(select(PaymentMatch.id).where(PaymentMatch.transaction_id==part.id,PaymentMatch.decision=='AUTO_MATCHED',PaymentMatch.order_id!=order.id)):
+            return SimpleNamespace(**values)
+    values['amount']=sum((part.amount for part in parts),Decimal(0))
+    return SimpleNamespace(**values)
+
+
+def reserve_payment(db, order, tx):
+    allocation=db.get(PaymentAllocation,tx.id)
+    if allocation is not None and allocation.order_id!=order.id:
+        return 'REVIEW_REQUIRED',order,0,['Khoản chuyển này đã được giữ cho lệnh khác; không cộng lại.']
+    parts=funding_parts(db,order)
+    if parts and any(part.bank!=tx.bank for part in parts):
+        tx.status='REVIEW_REQUIRED';db.commit()
+        return 'REVIEW_REQUIRED',order,0,['Các khoản chuyển khác ngân hàng nhận; cần kiểm tra trước khi cộng tiền.']
+    if allocation is None:
+        db.add(PaymentAllocation(transaction_id=tx.id,order_id=order.id))
+        try: db.flush()
+        except IntegrityError:
+            db.rollback()
+            return match_transaction(db,tx)
+    payment=payment_for_order(db,order,tx)
+    total=payment.amount
+    if total<=0:
+        tx.status='REVIEW_REQUIRED';db.commit()
+        return 'REVIEW_REQUIRED',order,0,['Chưa xác minh được đầy đủ các khoản chuyển thuộc cùng lệnh.']
+    if total<order.fiat_amount:
+        decision='PARTIAL_PAYMENT';score=0
+        reasons=[f'Đã nhận {total:,.0f}/{order.fiat_amount:,.0f} VND; còn thiếu {order.fiat_amount-total:,.0f} VND. Chờ chuyển thêm.']
+    elif settings.auto_match_threshold>100:
+        decision='REVIEW_REQUIRED';score=100
+        reasons=['Cấu hình ngưỡng auto vượt giới hạn; chưa cho tự động mở khóa.']
+    else:
+        claimed=db.execute(update(P2POrder).where(P2POrder.id==order.id,P2POrder.status=='WAITING_PAYMENT').values(status='PAYMENT_DETECTED'))
+        if claimed.rowcount!=1:
+            db.commit();db.refresh(order)
+            existing=db.scalar(select(PaymentMatch).where(PaymentMatch.order_id==order.id,PaymentMatch.decision=='AUTO_MATCHED'))
+            if existing: return 'AUTO_MATCHED',order,100,['Đã đối chiếu đủ tiền cho lệnh này; không tạo thêm kết quả khớp.']
+            return 'REVIEW_REQUIRED',order,0,['Lệnh đã thay đổi trạng thái; cần kiểm tra thủ công.']
+        decision='AUTO_MATCHED';score=100
+        ids=db.scalars(select(PaymentAllocation.transaction_id).where(PaymentAllocation.order_id==order.id)).all()
+        db.execute(update(BankTransaction).where(BankTransaction.id.in_(ids)).values(status='AUTO_MATCHED'))
+        reasons=[f'Số tiền đủ: nhận {total:,.0f}/{order.fiat_amount:,.0f} VND từ {len(ids)} khoản chuyển; dư {total-order.fiat_amount:,.0f} VND. Mã lệnh hoặc họ tên đầy đủ khớp.']
+        db.refresh(order)
+    tx.status=decision
+    record=db.scalar(select(PaymentMatch).where(PaymentMatch.transaction_id==tx.id,PaymentMatch.order_id==order.id).order_by(PaymentMatch.id.desc()))
+    if record is None: record=PaymentMatch(order=order,transaction=tx,score=score,decision=decision,reasons=' | '.join(reasons));db.add(record)
+    else: record.score=score;record.decision=decision;record.reasons=' | '.join(reasons)
+    db.commit()
+    return decision,order,score,reasons
 
 
 def normalize_text(value: str | None) -> str:
@@ -69,6 +148,7 @@ def satisfies_payment_rules(order: P2POrder, tx: BankTransaction) -> bool:
              or memo_contains_name(tx.description, order.counterparty_name))
         and tx.direction == "CREDIT"
         and order.side == "SELL"
+        and (not order.expected_bank or order.expected_bank == tx.bank)
     )
 
 
@@ -125,6 +205,11 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         return previous.decision, previous.order, previous.score, [
             f"Giao dịch {tx.transaction_id} đã dùng cho lệnh {previous.order.order_code}; "
             "không được dùng một lần chuyển tiền để mở khóa thêm lệnh khác."]
+    allocated=db.get(PaymentAllocation,tx.id) if tx.id is not None else None
+    if allocated:
+        assigned=db.get(P2POrder,allocated.order_id)
+        if assigned.status=='WAITING_PAYMENT': return reserve_payment(db,assigned,tx)
+        return tx.status,assigned,100 if tx.status=='AUTO_MATCHED' else 0,['Khoản chuyển đã gắn với lệnh này; không dùng cho lệnh khác.']
     occurred = tx.occurred_at
     if occurred.tzinfo is not None:
         occurred = occurred.astimezone(timezone.utc).replace(tzinfo=None)
@@ -133,17 +218,31 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     candidates = db.scalars(
         select(P2POrder).where(
             P2POrder.status == "WAITING_PAYMENT",
-            P2POrder.fiat_amount <= tx.amount,
+            P2POrder.side == 'SELL',
             P2POrder.created_at >= window_start,
             P2POrder.created_at <= window_end,
         )
     ).all()
 
+    identified=[order for order in candidates if payment_identity(order,tx)]
+    coded=[order for order in identified if memo_contains_order_code(tx.description,order.order_code)]
+    identified=coded or identified
+    if len(identified)==1: return reserve_payment(db,identified[0],tx)
+    if len(identified)>1:
+        tx.status='REVIEW_REQUIRED'
+        same_buyer=all(same_name(identified[0].counterparty_name,order.counterparty_name) for order in identified)
+        reason=f'Có {len(identified)} lệnh'+(' của cùng một người mua' if same_buyer else '')+' có thể nhận khoản tiền này: '+', '.join(order.order_code for order in identified[:10])+f'. Giao dịch {tx.transaction_id}: {tx.amount:,.0f} VND; chưa xác định thuộc lệnh nào. Không dùng một giao dịch cho hai lệnh.'
+        if all(order.fiat_amount<=tx.amount for order in identified):reason+=' Các lệnh đều có số tiền không vượt quá tiền nhận.'
+        record=db.scalar(select(PaymentMatch).where(PaymentMatch.transaction_id==tx.id).order_by(PaymentMatch.id.desc()))
+        if record is None:db.add(PaymentMatch(order=identified[0],transaction=tx,score=89,decision='REVIEW_REQUIRED',reasons=reason))
+        else: record.decision='REVIEW_REQUIRED';record.reasons=reason
+        db.commit();return 'REVIEW_REQUIRED',identified[0],89,[reason]
+
     if not candidates:
         tx.status = "UNMATCHED"
         db.commit()
         return "UNMATCHED", None, 0, [
-            f"Không có đơn WAITING_PAYMENT có số tiền ≤ tiền nhận {tx.amount:,.0f} VND trong cửa sổ "
+            f"Không có lệnh bán đang chờ trong cửa sổ "
             f"{settings.match_window_minutes} phút trước / 15 phút sau giao dịch. "
             "Kiểm tra số tiền, thời gian, đồng bộ lệnh và lệnh đã được thanh toán trước đó."]
 
@@ -173,8 +272,11 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
             f"chỉ ghi có {tx.amount:,.0f} VND một lần; chưa đủ căn cứ xác định tiền thuộc lệnh nào. "
             "Không dùng một giao dịch cho hai lệnh. Kiểm tra từng mã lệnh và lần chuyển tiền riêng.")
     elif not eligible:
-        reasons.append("Không auto: tiền nhận đủ nhưng chưa khớp đầy đủ mã lệnh hoặc họ tên người mua; "
-                       "5 số cuối mã lệnh/tên gần giống không đủ điều kiện mở khóa.")
+        if best_order.expected_bank and best_order.expected_bank!=tx.bank:
+            reasons.append(f'Không auto: ngân hàng nhận {tx.bank} khác ngân hàng lệnh {best_order.expected_bank}.')
+        else:
+            reasons.append((f'Không auto: còn thiếu {best_order.fiat_amount-tx.amount:,.0f} VND; ' if tx.amount<best_order.fiat_amount else 'Không auto: ')+"chưa khớp đầy đủ mã lệnh hoặc họ tên người mua; "
+                           "5 số cuối mã lệnh/tên gần giống không đủ điều kiện mở khóa.")
 
     if eligible and not ambiguous and best_score >= settings.auto_match_threshold:
         decision = "AUTO_MATCHED"

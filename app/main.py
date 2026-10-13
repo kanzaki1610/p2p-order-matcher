@@ -302,7 +302,11 @@ async def sepay_webhook(
         occurred_at=parse_sepay_datetime(payload.transactionDate),
     )
     db.add(tx)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return SePayWebhookOut(message='Giao dịch đã được tiếp nhận trước đó',decision='DUPLICATE')
     db.refresh(tx)
     decision, order, score, reasons = match_transaction(db, tx)
     background_tasks.add_task(notify_match, decision, order, tx, score, reasons)
