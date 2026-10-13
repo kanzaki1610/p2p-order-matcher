@@ -14,6 +14,7 @@ from .models import DiscordInteractionReceipt
 from .notifications import notify_command_result
 from .telegram_commands import handle_command
 from .okx_price_controls import parse_price_command, execute_price_command
+from .discord_price_panel import panel, modal, execute_panel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -74,9 +75,16 @@ async def run_command(payload, text):
     member = payload["member"]
     user = member["user"]
     reply = "Không thể xử lý lệnh; hãy kiểm tra trạng thái đơn trước khi thử lại."
+    result = None
     try:
         with SessionLocal() as db:
-            if payload.get("data", {}).get("name") == "gia":
+            if payload.get('type') in {3,5}:
+                try:
+                    result = await execute_panel(payload, db, str(user['id']))
+                except ValueError as error:
+                    db.rollback()
+                    result = {'content': str(error), 'components': []}
+            elif payload.get("data", {}).get("name") == "gia":
                 reply = await execute_price_command(payload["data"], db, str(user["id"]))
             else:
                 reply = handle_command(text, db,
@@ -90,7 +98,10 @@ async def run_command(payload, text):
     url = f"https://discord.com/api/v10/webhooks/{settings.discord_application_id}/{payload['token']}/messages/@original"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.patch(url, json={"content": reply[:1900], "allowed_mentions": {"parse": []}})
+            outgoing = result or {"content": reply[:1900]}
+            outgoing['content'] = outgoing.get('content','')[:1900]
+            outgoing['allowed_mentions'] = {'parse':[]}
+            response = await client.patch(url, json=outgoing)
         if not response.is_success:
             logger.warning("Discord command reply HTTP=%s", response.status_code)
     except httpx.RequestError:
@@ -120,14 +131,21 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
         return {"type": 1}
     if not (settings.discord_commands_enabled or settings.discord_pricing_commands_enabled):
         raise HTTPException(404, "Discord commands disabled")
-    if payload.get("type") != 2 or not authorized(payload):
+    if payload.get("type") not in {2,3,5} or not authorized(payload):
         return {"type": 4, "data": {"content": "Bạn không có quyền dùng lệnh trong server/kênh này.", "flags": 64}}
-    pricing = payload.get("data", {}).get("name") == "gia"
+    pricing = payload.get("data", {}).get("name") == "gia" or str(payload.get('data',{}).get('custom_id','')).startswith('price:')
     if ((pricing and (not settings.discord_pricing_commands_enabled or settings.database_schema == "kayhap"))
             or (not pricing and not settings.discord_commands_enabled)):
         return {"type": 4, "data": {"content": "Lệnh này chưa được bật cho tài khoản này.", "flags": 64}}
     try:
-        text = command_text(payload.get("data", {}))
+        data = payload.get('data',{})
+        if pricing and payload.get('type') == 2 and data.get('options',[{}])[0].get('name') == 'bang':
+            return {'type':4,'data':panel()}
+        if pricing and payload.get('type') == 3:
+            parts = data['custom_id'].split(':')
+            if len(parts)==3 and parts[1] in {'price','rank','ad'} and parts[2] in {'BUY','SELL'}:
+                return modal(parts[1],parts[2])
+        text = '/gia' if pricing and payload.get('type') in {3,5} else command_text(data)
         if not payload.get("id") or not payload.get("token"):
             raise ValueError("Interaction không hợp lệ")
     except ValueError as exc:
