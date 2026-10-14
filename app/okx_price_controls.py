@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from .config import settings
 from .models import OKXPricePreferences, OKXAuditLog, OKXSlot, OKXPricingSwitch
 from .okx_ads import read_ad, number
-from .okx_cost import read_last_buy_cost
+from .okx_cost import read_last_buy_cost, read_pricing_cost, cost_summary, cost_revision, save_cost
 from .okx_rank import read_rank_plan
 from .diagnostics import error_detail
 
@@ -190,7 +190,7 @@ async def execute_price_command(data, db, user_id):
         save_ranks(db, {side.lower()+"_rank": rank}, actor="discord:"+user_id)
     prefs = preferences_dict(db)
     status = "ĐANG BẬT" if pricing_active(db) else "ĐANG TẮT — chỉ lưu vị trí, chưa sửa quảng cáo thật"
-    reply = f"Bám giá OKX: {status}.\nVị trí mua: {prefs['buy_rank']} · vị trí bán: {prefs['sell_rank']}.\nGiá bán luôn phải đạt giá mua hoàn tất gần nhất +10đ."
+    reply = f"Bám giá OKX: {status}.\nVị trí mua: {prefs['buy_rank']} · vị trí bán: {prefs['sell_rank']}.\n{cost_summary(db)}"
     if action == "trangthai":
         for slot in db.scalars(select(OKXSlot).order_by(OKXSlot.side,OKXSlot.slot_number)):
             reply += f"\n{slot.side} slot {slot.slot_number}: Auto {'bật' if slot.auto_enabled else 'tắt'} · ID {slot.adv_id or 'chưa chọn'} · giá {slot.current_price}đ"
@@ -199,7 +199,7 @@ async def execute_price_command(data, db, user_id):
     rank = selected_rank(db, side)
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            cost = await read_last_buy_cost(client) if side == "SELL" else None
+            cost = await read_pricing_cost(db,client,reader=read_last_buy_cost) if side == "SELL" else None
             plan = await read_rank_plan(client, side, cost["unit_price"] if cost else None, target_rank=rank)
         reply += f"\n{side} · vị trí {rank} · giá tham chiếu: {plan.get('proposed_price') or 'chưa có'}đ/USDT."
         if cost: reply += f"\nGiá vốn {cost['unit_price']}đ · bán tối thiểu {plan.get('minimum_sell_price') or 'chưa xác minh'}đ."

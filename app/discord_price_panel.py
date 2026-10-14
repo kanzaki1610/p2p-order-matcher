@@ -11,7 +11,7 @@ from .database import Base
 from .models import OKXSlot, OKXAuditLog
 from .config import settings
 from .okx_ads import read_ad, number
-from .okx_cost import read_last_buy_cost
+from .okx_cost import read_last_buy_cost, read_pricing_cost, cost_summary, cost_revision, save_cost
 from .okx_price_controls import execute_price_command
 from .okx_ad_worker import OKXAdPriceAttempt, confirm, safe_failure
 from .okx_release import request
@@ -63,10 +63,11 @@ def panel():
     for side,label in [('BUY','Mua'),('SELL','Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
+    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Dùng giá mua OKX','costauto')]})
     return {'content':'**Điều khiển giá OKX**\nChỉ operator được sử dụng. Đặt giá thủ công cần xác nhận và tắt Auto của slot. Tạm dừng không ẩn quảng cáo trên sàn.','components':rows,'allowed_mentions':{'parse':[]}}
 
 def modal(action,side):
-    labels={'price':('Đặt giá thủ công','Giá VND/USDT (số nguyên, không dấu phân cách)'), 'rank':('Chọn vị trí','Vị trí từ 1 đến 50'), 'ad':('Chọn quảng cáo','ID quảng cáo OKX')}
+    labels={'cost':('Nhập giá vốn','Giá mua VND/USDT (ví dụ 26050)'), 'price':('Đặt giá thủ công','Giá VND/USDT (số nguyên, không dấu phân cách)'), 'rank':('Chọn vị trí','Vị trí từ 1 đến 50'), 'ad':('Chọn quảng cáo','ID quảng cáo OKX')}
     title,label=labels[action]
     fields=[]
     if action in {'price','ad'}:
@@ -96,8 +97,8 @@ async def manual_preview(db,owner,side,slot_number,price,terms=None):
         ad=await read_ad(client,slot.adv_id)
         if ad['side']!=side.lower() or ad.get('type')!='limit' or ad.get('status')!='new' or type(ad.get('isHidden')) is not bool: raise ValueError('Quảng cáo sai chiều hoặc không còn hoạt động với giá cố định.')
         if side=='SELL':
-            cost=await read_last_buy_cost(client)
-            if price<number(cost['unit_price'])+10: raise ValueError('Giá bán phải đạt giá mua hoàn tất gần nhất +10đ.')
+            cost=await read_pricing_cost(db,client,reader=read_last_buy_cost)
+            if price<number(cost['unit_price'])+10: raise ValueError('Giá bán phải đạt giá vốn đang chọn +10đ.')
     snapshot=ad_snapshot(ad)
     lower=terms.get('minOrderLimit') or snapshot['minOrderLimit']
     upper=terms.get('maxOrderLimit') or snapshot['maxOrderLimit']
@@ -128,7 +129,7 @@ async def manual_confirm(db,owner,draft_id):
         if ad['side']!=slot.side.lower() or ad.get('type')!='limit' or ad.get('status')!='new' or ad.get('isHidden') is not draft.hidden: raise ValueError('Quảng cáo đã thay đổi; hãy tạo xác nhận mới.')
         if stored and ad_snapshot(ad)!=json.loads(stored.snapshot_json): raise ValueError('Giá/số lượng/hạn mức đã thay đổi từ lúc xem trước; hãy tạo xác nhận mới.')
         if slot.side=='SELL':
-            cost=await read_last_buy_cost(client)
+            cost=await read_pricing_cost(db,client,reader=read_last_buy_cost)
             if draft.price<number(cost['unit_price'])+10: raise ValueError('Giá vốn mới không cho phép giá bán này.')
         attempt=db.get(OKXAdPriceAttempt,slot.id)
         if attempt is None:
@@ -141,6 +142,8 @@ async def manual_confirm(db,owner,draft_id):
         db.commit();db.refresh(attempt);db.refresh(slot)
         if slot.adv_id!=draft.ad_id:
             attempt.state='IDLE';db.commit();raise ValueError('Slot đã đổi trước khi gửi; chưa gửi OKX.')
+        if slot.side=='SELL' and cost_revision(db)!=cost.get('settings_revision'):
+            attempt.state='IDLE';db.commit();raise ValueError('Giá vốn vừa thay đổi; cần xem lại giá bán trước khi xác nhận.')
         attempt.state='UNKNOWN';db.commit()
         try:
             result=await request(client,'POST','/api/v5/p2p/ad/update',{'adId':draft.ad_id,'unitPrice':str(draft.price),'online':'false' if draft.hidden else 'true',**terms})
@@ -170,6 +173,8 @@ async def execute_panel(payload,db,owner):
         action,side=code[2:4]
         values={x['custom_id']:x.get('value','') for row in payload['data'].get('components',[]) for x in row.get('components',[])}
         value=values.get('value','')
+        if action=='cost':
+            return {'content':save_cost(db,input_number(value,money=True),'discord:'+owner)+'\nÁp dụng cho cả hai slot bán ở lần quét tiếp theo nếu Auto đang bật.','components':[]}
         if action=='price':
             if values.get('slot') not in {'1','2'}: raise ValueError('Chọn slot 1 hoặc 2.')
             terms={target:values[source] for source,target in [('quantity','cryptoAmount'),('minimum','minOrderLimit'),('maximum','maxOrderLimit')] if values.get(source,'').strip()}
@@ -181,6 +186,8 @@ async def execute_panel(payload,db,owner):
         changed=db.execute(update(ManualPriceDraft).where(ManualPriceDraft.id==code[2],ManualPriceDraft.owner==owner,ManualPriceDraft.used.is_(False)).values(used=True));db.commit()
         if changed.rowcount!=1: return {'content':'Xác nhận không tồn tại hoặc đã xử lý. Không thể hủy yêu cầu đã gửi; xem trạng thái trên OKX.','components':[]}
         return {'content':'Đã hủy xác nhận; không gửi yêu cầu sửa giá.','components':[]}
+    elif action=='costauto':
+        return {'content':save_cost(db,None,'discord:'+owner)+'\nĐã chuyển về giá mua OKX gần nhất.','components':[]}
     elif action=='status': data=command('trangthai')
     elif action=='list': data=command('danhsach',chieu=code[2])
     elif action in {'pause','resume'}: data=command('bamtat',bat=action=='resume')

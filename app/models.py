@@ -231,3 +231,13 @@ class LockedP2PTrade(Base):
     status: Mapped[str] = mapped_column(String(20), default="OPEN", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OKXManualCost(Base):
+    __tablename__ = 'okx_manual_cost'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 0), nullable=True)
+    revision: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    actor: Mapped[str] = mapped_column(String(100))

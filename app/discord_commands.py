@@ -149,7 +149,7 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
             return {'type':4,'data':panel()}
         if pricing and payload.get('type') == 3:
             parts = data['custom_id'].split(':')
-            if len(parts)==3 and parts[1] in {'price','rank','ad'} and parts[2] in {'BUY','SELL'}:
+            if len(parts)==3 and parts[1] in {'price','rank','ad','cost'} and parts[2] in {'BUY','SELL'}:
                 return modal(parts[1],parts[2])
         text = '/gia' if pricing and payload.get('type') in {3,5} else command_text(data)
         if not payload.get("id") or not payload.get("token"):

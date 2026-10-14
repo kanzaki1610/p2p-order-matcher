@@ -1,6 +1,7 @@
 """Cost from the last completed authenticated BUY, ordered by completion time."""
 import asyncio
 import time
+from decimal import Decimal
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -84,3 +85,56 @@ async def read_last_buy_cost(client):
     return {"order_id": str(latest["orderId"]), "ad_id": str(latest.get("adId") or ""),
             "unit_price": str(number(detail["unitPrice"])), "completed_at_ms": completion_time(detail),
             "mode": "LAST_COMPLETED_BUY"}
+
+
+
+def cost_revision(db):
+    from .models import OKXManualCost
+    row = db.get(OKXManualCost, 1, populate_existing=True)
+    return row.revision if row else None
+
+
+def cost_summary(db):
+    from .models import OKXManualCost
+    row = db.get(OKXManualCost, 1, populate_existing=True)
+    if row and row.enabled:
+        price = number(row.unit_price)
+        return f'Giá vốn thủ công: {price:,.0f}đ/USDT · bán tối thiểu {price+10:,.0f}đ.'
+    return 'Giá vốn: lệnh mua OKX hoàn tất gần nhất · bán tối thiểu giá vốn +10đ.'
+
+
+def save_cost(db, price, actor):
+    import uuid
+    from datetime import datetime, timezone
+    from .config import settings
+    from .models import OKXManualCost, OKXAuditLog
+    if settings.database_schema == 'kayhap':
+        raise ValueError('Điều khiển giá hiện chỉ hỗ trợ tài khoản gốc.')
+    if price is not None:
+        price = number(price)
+        if price != price.to_integral_value() or price >= Decimal('1000000000000000'):
+            raise ValueError('Giá vốn phải là số đồng nguyên dương, trong giới hạn hỗ trợ.')
+    row = db.get(OKXManualCost, 1)
+    if row is None:
+        row = OKXManualCost(id=1)
+        db.add(row)
+    row.enabled = price is not None
+    row.unit_price = price
+    row.revision = uuid.uuid4().hex
+    row.updated_at = datetime.now(timezone.utc)
+    row.actor = actor
+    db.add(OKXAuditLog(action='OKX_COST_SOURCE', actor=actor, detail='MANUAL:'+str(price) if price is not None else 'LAST_COMPLETED_BUY'))
+    db.commit()
+    return cost_summary(db)
+
+
+async def read_pricing_cost(db, client, *, reader=None):
+    from .models import OKXManualCost
+    row = db.get(OKXManualCost, 1, populate_existing=True)
+    revision = row.revision if row else None
+    if row and row.enabled:
+        price = number(row.unit_price)
+        return {'unit_price':str(price), 'mode':'MANUAL', 'order_id':'thủ công', 'settings_revision':revision}
+    result = dict(await (reader or read_last_buy_cost)(client))
+    result['settings_revision'] = revision
+    return result

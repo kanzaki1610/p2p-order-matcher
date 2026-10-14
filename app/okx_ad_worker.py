@@ -17,7 +17,7 @@ from .diagnostics import error_detail
 from .discord_notifications import send_discord_message, valid_webhook
 from .models import OKXSlot, OKXAuditLog
 from .okx_ads import read_ad, number
-from .okx_cost import read_last_buy_cost
+from .okx_cost import read_last_buy_cost, read_pricing_cost, cost_summary, cost_revision, save_cost
 from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
 from .okx_release import request, failure_reason
@@ -56,7 +56,7 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
     if plan:
         text += f"\nGiá vị trí {plan.get('target_rank', 10)}: {plan.get('proposed_price')}đ/USDT"
         if plan.get("cost_source"):
-            text += f"\nLệnh mua giá vốn: {plan['cost_source']['order_id']}"
+            text += '\nNguồn giá vốn: '+('nhập thủ công' if plan['cost_source'].get('mode')=='MANUAL' else 'lệnh mua OKX '+plan['cost_source']['order_id'])
         if plan.get("minimum_sell_price"):
             text += f"\nGiá vốn: {plan['cost_basis']}đ · giá bán tối thiểu: {plan['minimum_sell_price']}đ"
     if await send_discord_message("PRICING_ALERT", text):
@@ -149,7 +149,7 @@ async def process_ad_pricing(db, client):
             if slot.side == "SELL":
                 if cost is None and cost_error is None:
                     try:
-                        cost = await read_last_buy_cost(client)
+                        cost = await read_pricing_cost(db,client,reader=read_last_buy_cost)
                     except Exception as error:
                         cost_error = safe_failure(error)
                 if cost_error:
@@ -197,6 +197,10 @@ async def process_ad_pricing(db, client):
                 attempt.state = "IDLE"
                 db.commit()
                 await notice(db, attempt, slot, "BLOCKED", "Cấu hình slot đã thay đổi trước khi gửi; chưa sửa quảng cáo.")
+                continue
+            if slot.side == 'SELL' and cost_revision(db) != cost.get('settings_revision'):
+                attempt.state = 'IDLE';db.commit()
+                await notice(db,attempt,slot,'BLOCKED','Giá vốn vừa thay đổi; chờ tính lại giá bán, chưa gửi OKX.')
                 continue
             attempt.state = "UNKNOWN"
             db.commit()  # A crash/timeout never authorizes automatic resubmission.
