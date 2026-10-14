@@ -7,13 +7,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app import okx_ad_worker as worker
-from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwitch
+from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwitch, OKXManualCost
 
 
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
-    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
+    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
 
@@ -140,3 +140,30 @@ def test_rank_changed_while_reading_cancels_stale_write(db,setup,monkeypatch):
     monkeypatch.setattr(worker,'read_rank_plan',changed)
     write=AsyncMock();monkeypatch.setattr(worker,'request',write)
     run(db);write.assert_not_awaited()
+
+
+def test_worker_uses_manual_cost_instead_of_okx_history(db,setup,monkeypatch):
+    from app.okx_cost import save_cost
+    save_cost(db,Decimal('26050'),'test')
+    reader=AsyncMock(side_effect=AssertionError('must not read OKX cost'))
+    monkeypatch.setattr(worker,'read_last_buy_cost',reader)
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    source=AsyncMock(return_value=plan());monkeypatch.setattr(worker,'read_rank_plan',source)
+    monkeypatch.setattr(worker,'request',AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}))
+    run(db)
+    assert source.call_args.args[2]==Decimal('26050')
+    reader.assert_not_awaited()
+
+
+def test_cost_change_during_plan_blocks_old_floor_write(db,setup,monkeypatch):
+    from app.okx_cost import save_cost
+    save_cost(db,Decimal('26050'),'test')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    async def changed(*args,**kwargs):
+        save_cost(db,Decimal('27000'),'test')
+        return plan()
+    monkeypatch.setattr(worker,'read_rank_plan',changed)
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
