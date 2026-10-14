@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .background_io import run_isolated, isolated_io
 from .bitget_sync import bitget_sync_loop
 from .mexc_sync import mexc_sync_loop
 from .okx_sync import okx_sync_loop
@@ -39,7 +40,7 @@ pricing_task: asyncio.Task | None = None
 async def start_ad_pricing():
     global pricing_task
     if settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap":
-        pricing_task = asyncio.create_task(pricing_loop())
+        pricing_task = asyncio.create_task(run_isolated(pricing_loop))
 
 
 @app.on_event("shutdown")
@@ -58,7 +59,7 @@ async def stop_ad_pricing():
 async def start_okx_reader():
     global okx_task
     if settings.okx_p2p_enabled and all((settings.okx_api_key, settings.okx_api_secret, settings.okx_api_passphrase)):
-        okx_task = asyncio.create_task(okx_sync_loop())
+        okx_task = asyncio.create_task(run_isolated(okx_sync_loop))
 
 
 @app.on_event("shutdown")
@@ -83,7 +84,7 @@ async def start_bitget_reader() -> None:
         and settings.bitget_p2p_api_passphrase
     )
     if configured and not settings.bitget_p2p_live_writes:
-        bitget_task = asyncio.create_task(bitget_sync_loop())
+        bitget_task = asyncio.create_task(run_isolated(bitget_sync_loop))
 
 
 @app.on_event("shutdown")
@@ -107,7 +108,7 @@ async def start_mexc_reader() -> None:
         and settings.mexc_p2p_api_secret
     )
     if configured:
-        mexc_task = asyncio.create_task(mexc_sync_loop())
+        mexc_task = asyncio.create_task(run_isolated(mexc_sync_loop))
 
 
 @app.on_event("shutdown")
@@ -240,8 +241,18 @@ def list_orders(db: Session = Depends(get_db), _: None = Depends(verify_ingest_k
     return db.scalars(select(P2POrder).order_by(P2POrder.id.desc()).limit(200)).all()
 
 
+@isolated_io
+async def notify_saved_match(bind, decision, order_id, transaction_id, score, reasons):
+    # Pass identifiers, never an ORM session/object shared with a request thread.
+    with Session(bind=bind, expire_on_commit=False) as db:
+        tx = db.get(BankTransaction, transaction_id)
+        order = db.get(P2POrder, order_id) if order_id is not None else None
+        if tx is not None:
+            await notify_match(decision, order, tx, score, reasons)
+
+
 @app.post("/bank-transactions/{bank}", response_model=MatchResult, status_code=201)
-async def ingest_transaction(
+def ingest_transaction(
     bank: str,
     payload: BankTransactionIn,
     background_tasks: BackgroundTasks,
@@ -260,7 +271,7 @@ async def ingest_transaction(
         raise HTTPException(status_code=409, detail="Giao dịch ngân hàng đã được tiếp nhận trước đó")
     db.refresh(tx)
     decision, order, score, reasons = match_transaction(db, tx)
-    background_tasks.add_task(notify_match, decision, order, tx, score, reasons)
+    background_tasks.add_task(notify_saved_match, db.get_bind(), decision, order.id if order else None, tx.id, score, reasons)
     return MatchResult(
         bank_transaction_id=tx.id,
         decision=decision,
@@ -271,7 +282,7 @@ async def ingest_transaction(
 
 
 @app.post("/webhooks/sepay", response_model=SePayWebhookOut)
-async def sepay_webhook(
+def sepay_webhook(
     payload: SePayWebhookIn,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -309,7 +320,7 @@ async def sepay_webhook(
         return SePayWebhookOut(message='Giao dịch đã được tiếp nhận trước đó',decision='DUPLICATE')
     db.refresh(tx)
     decision, order, score, reasons = match_transaction(db, tx)
-    background_tasks.add_task(notify_match, decision, order, tx, score, reasons)
+    background_tasks.add_task(notify_saved_match, db.get_bind(), decision, order.id if order else None, tx.id, score, reasons)
     return SePayWebhookOut(
         message="Đã tiếp nhận giao dịch SePay",
         decision=decision,

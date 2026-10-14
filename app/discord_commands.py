@@ -9,6 +9,7 @@ from nacl.signing import VerifyKey
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
+from .background_io import isolated_io
 from .database import SessionLocal
 from .models import DiscordInteractionReceipt
 from .notifications import notify_command_result
@@ -56,6 +57,7 @@ def command_text(data):
     raise ValueError("Lệnh không được hỗ trợ")
 
 
+@isolated_io
 async def claim_and_run_command(payload, text):
     try:
         with SessionLocal() as db:
@@ -103,7 +105,11 @@ async def run_command(payload, text):
             outgoing['allowed_mentions'] = {'parse':[]}
             response = await client.patch(url, json=outgoing)
         if not response.is_success:
-            logger.warning("Discord command reply HTTP=%s", response.status_code)
+            try:
+                code = response.json().get('code')
+            except (ValueError, AttributeError):
+                code = None
+            logger.warning("Discord command reply HTTP=%s code=%s", response.status_code, code if isinstance(code, int) else 'unknown')
     except httpx.RequestError:
         logger.warning("Discord command reply network failure")
 
