@@ -167,3 +167,45 @@ def test_cost_change_during_plan_blocks_old_floor_write(db,setup,monkeypatch):
     run(db)
     write.assert_not_awaited()
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+
+
+def test_five_second_cooldown_allows_confirmed_followup(db,setup,monkeypatch):
+    from datetime import datetime,timedelta,timezone
+    monkeypatch.setattr(worker.settings,'okx_ad_pricing_seconds',5)
+    attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',last_action_at=datetime.now(timezone.utc)-timedelta(seconds=6))
+    db.add(attempt);db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    assert write.await_count==1
+    assert setup.adv_id=='456'
+
+
+def test_five_second_cooldown_blocks_immediate_second_write(db,setup,monkeypatch):
+    from datetime import datetime,timezone
+    monkeypatch.setattr(worker.settings,'okx_ad_pricing_seconds',5)
+    attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',last_action_at=datetime.now(timezone.utc))
+    db.add(attempt);db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_not_awaited()
+
+
+def test_worker_waits_five_seconds_not_sixty(monkeypatch):
+    from contextlib import nullcontext
+    monkeypatch.setattr(worker.settings,'okx_ad_pricing_seconds',5)
+    monkeypatch.setattr(worker,'SessionLocal',lambda:nullcontext(None))
+    client=AsyncMock()
+    monkeypatch.setattr(worker.httpx,'AsyncClient',lambda **kw:client)
+    process=AsyncMock();monkeypatch.setattr(worker,'process_ad_pricing',process)
+    delays=[]
+    async def stop_after_first_cycle(delay):
+        delays.append(delay)
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(worker.asyncio,'sleep',stop_after_first_cycle)
+    with pytest.raises(asyncio.CancelledError):asyncio.run(worker.pricing_loop())
+    assert len(delays)==1 and 4<=delays[0]<=5
+    process.assert_awaited_once()
