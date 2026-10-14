@@ -72,7 +72,7 @@ async def notify_event(event: str, text: str) -> bool:
 
 
 async def notify_match(decision, order, tx, score, reasons):
-    from .matching import funding_parts, memo_contains_order_code, memo_contains_name, same_name
+    from .matching import funding_parts, memo_contains_order_code, memo_contains_name, same_name, okx_short_reference
     db=object_session(tx) or (object_session(order) if order else None)
     owned=db is None
     if owned: db=SessionLocal()
@@ -92,6 +92,7 @@ async def notify_match(decision, order, tx, score, reasons):
             elif total>order.fiat_amount:text+=f' · dư {total-order.fiat_amount:,.0f} VND'
             text+=f'\nNgười mua: {order.counterparty_name}'
             if memo_contains_order_code(tx.description,order.order_code):text+='\nĐối chiếu: đúng mã lệnh'
+            elif okx_short_reference(order,tx):text+='\nĐối chiếu: đúng 5 số cuối mã lệnh OKX và đủ họ tên'
             elif same_name(order.counterparty_name,tx.sender_name) or memo_contains_name(tx.description,order.counterparty_name):text+='\nĐối chiếu: đủ họ tên khớp'
         else: text+=f'\nTiền nhận: {tx.amount:,.0f} VND'
         if len(parts)>1:text+=f'\n{len(parts)} khoản: '+ ' + '.join(f'{part.amount:,.0f}' for part in parts[:10])+' VND'

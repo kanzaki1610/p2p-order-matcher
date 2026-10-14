@@ -8,11 +8,30 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from decimal import Decimal
 from types import SimpleNamespace
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from .config import settings
 from .sepay import normalize_bank
 from .models import BankTransaction, P2POrder, PaymentMatch, PaymentAllocation
+
+
+def okx_short_reference(order, tx):
+    """A short reference is evidence only for an authenticated OKX order + full name."""
+    code = str(order.order_code or '')
+    if not code.isdigit() or len(code) < 5:
+        return False
+    if not contains_five_digit_reference(tx.description, code[-5:]):
+        return False
+    if not (same_name(order.counterparty_name, tx.sender_name)
+            or memo_contains_name(tx.description, order.counterparty_name)):
+        return False
+    db = object_session(order)
+    if db is None:
+        return False
+    from .okx_sync import OKXOrderReceipt
+    from .mexc_release import MexcOrderReceipt
+    return (db.get(OKXOrderReceipt, code) is not None
+            and db.get(MexcOrderReceipt, code) is None)
 
 
 def payment_identity(order, tx):
@@ -225,9 +244,21 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         )
     ).all()
 
+    terminal = db.scalars(select(P2POrder).where(
+        P2POrder.status.in_(['CANCELLED','CONFIRMED','RELEASED','REJECTED']),
+        P2POrder.side == 'SELL', P2POrder.created_at >= window_start,
+        P2POrder.created_at <= window_end)).all()
+    referenced_terminal = [order for order in terminal
+        if memo_contains_order_code(tx.description, order.order_code) or okx_short_reference(order,tx)]
+    if referenced_terminal:
+        tx.status='REVIEW_REQUIRED';db.commit()
+        codes=', '.join(order.order_code+' ('+order.status+')' for order in referenced_terminal[:5])
+        return 'REVIEW_REQUIRED',None,0,[f'Không auto: nội dung tham chiếu lệnh đã hủy hoặc hoàn tất: {codes}. Không chuyển khoản tiền này sang lệnh mới cùng họ tên.']
+
     identified=[order for order in candidates if payment_identity(order,tx)]
     coded=[order for order in identified if memo_contains_order_code(tx.description,order.order_code)]
-    identified=coded or identified
+    shorted=[order for order in identified if okx_short_reference(order,tx)]
+    identified=coded or shorted or identified
     if len(identified)==1: return reserve_payment(db,identified[0],tx)
     if len(identified)>1:
         tx.status='REVIEW_REQUIRED'

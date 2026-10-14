@@ -4,7 +4,8 @@ import base64
 import hashlib
 import hmac
 import logging
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from urllib.parse import urlencode
 
@@ -77,23 +78,57 @@ def upsert(db, row):
                          crypto_amount=Decimal(str(row["cryptoAmount"])), counterparty_name=name,
                          created_at=created, status="WAITING_PAYMENT" if state == "new" else "REVIEW_REQUIRED")
         db.add(order)
+    # Explicit authenticated terminal states remove stale matching candidates.
+    if state == 'cancelled' and order.status not in {'RELEASED', 'CONFIRMED'}:
+        order.status = 'CANCELLED'
+    elif state == 'completed' and order.status != 'RELEASED':
+        order.status = 'CONFIRMED'
     # Do not guess the receiving bank from the buyer's payment details.
     receipt = db.get(OKXOrderReceipt, code)
     if receipt is None:
         receipt = OKXOrderReceipt(order_id=code)
         db.add(receipt)
+    receipt.raw_order = json.dumps({**row, '_checked_at': datetime.now(timezone.utc).timestamp()}, ensure_ascii=False)
     db.commit()
     return order, receipt
 
 
+async def refresh_inactive_orders(db, client, seen):
+    """Pending-list disappearance is not cancellation; verify authenticated detail."""
+    from .okx_release import detail, consistent
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.match_window_minutes)
+    candidates = db.execute(select(P2POrder, OKXOrderReceipt).join(
+        OKXOrderReceipt, OKXOrderReceipt.order_id == P2POrder.order_code).where(
+        P2POrder.status.in_(['WAITING_PAYMENT', 'PAYMENT_DETECTED']),
+        P2POrder.side == 'SELL', P2POrder.created_at >= cutoff)).all()
+    def checked(pair):
+        try:
+            return float(json.loads(pair[1].raw_order or '{}').get('_checked_at', 0))
+        except (ValueError, TypeError, AttributeError):
+            return 0
+    for order, receipt in sorted(candidates, key=checked)[:200]:
+        if order.order_code in seen:
+            continue
+        try:
+            row = await detail(client, order.order_code)
+            if consistent(order, row):
+                upsert(db, row)
+        except Exception as exc:
+            # No status change on an error or a missing/contradictory receipt.
+            logger.warning('OKX inactive order check failed | error=%s', type(exc).__name__)
+        await asyncio.sleep(.25)
+
+
 async def sync_orders(db, client):
     sent = 0
+    seen = set()
     for page in range(1, 101):
         rows = await read_orders(client, page)
         for row in rows:
             if str(row.get("cryptoCurrency")).upper() != "USDT" or str(row.get("fiatCurrency")).upper() != "VND":
                 continue
             order, receipt = upsert(db, row)
+            seen.add(order.order_code)
             state = str(row.get("orderStatus")) + ":" + str(row.get("paymentStatus"))
             if receipt.notified_state == state:
                 continue
@@ -108,6 +143,7 @@ async def sync_orders(db, client):
                 sent += 1
         if len(rows) < 100:
             break
+    await refresh_inactive_orders(db, client, seen)
     return sent
 
 
