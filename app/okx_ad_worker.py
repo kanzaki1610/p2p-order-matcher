@@ -174,7 +174,7 @@ async def process_ad_pricing(db, client):
             now = datetime.now(timezone.utc)
             last = attempt.last_action_at
             last_utc = (last.astimezone(timezone.utc) if last.tzinfo else last.replace(tzinfo=timezone.utc)) if last else None
-            if last_utc and (now - last_utc).total_seconds() < max(60, settings.okx_ad_pricing_seconds):
+            if last_utc and (now - last_utc).total_seconds() < max(5, settings.okx_ad_pricing_seconds):
                 continue
             is_hide = plan["action"] == "HIDE_AD"
             wanted_price = current if is_hide else proposed
@@ -238,6 +238,7 @@ async def process_ad_pricing(db, client):
 async def pricing_loop():
     async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
         while True:
+            started = asyncio.get_running_loop().time()
             try:
                 with SessionLocal() as db:
                     await process_ad_pricing(db, client)
@@ -245,4 +246,5 @@ async def pricing_loop():
                 raise
             except Exception as error:
                 logger.error("OKX ad pricing cycle failed: %s", type(error).__name__)
-            await asyncio.sleep(max(60, settings.okx_ad_pricing_seconds))
+            elapsed = asyncio.get_running_loop().time() - started
+            await asyncio.sleep(max(.1, max(5, settings.okx_ad_pricing_seconds) - elapsed))
