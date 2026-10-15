@@ -89,6 +89,31 @@ def test_timeout_never_resubmits_after_restart(db, setup, monkeypatch):
     assert write.await_count==1 and db.get(worker.OKXAdPriceAttempt,setup.id).state=='UNKNOWN'
 
 
+def test_okx_error_keeps_one_detailed_alert_after_poll_and_restart(db, setup, monkeypatch):
+    from app.okx_release import OKXRequestError
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock(side_effect=OKXRequestError('OKX HTTP 400; mã API: 55723.'))
+    monkeypatch.setattr(worker,'request',write)
+    run(db)
+    db.expire_all()
+    run(db); run(db)
+    assert write.await_count==1
+    worker.send_discord_message.assert_awaited_once()
+    message=worker.send_discord_message.call_args.args[1]
+    assert '55723' in message and 'dừng bám giá' in message
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='UNKNOWN'
+
+
+def test_crash_without_diagnostic_sends_only_one_unknown_notice(db, setup, monkeypatch):
+    db.add(worker.OKXAdPriceAttempt(slot_id=setup.id,state='UNKNOWN',old_ad_id='123'))
+    db.commit()
+    write=AsyncMock(); monkeypatch.setattr(worker,'request',write)
+    run(db); db.expire_all(); run(db)
+    write.assert_not_awaited()
+    worker.send_discord_message.assert_awaited_once()
+
+
 def test_manual_slot_change_does_not_get_overwritten(db, setup, monkeypatch):
     attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='CONFIRMING',old_ad_id='999',result_ad_id='456',price=26070,hidden=False)
     db.add(attempt); db.commit()
