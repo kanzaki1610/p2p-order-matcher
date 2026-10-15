@@ -70,7 +70,7 @@ async def confirm(db, client, attempt, slot, plan=None):
         await notice(db, attempt, slot, "REVIEW_REQUIRED", "Slot đã được đổi quảng cáo trong lúc chờ kết quả; không ghi đè cấu hình mới.")
         return False
     if not attempt.result_ad_id:
-        await notice(db, attempt, slot, "UNKNOWN", "Chưa xác định kết quả sửa/ẩn quảng cáo. Kiểm tra OKX; không tự gửi lại yêu cầu.")
+        await notice(db, attempt, slot, "UNKNOWN", pending_reason(attempt), plan)
         return False
     row = await read_ad(client, attempt.result_ad_id)
     db.refresh(slot)
@@ -103,6 +103,13 @@ async def confirm(db, client, attempt, slot, plan=None):
     elif was_paused:
         await notice(db, attempt, slot, "RESUMED", "Đã xác minh giá mới đạt giá vốn +10đ và quảng cáo do bot tạm ẩn đã hiển thị lại.", plan)
     return True
+
+
+def pending_reason(attempt):
+    """Keep the original diagnostic stable across polling and restarts."""
+    detail = f" Chi tiết: {attempt.reason}" if attempt.reason else ""
+    return ("Chưa xác minh được kết quả sửa/ẩn quảng cáo." + detail
+            + " Bot đã dừng bám giá cho slot này; không tự gửi lại. Cần kiểm tra trên OKX.")
 
 
 async def process_ad_pricing(db, client):
@@ -232,7 +239,8 @@ async def process_ad_pricing(db, client):
                 attempt.reason = safe_failure(error)[:500]
                 db.commit()
                 kind = "UNKNOWN" if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"} else "ERROR"
-                await notice(db, attempt, slot, kind, "Chỉnh giá bị chặn/chưa xác định kết quả: " + attempt.reason + "; kiểm tra OKX, không tự gửi lại yêu cầu chưa rõ kết quả.", plan)
+                reason = pending_reason(attempt) if kind == "UNKNOWN" else "Chỉnh giá gặp lỗi: " + attempt.reason
+                await notice(db, attempt, slot, kind, reason, plan)
 
 
 async def pricing_loop():
