@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 
 from .config import settings
-from .discord_notifications import send_discord_message
+from .discord_notifications import send_discord_message, review_event
 from .telegram import format_payment_notification, send_telegram_message
 from .telegram_commands import format_vietnam_time
 from sqlalchemy import select
@@ -57,6 +57,17 @@ def compact_memo(value):
 logger = logging.getLogger(__name__)
 
 
+def order_review_event(db, event, order):
+    if event not in {'UNMATCHED', 'REVIEW_REQUIRED', 'REJECTED'} or order is None:
+        return event
+    from .okx_sync import OKXOrderReceipt
+    from .mexc_release import MexcOrderReceipt
+    okx = db.get(OKXOrderReceipt, order.order_code) is not None
+    mexc = db.get(MexcOrderReceipt, order.order_code) is not None
+    # Never infer the exchange from buyer-controlled transfer text or ID shape.
+    return review_event(event, 'OKX' if okx and not mexc else 'MEXC' if mexc and not okx else None)
+
+
 async def notify_event(event: str, text: str) -> bool:
     mode = settings.notification_provider
     if mode not in {"discord", "telegram", "both"}:
@@ -104,8 +115,9 @@ async def notify_match(decision, order, tx, score, reasons):
             text+='\nLý do: '+re.sub(r'\s*\+\d+','',reason)[:900]
         text+='\nVN: '+format_vietnam_time(tx.occurred_at)
         entity=f'match:{decision}:{order.id if order else "none"}:{tx.id}'
-        if tx.id is None:await notify_event(decision,text)
-        else:await notify_once(db,entity,decision,text)
+        routed_event=order_review_event(db,decision,order)
+        if tx.id is None:await notify_event(routed_event,text)
+        else:await notify_once(db,entity,decision,text,sender=lambda event,body:notify_event(routed_event,body))
         if decision=='AUTO_MATCHED' and order and order.status=='PAYMENT_DETECTED':
             if tx.id is None:await notify_event('PAYMENT_DETECTED',text)
             else:await notify_once(db,entity,'PAYMENT_DETECTED',text)
@@ -143,4 +155,4 @@ async def notify_command_result(reply, db):
             tx = db.get(BankTransaction, match.transaction_id)
             if tx:
                 reply += f"\nNgân hàng: {tx.bank}\nMã GD: {tx.transaction_id}\nNội dung: {tx.description or 'Không có'}\nThời gian giao dịch VN: {format_vietnam_time(tx.occurred_at)}"
-    await notify_event(event, reply)
+    await notify_event(order_review_event(db,event,order), reply)

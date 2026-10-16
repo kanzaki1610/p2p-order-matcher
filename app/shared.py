@@ -42,6 +42,12 @@ def validate_account(primary: Settings, secondary: Settings) -> None:
         value = getattr(secondary, name)
         if not value or value in [getattr(primary, item) for item in hooks] or value == primary.discord_webhook_url:
             raise ValueError("kayhap requires its own five Discord webhooks")
+    review_hooks = ("discord_webhook_review_okx", "discord_webhook_review_mexc")
+    primary_hooks = {getattr(primary, item) for item in hooks + review_hooks} | {primary.discord_webhook_url}
+    for name in review_hooks:
+        value = getattr(secondary, name)
+        if value and value in primary_hooks:
+            raise ValueError("kayhap review webhooks must not send to the original account")
     if secondary.okx_api_key and secondary.okx_api_key == primary.okx_api_key:
         raise ValueError("OKX accounts cannot share an API key")
     if secondary.okx_p2p_enabled and not all((secondary.okx_api_key, secondary.okx_api_secret, secondary.okx_api_passphrase)):

@@ -23,9 +23,20 @@ ROUTES = {
 
 
 def webhook_url(event: str) -> str:
+    for exchange in ("OKX", "MEXC"):
+        suffix = "_" + exchange
+        if event.endswith(suffix) and event[:-len(suffix)] in {"UNMATCHED", "REVIEW_REQUIRED", "REJECTED"}:
+            return (getattr(settings, "discord_webhook_review_" + exchange.lower())
+                    or settings.discord_webhook_review_required or settings.discord_webhook_url)
     if event == "PRICING_ALERT":
         return settings.discord_webhook_pricing_alerts
     return getattr(settings, ROUTES.get(event, "discord_webhook_system_alerts")) or settings.discord_webhook_url
+
+
+def review_event(event: str, exchange: str | None) -> str:
+    if event in {"UNMATCHED", "REVIEW_REQUIRED", "REJECTED"} and exchange in {"OKX", "MEXC"}:
+        return event + "_" + exchange
+    return event
 
 
 def valid_webhook(url: str) -> bool:

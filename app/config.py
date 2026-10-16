@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     discord_webhook_orders: str = ""
     discord_webhook_payment_detected: str = ""
     discord_webhook_review_required: str = ""
+    discord_webhook_review_okx: str = ""
+    discord_webhook_review_mexc: str = ""
     discord_webhook_confirmed: str = ""
     discord_webhook_system_alerts: str = ""
     discord_webhook_pricing_alerts: str = ""

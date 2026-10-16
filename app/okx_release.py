@@ -20,6 +20,7 @@ from .models import BankTransaction, P2POrder, PaymentMatch
 from .notifications import notify_event, notify_once, release_text
 from .okx_sync import OKXOrderReceipt
 from .diagnostics import safe_status
+from .discord_notifications import review_event
 from .telegram_commands import format_vietnam_time
 
 
@@ -147,6 +148,7 @@ async def notify_attempt(db, attempt, order, reason=None):
         reason = diagnostic.reason
     event = {"RELEASED": "CONFIRMED", "WAITING_BUYER_PAYMENT": "PAYMENT_DETECTED",
         "SUBMITTED": "AUTO_MATCHED"}.get(attempt.state, "REVIEW_REQUIRED")
+    routed_event = review_event(event, "OKX")
     tx = db.get(BankTransaction, attempt.transaction_id)
     if tx: tx=payment_for_order(db,order,tx)
     text=release_text(db,'OKX',order,tx,attempt.state,reason)
@@ -156,7 +158,7 @@ async def notify_attempt(db, attempt, order, reason=None):
         text += "\nOKX đã tiếp nhận yêu cầu; hệ thống đang chờ xác nhận hoàn tất."
     elif attempt.state != "RELEASED":
         text += "\nCần kiểm tra trên OKX. Không tự gửi lại yêu cầu mở khóa."
-    if await notify_once(db,f'okx-release:{order.id}',event,text,f'{attempt.state}|{reason or ""}',sender=notify_event):
+    if await notify_once(db,f'okx-release:{order.id}',event,text,f'{attempt.state}|{reason or ""}',sender=lambda event,body:notify_event(routed_event,body)):
         attempt.notified_state = attempt.state
         db.commit()
 

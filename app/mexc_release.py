@@ -78,6 +78,7 @@ def preflight_reason(order, tx, receipt, row, *, allow_missing_bank=False):
 
 
 async def notify_attempt(db, attempt, order, tx):
+    from .discord_notifications import review_event
     tx=payment_for_order(db,order,tx)
     if attempt.state == attempt.notified_state or attempt.state == "READY":
         return
@@ -87,7 +88,7 @@ async def notify_attempt(db, attempt, order, tx):
     text=release_text(db,'MEXC',order,tx,attempt.state,attempt.reason)
     if attempt.state in {"UNKNOWN", "SUBMITTING", "REVIEW_REQUIRED"}:
         text += "\nKiểm tra thủ công trên MEXC. Không tự gửi lại yêu cầu mở khóa."
-    if await notify_once(db,f'mexc-release:{order.id}',event,text,f'{attempt.state}|{attempt.reason or ""}',sender=notify_event):
+    if await notify_once(db,f'mexc-release:{order.id}',event,text,f'{attempt.state}|{attempt.reason or ""}',sender=lambda event,body:notify_event(review_event(event,'MEXC'),body)):
         attempt.notified_state = attempt.state
         db.commit()
 
