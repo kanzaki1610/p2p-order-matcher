@@ -56,6 +56,8 @@ def test_invalid_confirmation_never_writes(db,monkeypatch,case):
     request.assert_not_called()
 
 def test_sell_floor_blocks_preview(db,monkeypatch):
+    from app.okx_cost import save_cost
+    save_cost(db,Decimal('26050'),'test')
     db.query(OKXSlot).one().side='SELL';db.commit()
     monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=ad(side='sell')))
     monkeypatch.setattr(ui,'read_last_buy_cost',AsyncMock(return_value={'unit_price':'26050'}))

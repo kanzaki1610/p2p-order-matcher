@@ -30,16 +30,15 @@ def test_manual_cost_persists_and_skips_exchange_read(db):
     reader.assert_not_awaited()
 
 
-def test_switch_back_to_last_completed_buy(db):
+def test_last_completed_buy_cannot_replace_manual_cost(db):
     save_cost(db,Decimal(26050),'discord:test')
     old=cost_revision(db)
-    save_cost(db,None,'discord:test')
+    with pytest.raises(ValueError):save_cost(db,None,'discord:test')
     reader=AsyncMock(return_value={'unit_price':'26070','mode':'LAST_COMPLETED_BUY','order_id':'test'})
     result=asyncio.run(read_pricing_cost(db,None,reader=reader))
-    assert result['unit_price']=='26070'
-    assert result['settings_revision']!=old
-    reader.assert_awaited_once()
-    assert 'OKX' in cost_summary(db)
+    assert result['unit_price']=='26050'
+    assert result['settings_revision']==old
+    reader.assert_not_awaited()
 
 
 @pytest.mark.parametrize('value',['0','-1','NaN','26050.5','1000000000000000'])
@@ -51,14 +50,21 @@ def test_bad_cost_cannot_overwrite_valid_value(db,value):
 
 def test_buttons_and_modal_save_without_any_exchange_write(db):
     buttons=[x for row in panel()['components'] for x in row['components']]
-    assert {'Nhập giá vốn','Dùng giá mua OKX'}<=set(x['label'] for x in buttons)
+    assert 'Nhập giá vốn' in set(x['label'] for x in buttons)
+    assert 'Dùng giá mua OKX' not in set(x['label'] for x in buttons)
     assert modal('cost','SELL')['type']==9
     payload={'data':{'custom_id':'price:form:cost:SELL','components':[{'components':[{'custom_id':'value','value':'26.050'}]}]}}
     reply=asyncio.run(execute_panel(payload,db,'test'))
     assert '26,060' in reply['content']
     assert db.get(OKXManualCost,1).enabled
     asyncio.run(execute_panel({'data':{'custom_id':'price:costauto'}},db,'test'))
-    assert not db.get(OKXManualCost,1).enabled
+    assert db.get(OKXManualCost,1).enabled
+
+
+def test_unconfigured_cost_blocks_without_reading_history(db):
+    reader=AsyncMock(side_effect=AssertionError('must not read history'))
+    with pytest.raises(ValueError,match='thủ công'):asyncio.run(read_pricing_cost(db,None,reader=reader))
+    reader.assert_not_awaited()
 
 
 def test_friend_cannot_change_original_cost(db,monkeypatch):

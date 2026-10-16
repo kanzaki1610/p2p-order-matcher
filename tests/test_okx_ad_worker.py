@@ -26,6 +26,8 @@ def setup(monkeypatch, db):
     monkeypatch.setattr(worker, 'valid_webhook', lambda _: True)
     monkeypatch.setattr(worker, 'send_discord_message', AsyncMock(return_value=True))
     monkeypatch.setattr(worker, 'read_last_buy_cost', AsyncMock(return_value={'unit_price':'26050', 'order_id':'9'}))
+    from app.okx_cost import save_cost
+    save_cost(db,Decimal('26050'),'test')
     slot = OKXSlot(side='SELL', slot_number=1, auto_enabled=True, adv_id='123')
     db.add(slot); db.commit()
     return slot
@@ -122,6 +124,7 @@ def test_manual_slot_change_does_not_get_overwritten(db, setup, monkeypatch):
 
 
 def test_cost_failure_never_hides_or_writes(db, setup, monkeypatch):
+    db.get(OKXManualCost,1).enabled=False;db.commit()
     monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
     monkeypatch.setattr(worker,'read_last_buy_cost',AsyncMock(side_effect=ValueError('private payload')))
     write=AsyncMock(); monkeypatch.setattr(worker,'request',write)
