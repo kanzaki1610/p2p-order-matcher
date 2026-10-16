@@ -139,8 +139,6 @@ def preflight_reason(order, tx, row):
 
 
 async def notify_attempt(db, attempt, order, reason=None):
-    if order.status == "CANCELLED" or attempt.state == "CANCELLED":
-        return
     if reason:
         save_diagnostic(db, attempt, reason)
     if attempt.state == attempt.notified_state or attempt.state == "READY":
@@ -201,11 +199,6 @@ async def process_releases(db, client):
             db.refresh(attempt)
             try:
                 row = await detail(client, order.order_code)
-                if consistent(order, row) and row.get("orderStatus") == "cancelled":
-                    order.status = "CANCELLED"
-                    attempt.state = "CANCELLED"
-                    db.commit()
-                    continue
                 # Waiting is allowed only when unpaid is the sole blocking condition.
                 if row.get("paymentStatus") == "unpaid" and preflight_reason(
                     order, tx, dict(row, paymentStatus="paid")
@@ -246,11 +239,6 @@ async def process_releases(db, client):
         if attempt.state in {"SUBMITTING", "SUBMITTED", "UNKNOWN"}:
             try:
                 row = await detail(client, order.order_code)
-                if consistent(order, row) and row.get("orderStatus") == "cancelled":
-                    order.status = "CANCELLED"
-                    attempt.state = "CANCELLED"
-                    db.commit()
-                    continue
                 if consistent(order, row) and row.get("orderStatus") == "completed" and row.get("paymentStatus") == "confirmed":
                     attempt.state = "RELEASED"
                     order.status = "RELEASED"
