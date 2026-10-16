@@ -176,7 +176,7 @@ def test_manual_review_does_not_receive_waiting_or_submitted(setup, monkeypatch,
     notifier = AsyncMock(return_value=True)
     monkeypatch.setattr("app.okx_release.notify_event", notifier)
     asyncio.run(notify_attempt(db, attempt, order))
-    assert notifier.call_args.args[0] == event
+    assert notifier.call_args.args[0] == (event + '_OKX' if event == 'REVIEW_REQUIRED' else event)
     if state in {"SUBMITTED", "WAITING_BUYER_PAYMENT"}:
         assert "Cần kiểm tra trên OKX" not in notifier.call_args.args[1]
 
