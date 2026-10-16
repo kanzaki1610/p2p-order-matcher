@@ -51,7 +51,7 @@ class RankPricePreview(BaseModel):
     side: Literal["BUY", "SELL"]
     cost_basis: Decimal | None = Field(default=None, gt=0)
     notify_preview: bool = False
-    use_latest_purchase: bool = True
+    use_latest_purchase: bool = False
     target_rank: int | None = Field(default=None, ge=1, le=50, strict=True)
 
 
@@ -182,8 +182,7 @@ async def preview_rank_price(payload: RankPricePreview, _: None = Depends(verify
             cost = None
             basis = payload.cost_basis
             if payload.side == "SELL" and payload.use_latest_purchase:
-                cost = await read_last_buy_cost(client)
-                basis = Decimal(cost["unit_price"])
+                raise ValueError('Chỉ dùng giá vốn nhập thủ công.')
             plan = await read_rank_plan(client, payload.side, basis, target_rank=rank)
         if cost:
             plan["cost_source"] = cost
@@ -507,7 +506,7 @@ def dashboard_state(
         "ad_pricing": {
             "enabled": pricing_active(db) and settings.database_schema != "kayhap",
             "interval_seconds": max(60, settings.okx_ad_pricing_seconds),
-            "cost_mode": "LAST_COMPLETED_BUY",
+            "cost_mode": "MANUAL",
             "rank_mode": "USER_SELECTED",
             **preferences_dict(db),
             "minimum_spread_vnd": 10,

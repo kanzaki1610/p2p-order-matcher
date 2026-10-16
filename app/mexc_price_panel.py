@@ -3,13 +3,16 @@ import re
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from .config import settings
 from .mexc import MexcP2PClient
 from .mexc_ads import ad_id, read_ad, my_ads, update_body
 from .mexc_pricing import MexcPriceSlot, cost_settings
 from .okx_ads import number
+from .discord_price_panel import input_number
+from .mexc_manual_price import preview as manual_preview, confirm as manual_confirm, MexcManualPriceDraft
+from .discord_notifications import valid_webhook
 
 
 def button(label, action, style=2):
@@ -18,20 +21,25 @@ def button(label, action, style=2):
 
 def panel():
     return {'content':'Điều khiển bám giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. Chọn quảng cáo, vị trí, biệt danh và bật Auto từng slot. Bot không tự mở quảng cáo bạn tắt thủ công.',
-        'components':[{'type':1,'components':[button('Cài Mua','config:BUY',1),button('Auto Mua','auto:BUY'),button('Quảng cáo mua','list:BUY')]},
-                      {'type':1,'components':[button('Cài Bán','config:SELL',1),button('Auto Bán','auto:SELL'),button('Quảng cáo bán','list:SELL')]},
+        'components':[{'type':1,'components':[button('Đặt giá Mua','price:BUY',1),button('Cài Mua','config:BUY'),button('Auto Mua','auto:BUY'),button('Quảng cáo mua','list:BUY')]},
+                      {'type':1,'components':[button('Đặt giá Bán','price:SELL',1),button('Cài Bán','config:SELL'),button('Auto Bán','auto:SELL'),button('Quảng cáo bán','list:SELL')]},
                       {'type':1,'components':[button('Giá vốn MEXC','cost:SELL',1),button('Trạng thái','status'),button('Tắt toàn bộ Auto','pause',4)]}]}
 
 
 def modal(action, side):
-    if side not in {'BUY','SELL'} or action not in {'config','cost'}: raise ValueError('Nút MEXC không hợp lệ.')
+    if side not in {'BUY','SELL'} or action not in {'config','cost','price'}: raise ValueError('Nút MEXC không hợp lệ.')
     fields = [('cost','Giá mua trước đó (VND/USDT)', 'Ví dụ 25905')] if action=='cost' else [
         ('slot','Slot 1 hoặc 2','1'),('ad','ID quảng cáo MEXC','a...'),
         ('rank','Bám vị trí đối thủ (1–50)','10'),('nickname','Biệt danh MEXC của bạn','Nhập đúng biệt danh trên bảng giá')]
+    if action=='price':
+        fields=[('slot','Slot 1 hoặc 2','1'),('price','Giá VND/USDT','26050'),
+                ('quantity','Số lượng USDT (trống: giữ nguyên)',''),
+                ('minimum','Tối thiểu VND/giao dịch (trống: giữ nguyên)',''),
+                ('maximum','Tối đa VND/giao dịch (trống: giữ nguyên)','')]
     return {'type':9,'data':{'custom_id':f'mprice:form:{action}:{side}',
-        'title':'Giá vốn riêng MEXC' if action=='cost' else 'Bám giá MEXC '+side,
+        'title':'Giá vốn riêng MEXC' if action=='cost' else ('Đặt giá MEXC ' if action=='price' else 'Bám giá MEXC ')+side,
         'components':[{'type':1,'components':[{'type':4,'custom_id':key,'label':label,'style':1,
-            'required':True,'max_length':100,'placeholder':placeholder}]} for key,label,placeholder in fields]}}
+            'required':key not in {'quantity','minimum','maximum'},'max_length':100,'placeholder':placeholder}]} for key,label,placeholder in fields]}}
 
 
 async def execute_panel(payload, db, owner):
@@ -46,6 +54,10 @@ async def execute_panel(payload, db, owner):
         action, side = parts[2:]
         if side not in {'BUY','SELL'}: raise ValueError('Chiều không hợp lệ.')
         values={x['custom_id']:x.get('value','').strip() for row in payload['data'].get('components',[]) for x in row.get('components',[])}
+        if action=='price':
+            if values.get('slot') not in {'1','2'}:raise ValueError('Chọn slot 1 hoặc 2.')
+            terms={key:str(input_number(values[key],money=key!='quantity')) for key in ('quantity','minimum','maximum') if values.get(key)}
+            return await manual_preview(db,owner,side,values['slot'],input_number(values.get('price',''),money=True),terms)
         if action=='cost':
             raw=values.get('cost','')
             if not re.fullmatch(r'[0-9]{1,12}',raw) or int(raw)<=0: raise ValueError('Nhập giá vốn nguyên dương, không dấu phân cách.')
@@ -72,6 +84,13 @@ async def execute_panel(payload, db, owner):
         slot.paused_by_floor=False;slot.revision=uuid.uuid4().hex
         db.add(OKXAuditLog(action='MEXC_PRICE_CONFIG',actor=actor,detail=f'{key} ad={code}; rank={slot.rank}; Auto=False'));db.commit()
         return {'content':f'Đã lưu MEXC {key}: {code} · vị trí {slot.rank}. Auto đang tắt; kiểm tra giá vốn rồi bấm Auto để bật.','components':[]}
+    if action=='confirm' and len(parts)==3:
+        return {'content':await manual_confirm(db,owner,parts[2]),'components':[]}
+    if action=='cancel' and len(parts)==3:
+        changed=db.execute(update(MexcManualPriceDraft).where(MexcManualPriceDraft.id==parts[2],
+            MexcManualPriceDraft.owner==owner,MexcManualPriceDraft.used.is_(False)).values(used=True))
+        db.commit()
+        return {'content':'Đã hủy xác nhận; chưa gửi MEXC.' if changed.rowcount==1 else 'Xác nhận đã xử lý; không hủy yêu cầu đã gửi.','components':[]}
     if action=='auto' and len(parts)==3 and parts[2] in {'BUY','SELL'}:
         return {'content':'Chọn Auto MEXC '+parts[2]+'. Không mở quảng cáo tắt thủ công.','components':[{'type':1,'components':[
             button(f'Slot {i}: '+label,f'setauto:{parts[2]}:{i}:{flag}',style)
@@ -83,6 +102,7 @@ async def execute_panel(payload, db, owner):
         verified_revision=slot.revision
         if enabled:
             if not settings.mexc_ad_pricing_enabled: raise ValueError('MEXC_AD_PRICING_ENABLED đang tắt trên Render.')
+            if not valid_webhook(settings.discord_webhook_mexc_pricing):raise ValueError('Chưa cấu hình kênh cảnh báo giá MEXC; chưa bật Auto. Đặt giá thủ công vẫn dùng được.')
             if slot.state!='IDLE': raise ValueError('Kết quả yêu cầu cũ chưa rõ; kiểm tra MEXC trước.')
             if parts[2]=='SELL' and cost_settings(db).cost is None: raise ValueError('Nhập giá vốn MEXC trước khi bật Auto bán.')
             async with MexcP2PClient() as api: row=await read_ad(api,slot.ad,parts[2])
@@ -102,6 +122,7 @@ async def execute_panel(payload, db, owner):
     if action=='status':
         config=cost_settings(db)
         text='MEXC · '+('Sẵn sàng' if settings.mexc_ad_pricing_enabled else 'Render đang tắt')+'\n'
+        if not settings.discord_webhook_mexc_pricing:text+='Auto còn chờ cấu hình kênh cảnh báo. Đặt giá thủ công vẫn dùng được.\n'
         text+='Giá vốn riêng: '+(f'{config.cost:,.0f}đ · sàn bán {config.cost+10:,.0f}đ' if config.cost else 'chưa nhập')
         for slot in db.scalars(select(MexcPriceSlot)).all():
             text+=f'\n{slot.key}: {slot.ad} · vị trí {slot.rank} · Auto {slot.enabled} · {slot.state}'

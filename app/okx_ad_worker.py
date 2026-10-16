@@ -160,7 +160,7 @@ async def process_ad_pricing(db, client):
                     except Exception as error:
                         cost_error = safe_failure(error)
                 if cost_error:
-                    await notice(db, attempt, slot, "COST_UNVERIFIED", "Không xác minh được lệnh mua hoàn tất gần nhất: " + cost_error)
+                    await notice(db, attempt, slot, "COST_UNVERIFIED", "Chưa xác minh giá vốn nhập thủ công: " + cost_error)
                     continue
             rank = selected_rank(db, slot.side)
             plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None, target_rank=rank)

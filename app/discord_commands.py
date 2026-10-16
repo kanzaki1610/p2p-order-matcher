@@ -158,7 +158,7 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
             return {'type':4,'data':{'content':'Dùng /gia bang rồi bấm các nút điều khiển MEXC.','flags':64}}
         if mexc_control and payload.get('type') == 3:
             parts = custom.split(':')
-            if len(parts)==3 and parts[1] in {'config','cost'}:
+            if len(parts)==3 and parts[1] in {'config','cost','price'}:
                 return mexc_price_panel.modal(parts[1],parts[2])
         if pricing and payload.get('type') == 3:
             parts = data['custom_id'].split(':')

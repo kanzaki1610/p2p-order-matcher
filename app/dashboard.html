@@ -106,7 +106,7 @@
             <div class="field"><label for="buyRank">Vị trí mua</label><input id="buyRank" type="number" min="1" max="50" step="1" value="10"><button class="btn primary" onclick="saveRank('BUY')">Lưu vị trí mua</button></div>
             <div class="field"><label for="sellRank">Vị trí bán</label><input id="sellRank" type="number" min="1" max="50" step="1" value="10"><button class="btn primary" onclick="saveRank('SELL')">Lưu vị trí bán</button></div>
           </div>
-          <p class="hint">Nhập từ 1 đến 50. Nếu nguồn không có đủ quảng cáo cho vị trí bạn chọn, bot dừng điều chỉnh và báo lỗi. Giá bán luôn phải đạt giá mua hoàn tất gần nhất +10đ; quảng cáo ẩn thủ công được giữ ẩn.</p>
+          <p class="hint">Nhập từ 1 đến 50. Nếu nguồn không có đủ quảng cáo cho vị trí bạn chọn, bot dừng điều chỉnh và báo lỗi. Giá bán luôn phải đạt giá vốn bạn nhập thủ công +10đ; quảng cáo ẩn thủ công được giữ ẩn.</p>
           <div class="actions"><button class="btn" onclick="previewRank('BUY')">Xem giá mua dự kiến</button><button class="btn" onclick="previewRank('SELL')">Xem giá bán dự kiến</button></div>
           <pre class="result" id="rankResult">Chọn vị trí rồi xem giá dự kiến. Khi bám giá đang tắt, lưu vị trí chưa làm thay đổi quảng cáo.</pre>
           <p class="hint">Trên Discord: /gia vitri → chọn Mua/Bán → nhập vị trí. /gia xem để xem giá tham chiếu; /gia trangthai để kiểm tra cấu hình.</p>

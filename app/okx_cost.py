@@ -100,7 +100,7 @@ def cost_summary(db):
     if row and row.enabled:
         price = number(row.unit_price)
         return f'Giá vốn thủ công: {price:,.0f}đ/USDT · bán tối thiểu {price+10:,.0f}đ.'
-    return 'Giá vốn: lệnh mua OKX hoàn tất gần nhất · bán tối thiểu giá vốn +10đ.'
+    return 'Chưa nhập giá vốn OKX thủ công; chưa chỉnh hoặc ẩn quảng cáo bán.'
 
 
 def save_cost(db, price, actor):
@@ -110,6 +110,8 @@ def save_cost(db, price, actor):
     from .models import OKXManualCost, OKXAuditLog
     if settings.database_schema == 'kayhap':
         raise ValueError('Điều khiển giá hiện chỉ hỗ trợ tài khoản gốc.')
+    if price is None:
+        raise ValueError('Chỉ dùng giá vốn nhập thủ công. Bấm Nhập giá vốn để lưu giá mua của bạn.')
     if price is not None:
         price = number(price)
         if price != price.to_integral_value() or price >= Decimal('1000000000000000'):
@@ -118,12 +120,12 @@ def save_cost(db, price, actor):
     if row is None:
         row = OKXManualCost(id=1)
         db.add(row)
-    row.enabled = price is not None
+    row.enabled = True
     row.unit_price = price
     row.revision = uuid.uuid4().hex
     row.updated_at = datetime.now(timezone.utc)
     row.actor = actor
-    db.add(OKXAuditLog(action='OKX_COST_SOURCE', actor=actor, detail='MANUAL:'+str(price) if price is not None else 'LAST_COMPLETED_BUY'))
+    db.add(OKXAuditLog(action='OKX_COST_SOURCE', actor=actor, detail='MANUAL:'+str(price)))
     db.commit()
     return cost_summary(db)
 
@@ -135,6 +137,4 @@ async def read_pricing_cost(db, client, *, reader=None):
     if row and row.enabled:
         price = number(row.unit_price)
         return {'unit_price':str(price), 'mode':'MANUAL', 'order_id':'thủ công', 'settings_revision':revision}
-    result = dict(await (reader or read_last_buy_cost)(client))
-    result['settings_revision'] = revision
-    return result
+    raise ValueError('Chưa nhập giá vốn OKX thủ công. Bot không dùng lệnh mua gần nhất.')

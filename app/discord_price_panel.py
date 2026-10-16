@@ -63,7 +63,7 @@ def panel():
     for side,label in [('BUY','Mua'),('SELL','Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
-    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Dùng giá mua OKX','costauto')]})
+    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1)]})
     return {'content':'**Điều khiển giá OKX**\nChỉ operator được sử dụng. Đặt giá thủ công cần xác nhận và tắt Auto của slot. Tạm dừng không ẩn quảng cáo trên sàn.','components':rows,'allowed_mentions':{'parse':[]}}
 
 def modal(action,side):
@@ -187,7 +187,7 @@ async def execute_panel(payload,db,owner):
         if changed.rowcount!=1: return {'content':'Xác nhận không tồn tại hoặc đã xử lý. Không thể hủy yêu cầu đã gửi; xem trạng thái trên OKX.','components':[]}
         return {'content':'Đã hủy xác nhận; không gửi yêu cầu sửa giá.','components':[]}
     elif action=='costauto':
-        return {'content':save_cost(db,None,'discord:'+owner)+'\nĐã chuyển về giá mua OKX gần nhất.','components':[]}
+        return {'content':'Chỉ dùng giá vốn bạn nhập thủ công. Bấm Nhập giá vốn; không lấy lệnh mua gần nhất.','components':[]}
     elif action=='status': data=command('trangthai')
     elif action=='list': data=command('danhsach',chieu=code[2])
     elif action in {'pause','resume'}: data=command('bamtat',bat=action=='resume')
