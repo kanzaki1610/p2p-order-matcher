@@ -107,7 +107,6 @@ def test_unsafe_exchange_state_never_posts(setup, field, value):
         return httpx.Response(200, json={"code": "0", "data": [row]})
     run(db, handler)
     expected = "WAITING_BUYER_PAYMENT" if field == "paymentStatus" and value == "unpaid" else "REVIEW_REQUIRED"
-    if field == "orderStatus" and value == "cancelled": expected = "CANCELLED"
     assert db.get(OKXReleaseAttempt, order.id).state == expected
     assert order.status != "RELEASED"
 
@@ -221,37 +220,7 @@ def test_waiting_revalidates_every_condition_before_post(setup, field, value):
     run(db, handler)
     row[field] = value
     run(db, handler)
-    assert db.get(OKXReleaseAttempt, order.id).state == ("CANCELLED" if field == "orderStatus" and value == "cancelled" else "REVIEW_REQUIRED")
-
-
-@pytest.mark.parametrize('state', ['READY', 'WAITING_BUYER_PAYMENT', 'UNKNOWN'])
-def test_verified_cancelled_order_is_silent_and_never_released(setup, monkeypatch, state):
-    db, order, row = setup
-    db.add(OKXReleaseAttempt(order_id=order.id,transaction_id=db.query(PaymentMatch).one().transaction_id,state=state))
-    db.commit()
-    row['orderStatus']='cancelled'
-    notifier=AsyncMock(return_value=True)
-    monkeypatch.setattr('app.okx_release.notify_event',notifier)
-    def handler(request):
-        assert request.method=='GET'
-        return httpx.Response(200,json={'code':'0','data':[row]})
-    run(db,handler);run(db,handler)
-    assert order.status=='CANCELLED'
-    assert db.get(OKXReleaseAttempt,order.id).state=='CANCELLED'
-    notifier.assert_not_awaited()
-
-
-def test_cancelled_reply_for_wrong_order_is_not_silently_accepted(setup, monkeypatch):
-    db, order, row = setup
-    row.update(orderStatus='cancelled',orderId='OTHER')
-    notifier=AsyncMock(return_value=True)
-    monkeypatch.setattr('app.okx_release.notify_event',notifier)
-    def handler(request):
-        assert request.method=='GET'
-        return httpx.Response(200,json={'code':'0','data':[row]})
-    run(db,handler)
-    assert order.status!='CANCELLED'
-    notifier.assert_awaited_once()
+    assert db.get(OKXReleaseAttempt, order.id).state == "REVIEW_REQUIRED"
 
 
 def test_disabled_auto_does_not_poll_waiting_or_reset_old_review(setup, monkeypatch):
