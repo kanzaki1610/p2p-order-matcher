@@ -17,6 +17,15 @@ Saving configuration leaves the slot disabled. Open the advertisement on MEXC,
 then enable the desired slot using its Auto button. Cost and ad selection do not
 change OKX preferences. MEXC cost is entered manually, including purchases on other exchanges.
 
+The manual BUY/SELL price buttons preview price, quantity and minimum/maximum
+fiat limits before a five-minute, owner-bound, one-use confirmation. Confirmation
+disables Auto for that slot and preserves OPEN/CLOSE status. Quantity changes
+use supplyQuantity/reduceQuantity deltas rather than recreating the entire stock.
+Current ad fields and the separate manual cost are revalidated before submission.
+Unknown outcomes cannot be submitted again. Manual pricing can work before the
+dedicated alert webhook is configured; Auto remains blocked without that webhook.
+Neither OKX nor MEXC pricing reads the latest purchase as its acquisition cost.
+
 The source is the fresh `mexc_buy`/`mexc_sell` panel on AutoP2P, with own-nickname
 rows excluded. The worker matches the chosen competitor's price without offsets.
 SELL below the separate acquisition cost +10 VND is hidden. Only a bot-hidden ad
