@@ -16,6 +16,7 @@ from .notifications import notify_command_result
 from .telegram_commands import handle_command
 from .okx_price_controls import parse_price_command, execute_price_command
 from .discord_price_panel import panel, modal, execute_panel
+from . import mexc_price_panel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def authorized(payload):
         bool(settings.discord_guild_id)
         and payload.get("guild_id") == settings.discord_guild_id
         and payload.get("application_id") == settings.discord_application_id
-        and payload.get("channel_id") in ids(settings.discord_command_channel_ids)
+        and payload.get("channel_id") in (ids(settings.discord_command_channel_ids) | ({settings.discord_mexc_pricing_channel_id} if settings.discord_mexc_pricing_channel_id else set()))
         and (user_id in ids(settings.discord_allowed_user_ids)
              or bool(roles & ids(settings.discord_allowed_role_ids)))
     )
@@ -82,7 +83,8 @@ async def run_command(payload, text):
         with SessionLocal() as db:
             if payload.get('type') in {3,5}:
                 try:
-                    result = await execute_panel(payload, db, str(user['id']))
+                    executor = mexc_price_panel.execute_panel if str(payload.get('data',{}).get('custom_id','')).startswith('mprice:') else execute_panel
+                    result = await executor(payload, db, str(user['id']))
                 except ValueError as error:
                     db.rollback()
                     result = {'content': str(error), 'components': []}
@@ -139,14 +141,25 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
         raise HTTPException(404, "Discord commands disabled")
     if payload.get("type") not in {2,3,5} or not authorized(payload):
         return {"type": 4, "data": {"content": "Bạn không có quyền dùng lệnh trong server/kênh này.", "flags": 64}}
-    pricing = payload.get("data", {}).get("name") == "gia" or str(payload.get('data',{}).get('custom_id','')).startswith('price:')
+    custom = str(payload.get('data',{}).get('custom_id',''))
+    mexc_channel = bool(settings.discord_mexc_pricing_channel_id) and payload.get('channel_id') == settings.discord_mexc_pricing_channel_id
+    mexc_control = custom.startswith('mprice:')
+    pricing = payload.get("data", {}).get("name") == "gia" or custom.startswith(('price:','mprice:'))
+    if (mexc_control and not mexc_channel) or (mexc_channel and not (mexc_control or payload.get('data',{}).get('name')=='gia')):
+        return {'type':4,'data':{'content':'Dùng đúng kênh điều khiển của sàn tương ứng.','flags':64}}
     if ((pricing and (not settings.discord_pricing_commands_enabled or settings.database_schema == "kayhap"))
             or (not pricing and not settings.discord_commands_enabled)):
         return {"type": 4, "data": {"content": "Lệnh này chưa được bật cho tài khoản này.", "flags": 64}}
     try:
         data = payload.get('data',{})
         if pricing and payload.get('type') == 2 and data.get('options',[{}])[0].get('name') == 'bang':
-            return {'type':4,'data':panel()}
+            return {'type':4,'data':mexc_price_panel.panel() if mexc_channel else panel()}
+        if mexc_channel and payload.get('type') == 2:
+            return {'type':4,'data':{'content':'Dùng /gia bang rồi bấm các nút điều khiển MEXC.','flags':64}}
+        if mexc_control and payload.get('type') == 3:
+            parts = custom.split(':')
+            if len(parts)==3 and parts[1] in {'config','cost'}:
+                return mexc_price_panel.modal(parts[1],parts[2])
         if pricing and payload.get('type') == 3:
             parts = data['custom_id'].split(':')
             if len(parts)==3 and parts[1] in {'price','rank','ad','cost'} and parts[2] in {'BUY','SELL'}:

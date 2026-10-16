@@ -23,6 +23,8 @@ ROUTES = {
 
 
 def webhook_url(event: str) -> str:
+    if event == 'MEXC_PRICING_ALERT':
+        return settings.discord_webhook_mexc_pricing
     for exchange in ("OKX", "MEXC"):
         suffix = "_" + exchange
         if event.endswith(suffix) and event[:-len(suffix)] in {"UNMATCHED", "REVIEW_REQUIRED", "REJECTED"}:

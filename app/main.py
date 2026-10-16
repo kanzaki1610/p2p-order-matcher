@@ -14,6 +14,7 @@ from .mexc_sync import mexc_sync_loop
 from .okx_sync import okx_sync_loop
 from .okx_release import OKXReleaseAttempt
 from .okx_ad_worker import pricing_loop
+from .mexc_pricing import pricing_loop as mexc_pricing_loop
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -34,18 +35,26 @@ bitget_task: asyncio.Task | None = None
 mexc_task: asyncio.Task | None = None
 okx_task: asyncio.Task | None = None
 pricing_task: asyncio.Task | None = None
+mexc_pricing_task: asyncio.Task | None = None
 
 
 @app.on_event("startup")
 async def start_ad_pricing():
-    global pricing_task
+    global pricing_task, mexc_pricing_task
     if settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap":
         pricing_task = asyncio.create_task(run_isolated(pricing_loop))
+    if settings.mexc_ad_pricing_enabled and settings.database_schema != 'kayhap':
+        mexc_pricing_task = asyncio.create_task(run_isolated(mexc_pricing_loop))
 
 
 @app.on_event("shutdown")
 async def stop_ad_pricing():
-    global pricing_task
+    global pricing_task, mexc_pricing_task
+    if mexc_pricing_task:
+        mexc_pricing_task.cancel()
+        try: await mexc_pricing_task
+        except asyncio.CancelledError: pass
+        mexc_pricing_task = None
     if pricing_task:
         pricing_task.cancel()
         try:
