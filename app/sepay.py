@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -18,11 +19,19 @@ BANK_ALIASES = {
     "OCB": "OCB",
     "ORIENTCOMMERCIALBANK": "OCB",
     "NGANHANGPHUONGDONG": "OCB",
+    "KLB": "KIENLONGBANK",
+    "KIENLONG": "KIENLONGBANK",
+    "KIENLONGBANK": "KIENLONGBANK",
+    "NGANHANGTMCPKIENLONG": "KIENLONGBANK",
+    "NGANHANGKIENLONG": "KIENLONGBANK",
+    "KIENLONGCOMMERCIALJOINTSTOCKBANK": "KIENLONGBANK",
 }
 
 
 def normalize_bank(gateway: str) -> str:
-    key = re.sub(r"[^A-Z0-9]", "", gateway.upper())
+    folded = unicodedata.normalize("NFD", gateway.upper().replace("Đ", "D").replace("đ", "D"))
+    folded = "".join(char for char in folded if unicodedata.category(char) != "Mn")
+    key = re.sub(r"[^A-Z0-9]", "", folded)
     return BANK_ALIASES.get(key, key[:20] or "UNKNOWN")
 
 
