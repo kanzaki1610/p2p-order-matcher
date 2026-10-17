@@ -30,3 +30,25 @@ def test_sepay_normalizes_vpbank_and_acb_aliases():
     assert normalize_bank("Vietnam Prosperity Bank") == "VPBANK"
     assert normalize_bank("ACB") == "ACB"
     assert normalize_bank("Asia Commercial Bank") == "ACB"
+
+
+def test_kienlongbank_aliases_and_other_banks_remain_distinct():
+    for name in ("KienLongBank", "KLB", "Kien Long Bank", "Kiên Long",
+                 "Ngân hàng TMCP Kiên Long", "Kien Long Commercial Joint Stock Bank"):
+        assert normalize_bank(name) == "KIENLONGBANK"
+    assert normalize_bank("ACB") != normalize_bank("KLB")
+    assert normalize_bank("MBBank") == "MB"
+    assert normalize_bank("VIB") == "VIB"
+
+
+def test_kienlongbank_payment_identity_requires_correct_bank():
+    from decimal import Decimal
+    from app.models import BankTransaction, P2POrder
+    from app.matching import payment_identity
+    order = P2POrder(side="SELL", order_code="KLB123456789", fiat_amount=Decimal("10000"),
+                     counterparty_name="Nguyen Van An", expected_bank="KLB")
+    tx = BankTransaction(direction="CREDIT", bank="KienLongBank", amount=Decimal("10000"),
+                         description="KLB123456789", transaction_id="KLB-TEST-ONLY")
+    assert payment_identity(order, tx)
+    tx.bank = "ACB"
+    assert not payment_identity(order, tx)
