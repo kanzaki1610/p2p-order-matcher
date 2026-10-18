@@ -269,8 +269,8 @@ def ingest_transaction(
     _: None = Depends(verify_ingest_key),
 ):
     bank = normalize_bank(bank)
-    if bank not in {"MB", "VIB", "VPBANK", "ACB", "OCB", "KIENLONGBANK", "VIETINBANK"}:
-        raise HTTPException(status_code=422, detail="Chỉ hỗ trợ MB, VIB, VPBANK, ACB, OCB, KienLongBank hoặc VietinBank")
+    if bank not in {"MB", "VIB", "VPBANK", "ACB", "OCB", "KIENLONGBANK", "VIETINBANK", "BIDV"}:
+        raise HTTPException(status_code=422, detail="Chỉ hỗ trợ MB, VIB, VPBANK, ACB, OCB, KienLongBank, VietinBank hoặc BIDV")
     tx = BankTransaction(bank=bank, **payload.model_dump())
     db.add(tx)
     try:
