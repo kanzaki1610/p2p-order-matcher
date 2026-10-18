@@ -73,3 +73,24 @@ def test_vietinbank_aliases_do_not_match_vietcombank_or_other_banks():
         tx.bank = bank
         assert normalize_bank(bank) != "VIETINBANK"
         assert not payment_identity(order, tx)
+
+
+def test_bidv_full_bank_names_match_only_bidv():
+    from decimal import Decimal
+    from app.models import BankTransaction, P2POrder
+    from app.matching import payment_identity
+    aliases = ("BIDV", "Ngân hàng TMCP Đầu tư và Phát triển Việt Nam",
+               "Ngân hàng Đầu tư và Phát triển Việt Nam",
+               "Bank for Investment and Development of Vietnam",
+               "Joint Stock Commercial Bank for Investment and Development of Vietnam")
+    order = P2POrder(side="SELL", order_code="BIDV123456789", fiat_amount=Decimal("10000"),
+                     counterparty_name="Nguyen Van An", expected_bank=aliases[1])
+    tx = BankTransaction(direction="CREDIT", bank="BIDV", amount=Decimal("10000"),
+                         description="BIDV123456789", transaction_id="BIDV-TEST-ONLY")
+    for bank in aliases:
+        assert normalize_bank(bank) == "BIDV"
+        tx.bank = bank
+        assert payment_identity(order, tx)
+    for bank in ("VIETINBANK", "Vietcombank", "MB", "ACB", "KLB"):
+        tx.bank = bank
+        assert not payment_identity(order, tx)
