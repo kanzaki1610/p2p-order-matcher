@@ -52,3 +52,24 @@ def test_kienlongbank_payment_identity_requires_correct_bank():
     assert payment_identity(order, tx)
     tx.bank = "ACB"
     assert not payment_identity(order, tx)
+
+
+def test_vietinbank_aliases_do_not_match_vietcombank_or_other_banks():
+    from decimal import Decimal
+    from app.models import BankTransaction, P2POrder
+    from app.matching import payment_identity
+    aliases = ("VietinBank", "Vietin Bank", "ICB", "CTG",
+               "Ngân hàng TMCP Công thương Việt Nam",
+               "Vietnam Joint Stock Commercial Bank for Industry and Trade")
+    order = P2POrder(side="SELL", order_code="VIETIN123456789", fiat_amount=Decimal("10000"),
+                     counterparty_name="Nguyen Van An", expected_bank="ICB")
+    tx = BankTransaction(direction="CREDIT", bank="VietinBank", amount=Decimal("10000"),
+                         description="VIETIN123456789", transaction_id="VIETIN-TEST-ONLY")
+    for bank in aliases:
+        assert normalize_bank(bank) == "VIETINBANK"
+        tx.bank = bank
+        assert payment_identity(order, tx)
+    for bank in ("Vietcombank", "VCB", "VIB", "MB", "ACB", "KLB"):
+        tx.bank = bank
+        assert normalize_bank(bank) != "VIETINBANK"
+        assert not payment_identity(order, tx)
