@@ -197,7 +197,7 @@ def test_cost_change_during_plan_blocks_old_floor_write(db,setup,monkeypatch):
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
 
 
-def test_sixty_second_write_interval_keeps_five_second_scans(db,setup,monkeypatch):
+def test_thirty_second_write_interval_keeps_five_second_scans(db,setup,monkeypatch):
     from datetime import datetime,timedelta,timezone
     monkeypatch.setattr(worker.settings,'okx_ad_pricing_seconds',5)
     attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',last_action_at=datetime.now(timezone.utc)-timedelta(seconds=6))
@@ -207,7 +207,7 @@ def test_sixty_second_write_interval_keeps_five_second_scans(db,setup,monkeypatc
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
     write.assert_not_awaited()
-    attempt.last_action_at=datetime.now(timezone.utc)-timedelta(seconds=65)
+    attempt.last_action_at=datetime.now(timezone.utc)-timedelta(seconds=31)
     db.commit()
     monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
     run(db)
