@@ -197,17 +197,52 @@ def test_cost_change_during_plan_blocks_old_floor_write(db,setup,monkeypatch):
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
 
 
-def test_five_second_cooldown_allows_confirmed_followup(db,setup,monkeypatch):
+def test_sixty_second_write_interval_keeps_five_second_scans(db,setup,monkeypatch):
     from datetime import datetime,timedelta,timezone
     monkeypatch.setattr(worker.settings,'okx_ad_pricing_seconds',5)
     attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',last_action_at=datetime.now(timezone.utc)-timedelta(seconds=6))
     db.add(attempt);db.commit()
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
+    write.assert_not_awaited()
+    attempt.last_action_at=datetime.now(timezone.utc)-timedelta(seconds=65)
+    db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    run(db)
     assert write.await_count==1
     assert setup.adv_id=='456'
+
+
+def test_recent_other_slot_blocks_price_update_after_restart(db,setup,monkeypatch):
+    from datetime import datetime,timedelta,timezone
+    other=OKXSlot(side='BUY',slot_number=1,auto_enabled=False,adv_id='789')
+    db.add(other);db.commit()
+    db.add(worker.OKXAdPriceAttempt(slot_id=other.id,state='UNKNOWN',
+        last_action_at=datetime.now(timezone.utc)-timedelta(seconds=15)))
+    db.commit();db.expire_all()
+    monkeypatch.setattr(worker.settings,'okx_ad_min_update_seconds',1)
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,other.id).state=='UNKNOWN'
+
+
+def test_protective_hide_not_delayed_by_other_slot_price_update(db,setup,monkeypatch):
+    from datetime import datetime,timezone
+    other=OKXSlot(side='BUY',slot_number=1,auto_enabled=False,adv_id='789')
+    db.add(other);db.commit()
+    db.add(worker.OKXAdPriceAttempt(slot_id=other.id,state='IDLE',last_action_at=datetime.now(timezone.utc)))
+    db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(hidden=True)]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan('HIDE_AD','26059')))
+    write=AsyncMock(return_value={'adId':'123'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_awaited_once()
+    assert write.call_args.args[2]=='/api/v5/p2p/ad/update-active-status'
 
 
 def test_five_second_cooldown_blocks_immediate_second_write(db,setup,monkeypatch):
