@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, select, update
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -179,6 +179,13 @@ async def process_ad_pricing(db, client):
             if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume:
                 continue
             now = datetime.now(timezone.utc)
+            # Share the write interval across BUY/SELL slots and worker restarts.
+            # A protective hide is not delayed by ordinary price changes.
+            if plan["action"] == "UPDATE_PRICE":
+                latest = db.scalar(select(func.max(OKXAdPriceAttempt.last_action_at)))
+                latest_utc = (latest.astimezone(timezone.utc) if latest.tzinfo else latest.replace(tzinfo=timezone.utc)) if latest else None
+                if latest_utc and (now - latest_utc).total_seconds() < max(60, settings.okx_ad_min_update_seconds):
+                    continue
             last = attempt.last_action_at
             last_utc = (last.astimezone(timezone.utc) if last.tzinfo else last.replace(tzinfo=timezone.utc)) if last else None
             if last_utc and (now - last_utc).total_seconds() < max(5, settings.okx_ad_pricing_seconds):

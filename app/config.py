@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     mexc_ad_pricing_seconds: int = 5
     okx_ad_pricing_enabled: bool = False
     okx_ad_pricing_seconds: int = 5
+    # Automatic price writes share this interval; the worker enforces >=60s.
+    okx_ad_min_update_seconds: int = 60
     discord_commands_enabled: bool = False
     discord_pricing_commands_enabled: bool = False
     discord_application_id: str = ""
