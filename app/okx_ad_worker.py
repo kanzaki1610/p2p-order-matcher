@@ -184,7 +184,7 @@ async def process_ad_pricing(db, client):
             if plan["action"] == "UPDATE_PRICE":
                 latest = db.scalar(select(func.max(OKXAdPriceAttempt.last_action_at)))
                 latest_utc = (latest.astimezone(timezone.utc) if latest.tzinfo else latest.replace(tzinfo=timezone.utc)) if latest else None
-                if latest_utc and (now - latest_utc).total_seconds() < max(60, settings.okx_ad_min_update_seconds):
+                if latest_utc and (now - latest_utc).total_seconds() < max(30, settings.okx_ad_min_update_seconds):
                     continue
             last = attempt.last_action_at
             last_utc = (last.astimezone(timezone.utc) if last.tzinfo else last.replace(tzinfo=timezone.utc)) if last else None
