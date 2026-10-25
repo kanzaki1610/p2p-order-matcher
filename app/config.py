@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     discord_mexc_pricing_channel_id: str = ""
     discord_release_channel_id: str = ""
     discord_release_allowed_user_ids: str = ""
+    release_price_guard_enabled: bool = False
+    okx_merchant_nicknames: str = ""
+    mexc_merchant_nicknames: str = ""
     mexc_ad_pricing_enabled: bool = False
     mexc_ad_pricing_seconds: int = 5
     okx_ad_pricing_enabled: bool = False

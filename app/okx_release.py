@@ -23,6 +23,7 @@ from .diagnostics import safe_status
 from .discord_notifications import review_event
 from .telegram_commands import format_vietnam_time
 from .release_controls import release_enabled
+from . import release_price_guard as price_guard
 
 
 class OKXReleaseAttempt(Base):
@@ -190,13 +191,13 @@ async def process_releases(db, client):
             except IntegrityError:
                 db.rollback()
                 continue
-        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT"}:
+        if attempt.state in {"READY", "WAITING_BUYER_PAYMENT", "WAITING_PRICE_CHECK"}:
             if not release_enabled(db):
                 continue
             # Claim before any network request; a second worker cannot POST this order.
             claimed = db.execute(update(OKXReleaseAttempt).where(
                 OKXReleaseAttempt.order_id == order.id,
-                OKXReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT"])
+                OKXReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT", "WAITING_PRICE_CHECK"])
             ).values(state="SUBMITTING"))
             db.commit()
             if claimed.rowcount != 1:
@@ -224,6 +225,12 @@ async def process_releases(db, client):
                 db.commit()
                 await notify_attempt(db, attempt, order,
                     "Không đọc được chi tiết lệnh: " + failure_reason(error))
+                continue
+            market = await price_guard.check('OKX', row)
+            if not market['allowed']:
+                attempt.state = 'REVIEW_REQUIRED' if market['kind'] == 'UNDERPRICED' else 'WAITING_PRICE_CHECK'
+                save_diagnostic(db, attempt, price_guard.reason(market))
+                await price_guard.alert(db, 'OKX', order, market)
                 continue
             # Recheck after network preflight, under the same lock as the stop button.
             if not release_enabled(db, lock=True):
