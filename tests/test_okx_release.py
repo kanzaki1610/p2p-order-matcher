@@ -329,3 +329,25 @@ def test_stop_during_preflight_prevents_post(setup):
         return httpx.Response(200, json={'code': '0', 'data': [row]})
     run(db, handler)
     assert db.get(OKXReleaseAttempt, order.id).state == 'READY'
+
+
+@pytest.mark.parametrize('kind,state',[('UNDERPRICED','REVIEW_REQUIRED'),('SOURCE_UNAVAILABLE','WAITING_PRICE_CHECK')])
+def test_market_price_guard_prevents_release_and_source_wait_can_resume(setup,monkeypatch,kind,state):
+    from app import release_price_guard as guard
+    db,order,row=setup
+    result={'allowed':False,'kind':kind,'order_price':25000,'reference':26000,'difference':1000}
+    monkeypatch.setattr(guard,'check',AsyncMock(return_value=result))
+    monkeypatch.setattr(guard,'alert',AsyncMock())
+    def read_only(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':'0','data':[row]})
+    run(db,read_only)
+    assert db.get(OKXReleaseAttempt,order.id).state==state
+    monkeypatch.setattr(guard,'check',AsyncMock(return_value={'allowed':True,'kind':'SAFE'}))
+    calls=[]
+    def handler(request):
+        calls.append(request.method)
+        if request.method=='POST': row.update(orderStatus='completed',paymentStatus='confirmed')
+        return httpx.Response(200,json={'code':'0','data':[row]})
+    run(db,handler)
+    assert calls.count('POST')==(1 if kind=='SOURCE_UNAVAILABLE' else 0)

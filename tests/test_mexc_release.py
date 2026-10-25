@@ -406,3 +406,25 @@ def test_mexc_stop_during_preflight_never_posts(setup):
         return httpx.Response(200, json={'code': 0, 'data': row})
     run(db, handler)
     assert db.get(MexcReleaseAttempt, order.id).state == 'READY'
+
+
+@pytest.mark.parametrize('kind,state',[('UNDERPRICED','REVIEW_REQUIRED'),('SOURCE_UNAVAILABLE','WAITING_PRICE_CHECK')])
+def test_mexc_market_guard_blocks_release_and_bad_price_never_auto_retries(setup,monkeypatch,kind,state):
+    from app import release_price_guard as guard
+    db,order,tx,row=setup
+    result={'allowed':False,'kind':kind,'order_price':25000,'reference':26000,'difference':1000}
+    monkeypatch.setattr(guard,'check',AsyncMock(return_value=result))
+    monkeypatch.setattr(guard,'alert',AsyncMock())
+    def read_only(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,read_only)
+    assert db.get(MexcReleaseAttempt,order.id).state==state
+    monkeypatch.setattr(guard,'check',AsyncMock(return_value={'allowed':True,'kind':'SAFE'}))
+    calls=[]
+    def handler(request):
+        calls.append(request.method)
+        if request.method=='POST': row['state']='DONE'
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler)
+    assert calls.count('POST')==(1 if kind=='SOURCE_UNAVAILABLE' else 0)
