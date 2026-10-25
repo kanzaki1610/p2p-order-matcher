@@ -20,3 +20,13 @@ New `release_auto_switch` table is created by normal metadata startup, separatel
 The worker checks the switch on entry and again after authenticated preflight, immediately before committing UNKNOWN and sending the release. The final authorization takes a row lock also used by the button transaction. A request authorized before the stop may already be in flight and cannot be recalled. A stop is acknowledged only after database commit. Out-of-order old button actions cannot override newer actions (Discord snowflake ordering); interaction replay is deduplicated. Resuming rechecks pending READY/waiting orders; UNKNOWN and submitted attempts are never resubmitted.
 
 Validation: mocked exchange tests verify no requests while paused, pause during preflight blocks POST, resume processes pending orders, durable restart state, separate account databases, signed/channel/operator authorization, and stale action ordering. No live release is used for testing.
+
+## Sell-price guard (500 VND/USDT)
+
+Set `RELEASE_PRICE_GUARD_ENABLED=true`, `OKX_MERCHANT_NICKNAMES` and `MEXC_MERCHANT_NICKNAMES`; use `KAYHAP_` prefixes for kayhap. Nickname fields accept comma-separated own aliases and compare using Unicode NFKC + casefold.
+
+Before authorizing a release, read the authenticated order's fixed `unitPrice` (OKX) / `price` (MEXC). Use fresh same-exchange AutoP2P SELL panel data, preserving display order and excluding every configured own nickname. If first other seller price minus order price is **>=500 VND/USDT**, persist REVIEW_REQUIRED and never auto-retry that order, even if the ad price or market later changes. Changing the current ad does not change an existing order's price. The account-wide Auto switch does not clear this review hold.
+
+If price/reference/nickname validation fails, or saved/reported age exceeds 30s, wait in WAITING_PRICE_CHECK and send no release POST. A later poll rechecks the order and fresh source before any new submission. Existing UNKNOWN/SUBMITTED states never resubmit. Successful price checks do not bypass payment, ownership, bank, dispute or emergency-stop checks.
+
+Concise price alerts go to each account's private #auto-control through the installed application bot. If delivery fails, use its exchange-specific manual-review route. Deduplicate by account/order/exchange/reason kind so changing market values do not repeatedly alert the same blocked order. No real USDT release is used for testing.
