@@ -17,6 +17,7 @@ from .telegram_commands import handle_command
 from .okx_price_controls import parse_price_command, execute_price_command
 from .discord_price_panel import panel, modal, execute_panel
 from . import mexc_price_panel
+from . import release_controls
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -137,6 +138,13 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
         raise HTTPException(400, "Invalid JSON")
     if payload.get("type") == 1:
         return {"type": 1}
+    if str(payload.get('data', {}).get('custom_id', '')).startswith('release:'):
+        if (payload.get('type') != 3 or not release_controls.resolve_account(payload)
+                or not str(payload.get('id', '')).isdigit() or not payload.get('token')
+                or payload.get('data', {}).get('custom_id') not in {'release:off', 'release:on', 'release:status'}):
+            return {'type': 4, 'data': {'content': 'Bạn không có quyền dùng nút Auto trong server/kênh này.', 'flags': 64}}
+        background_tasks.add_task(run_release_control, payload)
+        return {'type': 5, 'data': {'flags': 64}}
     if not (settings.discord_commands_enabled or settings.discord_pricing_commands_enabled):
         raise HTTPException(404, "Discord commands disabled")
     if payload.get("type") not in {2,3,5} or not authorized(payload):
@@ -171,3 +179,8 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
         return {"type": 4, "data": {"content": str(exc), "flags": 64}}
     background_tasks.add_task(claim_and_run_command, payload, text)
     return {"type": 5, "data": {"flags": 64}}
+
+
+@isolated_io
+async def run_release_control(payload):
+    await release_controls.run_control(payload)

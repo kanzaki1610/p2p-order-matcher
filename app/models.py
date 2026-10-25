@@ -151,6 +151,16 @@ class OKXPricingSwitch(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class ReleaseAutoSwitch(Base):
+    """One emergency stop per account schema, shared by OKX and MEXC."""
+    __tablename__ = "release_auto_switch"
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_interaction_id: Mapped[str] = mapped_column(String(30), default="0")
+    actor: Mapped[str] = mapped_column(String(100), default="system")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class OKXSlot(Base):
     __tablename__ = "okx_slots"
     __table_args__ = (UniqueConstraint("side", "slot_number", name="uq_okx_slot"),)

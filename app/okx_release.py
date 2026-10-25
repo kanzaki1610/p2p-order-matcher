@@ -22,6 +22,7 @@ from .okx_sync import OKXOrderReceipt
 from .diagnostics import safe_status
 from .discord_notifications import review_event
 from .telegram_commands import format_vietnam_time
+from .release_controls import release_enabled
 
 
 class OKXReleaseAttempt(Base):
@@ -167,6 +168,8 @@ async def process_releases(db, client):
     # The false flag prevents even preflight requests and notification side effects.
     if not settings.okx_auto_release_enabled:
         return
+    if not release_enabled(db):
+        return
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
         order, tx = db.get(P2POrder, match.order_id), db.get(BankTransaction, match.transaction_id)
         tx=payment_for_order(db,order,tx)
@@ -188,6 +191,8 @@ async def process_releases(db, client):
                 db.rollback()
                 continue
         if attempt.state in {"READY", "WAITING_BUYER_PAYMENT"}:
+            if not release_enabled(db):
+                continue
             # Claim before any network request; a second worker cannot POST this order.
             claimed = db.execute(update(OKXReleaseAttempt).where(
                 OKXReleaseAttempt.order_id == order.id,
@@ -219,6 +224,11 @@ async def process_releases(db, client):
                 db.commit()
                 await notify_attempt(db, attempt, order,
                     "Không đọc được chi tiết lệnh: " + failure_reason(error))
+                continue
+            # Recheck after network preflight, under the same lock as the stop button.
+            if not release_enabled(db, lock=True):
+                attempt.state = "READY"
+                db.commit()
                 continue
             # Persist uncertainty before POST. Crash/timeout cannot cause automatic resubmission.
             diagnostic = db.get(OKXReleaseDiagnostic, attempt.order_id)

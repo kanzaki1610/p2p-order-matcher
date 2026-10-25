@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     discord_webhook_pricing_alerts: str = ""
     discord_webhook_mexc_pricing: str = ""
     discord_mexc_pricing_channel_id: str = ""
+    discord_release_channel_id: str = ""
+    discord_release_allowed_user_ids: str = ""
     mexc_ad_pricing_enabled: bool = False
     mexc_ad_pricing_seconds: int = 5
     okx_ad_pricing_enabled: bool = False

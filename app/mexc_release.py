@@ -14,6 +14,7 @@ from .models import BankTransaction, P2POrder, PaymentMatch
 from .notifications import notify_event, notify_once, release_text
 from .sepay import normalize_bank
 from .diagnostics import error_detail, safe_status
+from .release_controls import release_enabled
 
 LEGACY_BLOCK_REASON = "Lệnh có tranh chấp, bị chặn hoặc thiếu trạng thái an toàn."
 LEGACY_BANK_REASON = "Ngân hàng thanh toán trên MEXC chưa xác nhận hoặc khác tiền nhận."
@@ -96,6 +97,8 @@ async def notify_attempt(db, attempt, order, tx):
 async def process_mexc_releases(db, client):
     if not (settings.mexc_auto_release_enabled and settings.mexc_p2p_live_writes):
         return
+    if not release_enabled(db):
+        return
     from .okx_sync import OKXOrderReceipt
     from .okx_release import OKXReleaseAttempt
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
@@ -123,6 +126,8 @@ async def process_mexc_releases(db, client):
         legacy_reasons = [LEGACY_BLOCK_REASON, LEGACY_BANK_REASON]
         retry_legacy_preflight = attempt.state == "REVIEW_REQUIRED" and attempt.reason in legacy_reasons
         if attempt.state in {"READY", "WAITING_BUYER_PAYMENT", "WAITING_PAYMENT_INFO"} or retry_legacy_preflight:
+            if not release_enabled(db):
+                continue
             claimed = db.execute(update(MexcReleaseAttempt).where(
                 MexcReleaseAttempt.order_id == order.id,
                 ((MexcReleaseAttempt.state.in_(["READY", "WAITING_BUYER_PAYMENT", "WAITING_PAYMENT_INFO"])) |
@@ -183,6 +188,10 @@ async def process_mexc_releases(db, client):
                     + error_detail(error))
                 db.commit()
                 await notify_attempt(db, attempt, order, tx)
+                continue
+            if not release_enabled(db, lock=True):
+                attempt.state, attempt.reason = "READY", None
+                db.commit()
                 continue
             attempt.state, attempt.reason = "UNKNOWN", "Chưa xác định kết quả yêu cầu mở khóa."
             db.commit()
