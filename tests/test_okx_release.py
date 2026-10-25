@@ -299,3 +299,33 @@ def test_missing_required_detail_blocks_and_explains_without_post(setup, monkeyp
     assert db.get(OKXReleaseAttempt, order.id).state == "REVIEW_REQUIRED"
     assert "Lý do:" in notifier.call_args.args[1]
     assert notifier.call_count == 1
+
+
+def test_discord_stop_blocks_then_resume_rechecks(setup):
+    from app.release_controls import apply_control
+    db, order, row = setup
+    def control(n, action):
+        apply_control(db, {'id': str(n), 'member': {'user': {'id': 'owner'}}, 'data': {'custom_id': 'release:' + action}})
+    control(100, 'off')
+    run(db, lambda request: pytest.fail('Paused worker must not call OKX'))
+    assert db.get(OKXReleaseAttempt, order.id) is None
+    control(101, 'on')
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        if request.method == 'POST':
+            row.update(orderStatus='completed', paymentStatus='confirmed')
+        return httpx.Response(200, json={'code': '0', 'data': [row]})
+    run(db, handler)
+    assert calls.count('POST') == 1
+
+
+def test_stop_during_preflight_prevents_post(setup):
+    from app.release_controls import apply_control
+    db, order, row = setup
+    def handler(request):
+        assert request.method == 'GET'
+        apply_control(db, {'id': '200', 'member': {'user': {'id': 'owner'}}, 'data': {'custom_id': 'release:off'}})
+        return httpx.Response(200, json={'code': '0', 'data': [row]})
+    run(db, handler)
+    assert db.get(OKXReleaseAttempt, order.id).state == 'READY'

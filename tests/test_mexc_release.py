@@ -379,3 +379,30 @@ def test_unknown_bank_reason_does_not_retry_post(setup):
 
     run(db, handler)
     assert db.get(MexcReleaseAttempt, order.id).state == 'UNKNOWN'
+
+
+def test_discord_stop_blocks_mexc_and_resume_rechecks(setup):
+    from app.release_controls import apply_control
+    db, order, tx, row = setup
+    apply_control(db, {'id': '100', 'member': {'user': {'id': 'owner'}}, 'data': {'custom_id': 'release:off'}})
+    run(db, lambda request: pytest.fail('Paused worker must not call MEXC'))
+    assert db.get(MexcReleaseAttempt, order.id) is None
+    apply_control(db, {'id': '101', 'member': {'user': {'id': 'owner'}}, 'data': {'custom_id': 'release:on'}})
+    calls = []
+    def handler(request):
+        calls.append(request.method)
+        if request.method == 'POST': row['state'] = 'DONE'
+        return httpx.Response(200, json={'code': 0, 'data': row})
+    run(db, handler)
+    assert calls.count('POST') == 1
+
+
+def test_mexc_stop_during_preflight_never_posts(setup):
+    from app.release_controls import apply_control
+    db, order, tx, row = setup
+    def handler(request):
+        assert request.method == 'GET'
+        apply_control(db, {'id': '200', 'member': {'user': {'id': 'owner'}}, 'data': {'custom_id': 'release:off'}})
+        return httpx.Response(200, json={'code': 0, 'data': row})
+    run(db, handler)
+    assert db.get(MexcReleaseAttempt, order.id).state == 'READY'
