@@ -428,3 +428,16 @@ def test_mexc_market_guard_blocks_release_and_bad_price_never_auto_retries(setup
         return httpx.Response(200,json={'code':0,'data':row})
     run(db,handler)
     assert calls.count('POST')==(1 if kind=='SOURCE_UNAVAILABLE' else 0)
+
+
+@pytest.mark.parametrize('bank',['STB','Sacombank','Ngân hàng TMCP Sài Gòn Thương Tín',
+    'Sai Gon Thuong Tin Commercial Joint Stock Bank','Saigon Treasure Commercial Joint Stock Bank'])
+def test_sacombank_preflight_matches_only_sacombank(setup,bank):
+    from app.mexc_release import preflight_reason, WRONG_BANK_REASON
+    db,order,tx,row=setup
+    tx.bank='Sacombank'
+    row['confirmPaymentInfo']={'bankName':bank}
+    receipt=db.get(MexcOrderReceipt,order.order_code)
+    assert preflight_reason(order,tx,receipt,row) is None
+    row['confirmPaymentInfo']={'bankName':'SCB'}
+    assert preflight_reason(order,tx,receipt,row)==WRONG_BANK_REASON

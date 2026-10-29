@@ -113,3 +113,30 @@ def test_tpbank_aliases_match_only_tpbank():
     for bank in ("BIDV", "VIETINBANK", "Vietcombank", "MB", "ACB", "KLB"):
         tx.bank = bank
         assert not payment_identity(order, tx)
+
+
+def test_sacombank_aliases_match_sacombank_and_never_scb_or_saigonbank():
+    from decimal import Decimal
+    from app.models import BankTransaction, P2POrder
+    from app.matching import payment_identity
+    aliases = ('Sacombank', 'Sacom Bank', 'STB', 'Sài Gòn Thương Tín',
+        'Ngân hàng TMCP Sài Gòn Thương Tín',
+        'Ngân hàng Thương mại Cổ phần Sài Gòn Thương Tín',
+        'Sai Gon Thuong Tin Commercial Joint Stock Bank',
+        'Sai Gon Thuong Tin Joint Stock Commercial Bank',
+        'Ngân hàng TMCP Sài Gòn Tài Lộc',
+        'Ngân hàng Thương mại Cổ phần Sài Gòn Tài Lộc',
+        'Saigon Treasure Bank', 'Saigon Treasure Commercial Joint Stock Bank')
+    order = P2POrder(side='SELL', order_code='SACOM123456789', fiat_amount=Decimal('10000'),
+                    counterparty_name='Nguyen Van An', expected_bank='STB')
+    tx = BankTransaction(direction='CREDIT', bank='Sacombank', amount=Decimal('10000'),
+                         description='SACOM123456789', transaction_id='SACOM-TEST-ONLY')
+    for bank in aliases:
+        assert normalize_bank(bank) == 'SACOMBANK'
+        tx.bank = bank
+        assert payment_identity(order, tx)
+    for bank in ('SCB', 'Saigon Commercial Bank', 'Ngân hàng TMCP Sài Gòn', 'Saigonbank',
+                 'MB', 'ACB', 'BIDV', 'TPBank', 'Vietinbank', 'VCB', 'KLB'):
+        tx.bank = bank
+        assert normalize_bank(bank) != 'SACOMBANK'
+        assert not payment_identity(order, tx)
