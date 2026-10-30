@@ -22,3 +22,21 @@ yêu cầu có kết quả chưa rõ. Không thay đổi quy tắc mở khóa US
 
 Không cần biến môi trường mới. Hai bảng mới `okx_auto_limits` và
 `okx_pending_limits` được tạo khi ứng dụng khởi động.
+
+## Kiểm tra và khôi phục slot
+
+Trong bảng nút OKX, bấm **Kiểm tra/khôi phục Mua** hoặc **Kiểm tra/khôi phục Bán**,
+rồi chọn slot. Bot tắt Auto của slot trước khi đọc lại quảng cáo bằng API GET.
+Bot không sửa/ẩn quảng cáo, không tự gửi lại yêu cầu và không tự bật Auto.
+
+Nếu đã có ID kết quả, bot kiểm tra đúng chủ sở hữu, USDT/VND, chiều, giá,
+trạng thái và Min/Max đã gửi trước khi ghi nhận hoàn tất. Với yêu cầu tự bám giá
+cũ bị từ chối HTTP 400/mã 55723 và không có ID kết quả, chỉ gỡ khóa nếu quảng cáo
+cũ vẫn hoạt động, giữ đúng giá trước yêu cầu (khác giá đã yêu cầu) và trạng thái
+hiển thị đúng. Yêu cầu phải đã qua ít nhất 120 giây; không xử lý SUBMITTING.
+
+Timeout, lỗi kết nối, 429, lỗi khác hoặc dữ liệu không khớp vẫn giữ khóa.
+Kết quả và toàn bộ thông tin yêu cầu cũ được lưu vào nhật ký trước khi chuyển
+slot về IDLE; giữ hạn mức đã nhập và thời điểm gửi cũ để không bỏ qua giới hạn tần suất.
+Nếu cấu hình/yêu cầu đổi trong lúc đọc OKX, bot không ghi đè. Sau khi khôi phục,
+operator tự kiểm tra Min/Max, giá vốn, vị trí rồi bật Auto khi sẵn sàng.
