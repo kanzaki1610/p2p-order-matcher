@@ -16,6 +16,7 @@ from .okx_price_controls import execute_price_command
 from .okx_ad_worker import OKXAdPriceAttempt, confirm, safe_failure
 from .okx_release import request
 from .okx_ad_limits import OKXAutoLimits
+from .okx_slot_recovery import recover_slot
 
 class ManualPriceDraft(Base):
     __tablename__='okx_manual_price_drafts'
@@ -65,6 +66,7 @@ def panel():
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
     rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Hạn mức mua Min/Max','limits:BUY'),button('Hạn mức bán Min/Max','limits:SELL')]})
+    rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL')]})
     return {'content':'**Điều khiển giá OKX**\nChỉ operator được sử dụng. Đặt giá thủ công cần xác nhận và tắt Auto của slot. Tạm dừng không ẩn quảng cáo trên sàn.','components':rows,'allowed_mentions':{'parse':[]}}
 
 def modal(action,side):
@@ -214,5 +216,11 @@ async def execute_panel(payload,db,owner):
         side=code[2]
         return {'content':'Chọn Auto cho '+side+' (không mở quảng cáo đã ẩn).','components':[{'type':1,'components':[button(f'Slot {n}: '+label,f'setauto:{side}:{n}:{enabled}',style) for n in (1,2) for label,enabled,style in [('Bật',1,3),('Tắt',0,4)]]}]}
     elif action=='setauto': data=command('auto',chieu=code[2],slot=int(code[3]),bat=code[4]=='1')
+    elif action=='recover':
+        if len(code)!=3 or code[2] not in {'BUY','SELL'}: raise ValueError('Chọn chiều mua hoặc bán.')
+        return {'content':'Chọn slot cần kiểm tra. Bot sẽ tắt Auto của slot, chỉ đọc OKX để xác minh; không gửi lại yêu cầu cũ và không tự bật Auto.','components':[{'type':1,'components':[button(f'Kiểm tra slot {n}',f'checkslot:{code[2]}:{n}',1) for n in (1,2)]}]}
+    elif action=='checkslot':
+        if len(code)!=4 or code[3] not in {'1','2'}: raise ValueError('Chọn slot 1 hoặc 2.')
+        return {'content':await recover_slot(db,owner,code[2],int(code[3])),'components':[]}
     else: raise ValueError('Nút không hợp lệ.')
     return {'content':await execute_price_command(data,db,owner),'components':[]}
