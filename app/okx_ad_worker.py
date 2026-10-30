@@ -21,6 +21,7 @@ from .okx_cost import read_last_buy_cost, read_pricing_cost, cost_summary, cost_
 from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
 from .okx_release import request, failure_reason
+from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, price_limits, limits_match
 from .telegram_commands import format_vietnam_time
 
 logger = logging.getLogger("uvicorn.error.okx_ad_pricing")
@@ -73,6 +74,9 @@ async def confirm(db, client, attempt, slot, plan=None):
         await notice(db, attempt, slot, "UNKNOWN", pending_reason(attempt), plan)
         return False
     row = await read_ad(client, attempt.result_ad_id)
+    if not limits_match(db.get(OKXPendingLimits, slot.id), attempt, row):
+        await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'OKX chưa xác nhận đúng Min/Max đã gửi; không gửi lại yêu cầu.', plan)
+        return False
     db.refresh(slot)
     if slot.adv_id != attempt.old_ad_id:
         await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'Slot đã đổi ID trong lúc đọc kết quả; không ghi đè quảng cáo mới.')
@@ -91,6 +95,12 @@ async def confirm(db, client, attempt, slot, plan=None):
     slot.current_price = attempt.price
     attempt.state = "IDLE"
     attempt.reason = None
+    pending = db.get(OKXPendingLimits, slot.id)
+    if pending and attempt.action == 'UPDATE_PRICE':
+        slot.min_amount, slot.max_amount = pending.minimum, pending.maximum
+        db.execute(update(OKXAutoLimits).where(OKXAutoLimits.slot_id == slot.id,
+            OKXAutoLimits.ad_id == attempt.old_ad_id).values(ad_id=attempt.result_ad_id))
+        db.delete(pending)
     if attempt.action == "HIDE_AD":
         attempt.paused_by_floor = True
     elif was_paused:
@@ -175,8 +185,10 @@ async def process_ad_pricing(db, client):
                 await notice(db, attempt, slot, "ALREADY_HIDDEN", "Quảng cáo đang ẩn và giá vị trí đã chọn chưa đạt giá vốn +10đ; giữ ẩn.", plan)
                 continue
             proposed = Decimal(plan["proposed_price"])
+            terms = price_limits(db, slot, row, proposed) if plan['action'] == 'UPDATE_PRICE' else {}
             resume = attempt.paused_by_floor and plan["action"] == "UPDATE_PRICE"
-            if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume:
+            terms_changed = bool(terms) and (number(row.get('minOrderSize')) != Decimal(terms['minOrderLimit']) or number(row.get('maxOrderSize')) != Decimal(terms['maxOrderLimit']))
+            if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume and not terms_changed:
                 continue
             now = datetime.now(timezone.utc)
             # Share the write interval across BUY/SELL slots and worker restarts.
@@ -193,6 +205,8 @@ async def process_ad_pricing(db, client):
             is_hide = plan["action"] == "HIDE_AD"
             wanted_price = current if is_hide else proposed
             wanted_hidden = True if is_hide else (False if resume else hidden)
+            config = db.get(OKXAutoLimits, slot.id)
+            config_revision = (config.ad_id, config.minimum, config.maximum) if config else None
             claim = db.execute(update(OKXAdPriceAttempt).where(
                 OKXAdPriceAttempt.slot_id == slot.id, OKXAdPriceAttempt.state == "IDLE").values(
                     state="SUBMITTING", old_ad_id=slot.adv_id, result_ad_id=None, action=plan["action"],
@@ -203,6 +217,11 @@ async def process_ad_pricing(db, client):
             db.refresh(attempt)
             db.refresh(slot)
             db.expire_all()
+            fresh_config = db.get(OKXAutoLimits, slot.id)
+            if config_revision != ((fresh_config.ad_id, fresh_config.minimum, fresh_config.maximum) if fresh_config else None):
+                attempt.state = 'IDLE'
+                db.commit()
+                continue
             if selected_rank(db, slot.side) != rank:
                 attempt.state = "IDLE"
                 db.commit()
@@ -217,6 +236,12 @@ async def process_ad_pricing(db, client):
                 await notice(db,attempt,slot,'BLOCKED','Giá vốn vừa thay đổi; chờ tính lại giá bán, chưa gửi OKX.')
                 continue
             attempt.state = "UNKNOWN"
+            previous = db.get(OKXPendingLimits, slot.id)
+            if previous:
+                db.delete(previous)
+                db.flush()
+            if terms:
+                db.add(OKXPendingLimits(slot_id=slot.id, ad_id=slot.adv_id, minimum=Decimal(terms['minOrderLimit']), maximum=Decimal(terms['maxOrderLimit'])))
             db.commit()  # A crash/timeout never authorizes automatic resubmission.
             if is_hide:
                 result = await request(client, "POST", "/api/v5/p2p/ad/update-active-status", {"adId": slot.adv_id, "status": "hidden"})
@@ -224,7 +249,7 @@ async def process_ad_pricing(db, client):
                 if result_id != slot.adv_id:
                     raise ValueError("Sai mã quảng cáo sau yêu cầu ẩn")
             else:
-                body = {"adId": slot.adv_id, "unitPrice": str(proposed)}
+                body = {"adId": slot.adv_id, "unitPrice": str(proposed), **terms}
                 if resume:
                     body["online"] = "true"
                 result = await request(client, "POST", "/api/v5/p2p/ad/update", body)
