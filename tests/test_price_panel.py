@@ -72,6 +72,21 @@ def test_panel_and_modals_fit_discord_limits():
     fields=ui.modal('price','BUY')['data']['components']
     assert len(fields)==5
     assert all(len(row['components'][0]['label'])<=45 for row in fields)
+    assert len(ui.modal('limits','SELL')['data']['components'])==3
+
+
+def test_limits_form_saves_only_disables_auto_keeps_unknown(db,monkeypatch):
+    from app.okx_ad_limits import OKXAutoLimits
+    slot=db.query(OKXSlot).one()
+    db.add(ui.OKXAdPriceAttempt(slot_id=slot.id,state='UNKNOWN',reason='OKX HTTP 400; mã API: 55723.'));db.commit()
+    write=AsyncMock();monkeypatch.setattr(ui,'request',write)
+    payload={'data':{'custom_id':'price:form:limits:BUY','components':[{'components':[{'custom_id':k,'value':v}]} for k,v in [('slot','1'),('minimum','20.000.000'),('maximum','180000000')]]}}
+    result=asyncio.run(ui.execute_panel(payload,db,'owner'))
+    saved=db.get(OKXAutoLimits,slot.id)
+    assert (saved.minimum,saved.maximum,saved.ad_id)==(20000000,180000000,'123')
+    assert not slot.auto_enabled and db.get(ui.OKXAdPriceAttempt,slot.id).state=='UNKNOWN'
+    assert 'cũ chưa rõ' in result['content']
+    write.assert_not_called()
 
 def test_expanded_preview_keeps_original_when_blank(db,monkeypatch):
     original=ad();original.update(minOrderSize='1000000',maxOrderSize='10000000',availableAmount='500',completedOrderCryptoAmount='10',onHoldAmount='0')

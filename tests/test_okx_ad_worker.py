@@ -13,7 +13,7 @@ from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwit
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
-    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__): table.create(engine)
+    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
 
@@ -272,3 +272,33 @@ def test_worker_waits_five_seconds_not_sixty(monkeypatch):
     with pytest.raises(asyncio.CancelledError):asyncio.run(worker.pricing_loop())
     assert len(delays)==1 and 4<=delays[0]<=5
     process.assert_awaited_once()
+
+
+def test_auto_sends_limits_caps_sell_capacity_and_verifies(db, setup, monkeypatch):
+    db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=196444319)); db.commit()
+    original=ad(price='27586'); original.update(availableAmount='7121.16',minOrderSize='20000000',maxOrderSize='196444319')
+    final=ad('456','26400'); final.update(minOrderSize='20000000',maxOrderSize='187998624')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26400')))
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26400','minOrderLimit':'20000000','maxOrderLimit':'187998624'}
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+    assert setup.max_amount==187998624
+    assert db.get(worker.OKXAutoLimits,setup.id).maximum==196444319
+    assert db.get(worker.OKXAutoLimits,setup.id).ad_id=='456'
+
+
+@pytest.mark.parametrize('capacity,final_max',[('1','180000000'),('7121.16','190000000')])
+def test_insufficient_or_unconfirmed_limits_never_succeed(db, setup, monkeypatch,capacity,final_max):
+    db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
+    original=ad(price='27586');original.update(availableAmount=capacity,minOrderSize='20000000',maxOrderSize='196444319')
+    final=ad('456','26400');final.update(minOrderSize='20000000',maxOrderSize=final_max)
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26400')))
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    if capacity=='1': write.assert_not_awaited()
+    else:
+        assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='CONFIRMING'
+        assert setup.adv_id=='123'
