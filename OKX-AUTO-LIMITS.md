@@ -1,7 +1,11 @@
 # Hạn mức khi bám giá OKX
 
 Trong kênh điều khiển OKX, dùng `/gia bang` để lấy bảng nút mới.
-Chọn **Hạn mức bán Min/Max** hoặc **Hạn mức mua Min/Max**, nhập slot, Min
+Chiều mua USDT chỉ bám giá (`unitPrice`), không gửi hoặc thay đổi Min/Max,
+kể cả slot từng lưu hạn mức mua trước đây. Giữ nguyên hạn mức quảng cáo mua trên OKX.
+Nút hạn mức mua cũ chỉ hiển thị hướng dẫn, không lưu cấu hình hay tắt Auto.
+
+Với chiều bán, chọn **Hạn mức bán Min/Max**, nhập slot, Min
 và Max VND cho mỗi giao dịch. Đây là hạn mức giao dịch, không phải giá USDT.
 Ví dụ Min `20000000`, Max `180000000`.
 
@@ -9,7 +13,7 @@ Lưu cấu hình tắt Auto của slot, không gửi lệnh sửa quảng cáo n
 Kiểm tra giá vốn, vị trí và quảng cáo, sau đó bật Auto của slot khi sẵn sàng.
 Yêu cầu cũ UNKNOWN vẫn phải được xác minh riêng trước khi bật Auto.
 
-Khi chạy, bot gửi `unitPrice`, `minOrderLimit`, `maxOrderLimit` cùng một
+Khi chạy chiều bán, bot gửi `unitPrice`, `minOrderLimit`, `maxOrderLimit` cùng một
 yêu cầu cập nhật. Với SELL, Max thực tế là số nhỏ hơn giữa Max đã nhập và
 `floor(availableAmount × unitPrice)`. Nếu số tiền này dưới Min, bot báo lỗi
 và không sửa quảng cáo. Max đã nhập được giữ làm trần cho các lần sau.
