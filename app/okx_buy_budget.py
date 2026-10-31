@@ -185,6 +185,26 @@ async def sync_budget(db, client, budget, current_ad):
     db.commit()
 
 
+async def read_buy_quantum(client):
+    # Use the exchange-declared currency precision, never infer it from balances.
+    path = '/api/v5/p2p/currency/currency-pair-list?fiatCurrency=VND'
+    stamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    response = await client.get(settings.okx_base_url.rstrip('/') + path, headers={
+        'OK-ACCESS-KEY': settings.okx_api_key, 'OK-ACCESS-PASSPHRASE': settings.okx_api_passphrase,
+        'OK-ACCESS-TIMESTAMP': stamp, 'OK-ACCESS-SIGN': sign(settings.okx_api_secret, stamp, path)})
+    payload = response.json()
+    if response.status_code != 200 or not isinstance(payload, dict) or str(payload.get('code')) != '0':
+        raise BuyBudgetError('Chưa đọc được độ chính xác USDT/VND từ OKX; chưa đổi giá mua.')
+    rows = payload.get('data')
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise BuyBudgetError('Dữ liệu độ chính xác OKX sai cấu trúc; chưa đổi giá mua.')
+    pairs = [row for row in rows if str(row.get('cryptoCurrency', '')).upper() == 'USDT'
+        and str(row.get('fiatCurrency', '')).upper() == 'VND']
+    if len(pairs) != 1 or not re.fullmatch(r'[0-8]', str(pairs[0].get('cryptoScale', ''))):
+        raise BuyBudgetError('Thiếu/sai độ chính xác USDT/VND; chưa đổi giá mua.')
+    return Decimal(1).scaleb(-int(pairs[0]['cryptoScale']))
+
+
 async def prepare_buy(db, client, slot, ad, new_price):
     budget = budget_for(db, slot, ad)
     await sync_budget(db, client, budget, ad)
@@ -198,10 +218,12 @@ async def prepare_buy(db, client, slot, ad, new_price):
     spent = sum((o.fiat for o in completed), Decimal(0))
     left = budget.total_vnd - spent
     # The user selected a VND budget, not a fixed remaining USDT target.
-    # Round stock upward so the exact integer-VND budget fits beneath stock value.
+    # Round upward at the authenticated exchange precision, so the exact VND
+    # budget fits beneath stock value even after exchange normalization.
     price = nonnegative(new_price)
     if price <= 0: raise BuyBudgetError('Giá mua mới không hợp lệ.')
-    quantity = ((max(Decimal(0), left) + 1) / price).quantize(Decimal('.00000001'), rounding=ROUND_UP) if left > 0 else Decimal(0)
+    quantum = await read_buy_quantum(client)
+    quantity = ((left + 1) / price).quantize(quantum, rounding=ROUND_UP) if left > 0 else Decimal(0)
     minimum = nonnegative(ad.get('minOrderSize'))
     if minimum <= 0: raise BuyBudgetError('Min mua trên OKX không hợp lệ.')
     maximum = min(left, (quantity * nonnegative(new_price)).to_integral_value(rounding=ROUND_DOWN) - 1)
