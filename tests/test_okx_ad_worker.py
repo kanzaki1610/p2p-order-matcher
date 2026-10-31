@@ -289,6 +289,25 @@ def test_auto_sends_limits_caps_sell_capacity_and_verifies(db, setup, monkeypatc
     assert db.get(worker.OKXAutoLimits,setup.id).ad_id=='456'
 
 
+@pytest.mark.parametrize('same_price',[False,True])
+def test_buy_ignores_legacy_limits_and_only_updates_price(db,setup,monkeypatch,same_price):
+    setup.side='BUY'
+    db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
+    original=ad(side='buy',price='26070' if same_price else '26080')
+    original.update(minOrderSize='1000000',maxOrderSize='5000000')
+    final=ad('456','26070',side='buy');final.update(minOrderSize='1000000',maxOrderSize='5000000')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    if same_price:
+        write.assert_not_awaited()
+    else:
+        assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070'}
+        assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+    assert db.get(worker.OKXPendingLimits,setup.id) is None
+
+
 @pytest.mark.parametrize('capacity,final_max',[('1','180000000'),('7121.16','190000000')])
 def test_insufficient_or_unconfirmed_limits_never_succeed(db, setup, monkeypatch,capacity,final_max):
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
