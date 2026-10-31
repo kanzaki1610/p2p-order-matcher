@@ -34,7 +34,8 @@ def setup(monkeypatch, db):
 
 
 def ad(code='123', price='26080', hidden=False, side='sell'):
-    return dict(adId=code, side=side, type='limit', status='new', isHidden=hidden, unitPrice=price)
+    return dict(adId=code, side=side, type='limit', status='new', isHidden=hidden, unitPrice=price,
+        availableAmount='1000',minOrderSize='1000000',maxOrderSize=str(1000*int(price)-1))
 
 
 def plan(action='UPDATE_PRICE', price='26070'):
@@ -60,7 +61,7 @@ def test_replacement_id_verified_and_saved(db, setup, monkeypatch):
     run(db)
     assert setup.adv_id=='456' and setup.current_price==Decimal('26070')
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
-    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070'}
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','minOrderLimit':'1000000','maxOrderLimit':'26069999'}
 
 
 def test_hide_then_resume_only_bot_paused_ad(db, setup, monkeypatch):
@@ -277,14 +278,14 @@ def test_worker_waits_five_seconds_not_sixty(monkeypatch):
 def test_auto_sends_limits_caps_sell_capacity_and_verifies(db, setup, monkeypatch):
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=196444319)); db.commit()
     original=ad(price='27586'); original.update(availableAmount='7121.16',minOrderSize='20000000',maxOrderSize='196444319')
-    final=ad('456','26400'); final.update(minOrderSize='20000000',maxOrderSize='187998624')
+    final=ad('456','26400'); final.update(minOrderSize='20000000',maxOrderSize='187998623')
     monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26400')))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
-    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26400','minOrderLimit':'20000000','maxOrderLimit':'187998624'}
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26400','minOrderLimit':'20000000','maxOrderLimit':'187998623'}
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
-    assert setup.max_amount==187998624
+    assert setup.max_amount==187998623
     assert db.get(worker.OKXAutoLimits,setup.id).maximum==196444319
     assert db.get(worker.OKXAutoLimits,setup.id).ad_id=='456'
 

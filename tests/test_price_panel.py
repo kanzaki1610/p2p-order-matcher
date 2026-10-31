@@ -72,7 +72,7 @@ def test_panel_and_modals_fit_discord_limits():
     fields=ui.modal('price','BUY')['data']['components']
     assert len(fields)==5
     assert all(len(row['components'][0]['label'])<=45 for row in fields)
-    assert len(ui.modal('limits','SELL')['data']['components'])==3
+    assert len(ui.modal('limits','SELL')['data']['components'])==2
 
 
 def test_limits_form_saves_only_disables_auto_keeps_unknown(db,monkeypatch):
@@ -84,7 +84,7 @@ def test_limits_form_saves_only_disables_auto_keeps_unknown(db,monkeypatch):
     payload={'data':{'custom_id':'price:form:limits:SELL','components':[{'components':[{'custom_id':k,'value':v}]} for k,v in [('slot','1'),('minimum','20.000.000'),('maximum','180000000')]]}}
     result=asyncio.run(ui.execute_panel(payload,db,'owner'))
     saved=db.get(OKXAutoLimits,slot.id)
-    assert (saved.minimum,saved.maximum,saved.ad_id)==(20000000,180000000,'123')
+    assert (saved.minimum,saved.maximum,saved.ad_id)==(20000000,0,'123')
     assert not slot.auto_enabled and db.get(ui.OKXAdPriceAttempt,slot.id).state=='UNKNOWN'
     assert 'cũ chưa rõ' in result['content']
     write.assert_not_called()
