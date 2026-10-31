@@ -22,6 +22,7 @@ from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
 from .okx_release import request, failure_reason
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, price_limits, limits_match
+from . import okx_buy_budget as buy_budget
 from .telegram_commands import format_vietnam_time
 
 logger = logging.getLogger("uvicorn.error.okx_ad_pricing")
@@ -45,6 +46,7 @@ class OKXAdPriceAttempt(Base):
 def safe_failure(error):
     # Do not expose arbitrary exception text, signed URLs or API response messages.
     from .okx_release import OKXRequestError
+    if isinstance(error, buy_budget.BuyBudgetError): return str(error)
     return failure_reason(error) if isinstance(error, OKXRequestError) else error_detail(error)
 
 
@@ -77,6 +79,9 @@ async def confirm(db, client, attempt, slot, plan=None):
     if not limits_match(db.get(OKXPendingLimits, slot.id), attempt, row):
         await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'OKX chưa xác nhận đúng Min/Max đã gửi; không gửi lại yêu cầu.', plan)
         return False
+    if not buy_budget.pending_matches(db, slot.id, attempt, row):
+        await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'Lượng USDT của quảng cáo mới chưa khớp phần còn lại; không gửi lại yêu cầu.', plan)
+        return False
     db.refresh(slot)
     if slot.adv_id != attempt.old_ad_id:
         await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'Slot đã đổi ID trong lúc đọc kết quả; không ghi đè quảng cáo mới.')
@@ -90,6 +95,7 @@ async def confirm(db, client, attempt, slot, plan=None):
             or row.get("isHidden") is not attempt.hidden or number(row.get("unitPrice")) != attempt.price):
         await notice(db, attempt, slot, "REVIEW_REQUIRED", "Quảng cáo sau yêu cầu chưa khớp giá, chiều hoặc trạng thái dự kiến; chỉ kiểm tra lại, không gửi lại.")
         return False
+    buy_budget.bind_result(db, slot.id, attempt.old_ad_id, attempt.result_ad_id)
     was_paused = attempt.paused_by_floor
     slot.adv_id = attempt.result_ad_id
     slot.current_price = attempt.price
@@ -102,14 +108,14 @@ async def confirm(db, client, attempt, slot, plan=None):
             OKXAutoLimits.ad_id == attempt.old_ad_id).values(ad_id=attempt.result_ad_id))
         db.delete(pending)
     if attempt.action == "HIDE_AD":
-        attempt.paused_by_floor = True
+        attempt.paused_by_floor = slot.side == 'SELL'
     elif was_paused:
         attempt.paused_by_floor = False
     db.add(OKXAuditLog(action="OKX_AD_PRICE_CONFIRMED", actor="okx-ad-pricer",
         detail=f"{slot.side} {attempt.old_ad_id} -> {slot.adv_id}; action={attempt.action}; price={attempt.price}; hidden={attempt.hidden}"))
     db.commit()
     if attempt.action == "HIDE_AD":
-        await notice(db, attempt, slot, "HIDDEN", "Đã xác minh quảng cáo tạm ẩn vì giá bán vị trí đã chọn dưới giá vốn +10đ.", plan)
+        await notice(db, attempt, slot, "HIDDEN", "Đã ẩn quảng cáo mua vì ngân sách/lượng USDT còn lại không đủ Min." if slot.side == "BUY" else "Đã xác minh quảng cáo tạm ẩn vì giá bán vị trí đã chọn dưới giá vốn +10đ.", plan)
     elif was_paused:
         await notice(db, attempt, slot, "RESUMED", "Đã xác minh giá mới đạt giá vốn +10đ và quảng cáo do bot tạm ẩn đã hiển thị lại.", plan)
     return True
@@ -147,6 +153,7 @@ async def process_ad_pricing(db, client):
                 db.rollback()
                 attempt = db.get(OKXAdPriceAttempt, slot.id)
         plan = None
+        buy = None
         try:
             if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"}:
                 await confirm(db, client, attempt, slot)
@@ -186,8 +193,18 @@ async def process_ad_pricing(db, client):
                 continue
             proposed = Decimal(plan["proposed_price"])
             terms = price_limits(db, slot, row, proposed) if plan['action'] == 'UPDATE_PRICE' else {}
+            if slot.side == 'BUY' and plan['action'] == 'UPDATE_PRICE':
+                buy = await buy_budget.prepare_buy(db, client, slot, row, proposed)
+                if buy['exhausted']:
+                    if hidden:
+                        await notice(db, attempt, slot, 'BUDGET_EXHAUSTED', 'Ngân sách/lượng USDT còn lại không đủ Min; giữ ẩn quảng cáo mua.', plan)
+                        continue
+                    plan['action'] = 'HIDE_AD'
+                terms = buy['terms']
             resume = attempt.paused_by_floor and plan["action"] == "UPDATE_PRICE"
             terms_changed = bool(terms) and (number(row.get('minOrderSize')) != Decimal(terms['minOrderLimit']) or number(row.get('maxOrderSize')) != Decimal(terms['maxOrderLimit']))
+            if buy and terms:
+                terms_changed = terms_changed or buy_budget.stock_total(row) != Decimal(terms['cryptoAmount'])
             if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume and not terms_changed:
                 continue
             now = datetime.now(timezone.utc)
@@ -235,7 +252,28 @@ async def process_ad_pricing(db, client):
                 attempt.state = 'IDLE';db.commit()
                 await notice(db,attempt,slot,'BLOCKED','Giá vốn vừa thay đổi; chờ tính lại giá bán, chưa gửi OKX.')
                 continue
+            if buy:
+                try:
+                    fresh_ad = await read_ad(client, slot.adv_id)
+                except Exception:
+                    attempt.state = 'IDLE'
+                    db.commit()
+                    raise
+                db.refresh(slot)
+                if (buy_budget.fingerprint(fresh_ad) != buy['fingerprint'] or not slot.auto_enabled
+                        or slot.adv_id != attempt.old_ad_id or not pricing_active(db)
+                        or selected_rank(db, slot.side) != rank):
+                    attempt.state = 'IDLE'
+                    db.commit()
+                    continue
             attempt.state = "UNKNOWN"
+            old_budget = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
+            if old_budget:
+                db.delete(old_budget)
+                db.flush()
+            if buy and not is_hide:
+                db.add(buy_budget.OKXPendingBuyBudget(slot_id=slot.id, root_ad_id=buy['root'],
+                    old_ad_id=slot.adv_id, quantity=Decimal(terms['cryptoAmount'])))
             previous = db.get(OKXPendingLimits, slot.id)
             if previous:
                 db.delete(previous)

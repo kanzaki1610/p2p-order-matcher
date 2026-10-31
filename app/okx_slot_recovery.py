@@ -6,6 +6,7 @@ import httpx
 from .config import settings
 from .models import OKXSlot, OKXAuditLog
 from .okx_ads import read_ad, number
+from . import okx_buy_budget as buy_budget
 from .okx_ad_worker import OKXAdPriceAttempt, safe_failure
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, limits_match
 
@@ -58,7 +59,7 @@ async def recover_slot(db, owner, side, slot_number):
             raise ValueError('Quảng cáo không còn hoạt động đúng chiều/loại hoặc thiếu trạng thái hiển thị.')
         current = number(ad.get('unitPrice'))
         if attempt.result_ad_id:
-            if current != attempt.price or ad['isHidden'] is not attempt.hidden or not limits_match(pending, attempt, ad):
+            if current != attempt.price or ad['isHidden'] is not attempt.hidden or not limits_match(pending, attempt, ad) or not buy_budget.pending_matches(db, slot.id, attempt, ad):
                 raise ValueError('Quảng cáo trả về chưa khớp giá, trạng thái hoặc Min/Max của yêu cầu cũ.')
             outcome = 'CONFIRMED'
         else:
@@ -96,13 +97,16 @@ async def recover_slot(db, owner, side, slot_number):
             'hidden': ad['isHidden'], 'minimum': ad.get('minOrderSize'),
             'maximum': ad.get('maxOrderSize')}, default=str)))
     if outcome == 'CONFIRMED':
+        buy_budget.bind_result(db, slot.id, slot.adv_id, code)
         db.execute(update(OKXAutoLimits).where(OKXAutoLimits.slot_id == slot.id,
             OKXAutoLimits.ad_id == slot.adv_id).values(ad_id=code))
         slot.adv_id = code
-        attempt.paused_by_floor = attempt.action == 'HIDE_AD'
+        attempt.paused_by_floor = attempt.action == 'HIDE_AD' and side == 'SELL'
     slot.current_price = current
     if ad.get('minOrderSize') is not None: slot.min_amount = number(ad['minOrderSize'])
     if ad.get('maxOrderSize') is not None: slot.max_amount = number(ad['maxOrderSize'])
+    leftover = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
+    if leftover: db.delete(leftover)
     if pending: db.delete(pending)
     attempt.state = 'IDLE'
     attempt.action = attempt.old_ad_id = attempt.result_ad_id = None
