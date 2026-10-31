@@ -65,11 +65,13 @@ def panel():
     for side,label in [('BUY','Mua'),('SELL','Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
-    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Hạn mức mua Min/Max','limits:BUY'),button('Hạn mức bán Min/Max','limits:SELL')]})
+    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Hạn mức bán Min/Max','limits:SELL')]})
     rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL')]})
     return {'content':'**Điều khiển giá OKX**\nChỉ operator được sử dụng. Đặt giá thủ công cần xác nhận và tắt Auto của slot. Tạm dừng không ẩn quảng cáo trên sàn.','components':rows,'allowed_mentions':{'parse':[]}}
 
 def modal(action,side):
+    if action == 'limits' and side == 'BUY':
+        return {'type':4,'data':{'content':'Auto mua USDT chỉ bám giá, không cần nhập Min/Max. Bot giữ nguyên hạn mức mua trên OKX.','flags':64}}
     if action == 'limits':
         fields = [('slot','Slot 1 hoặc 2','1'),('minimum','Min VND/giao dịch (ví dụ 20000000)',None),('maximum','Max VND/giao dịch (ví dụ 180000000)',None)]
         return {'type':9,'data':{'custom_id':f'price:form:limits:{side}','title':'Hạn mức bám giá '+side,'components':[{'type':1,'components':[dict(type=4,custom_id=key,label=label,style=1,required=True,max_length=30,**({'value':value} if value else {}))]} for key,label,value in fields]}}
@@ -180,6 +182,8 @@ async def execute_panel(payload,db,owner):
         values={x['custom_id']:x.get('value','') for row in payload['data'].get('components',[]) for x in row.get('components',[])}
         value=values.get('value','')
         if action=='limits':
+            if side=='BUY':
+                return {'content':'Auto mua chỉ bám giá; Min/Max mua trên OKX được giữ nguyên. Không thay đổi cấu hình hay công tắc Auto.','components':[]}
             if side not in {'BUY','SELL'} or values.get('slot') not in {'1','2'}:
                 raise ValueError('Chọn BUY/SELL và slot 1 hoặc 2.')
             lower=input_number(values.get('minimum',''),money=True)

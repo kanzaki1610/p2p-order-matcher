@@ -23,6 +23,9 @@ class OKXPendingLimits(Base):
 
 
 def price_limits(db, slot, ad, price):
+    # BUY tracks price only, including slots with legacy saved limits.
+    if slot.side == 'BUY':
+        return {}
     config = db.get(OKXAutoLimits, slot.id)
     if config is None or config.ad_id != slot.adv_id:
         return {}
