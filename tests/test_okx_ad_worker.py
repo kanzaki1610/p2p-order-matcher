@@ -13,13 +13,14 @@ from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwit
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
-    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__): table.create(engine)
+    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
 
 
 @pytest.fixture
 def setup(monkeypatch, db):
+    monkeypatch.setattr(worker.buy_budget, 'read_order_page', AsyncMock(return_value=[]))
     monkeypatch.setattr(worker.settings, 'okx_ad_pricing_enabled', True)
     monkeypatch.setattr(worker.settings, 'database_schema', 'public')
     monkeypatch.setattr(worker.settings, 'discord_webhook_pricing_alerts', 'test')
@@ -35,7 +36,7 @@ def setup(monkeypatch, db):
 
 def ad(code='123', price='26080', hidden=False, side='sell'):
     return dict(adId=code, side=side, type='limit', status='new', isHidden=hidden, unitPrice=price,
-        availableAmount='1000',minOrderSize='1000000',maxOrderSize=str(1000*int(price)-1))
+        availableAmount='1000',completedOrderCryptoAmount='0',completedOrderFiatAmount='0',onHoldAmount='0',minOrderSize='1000000',maxOrderSize=str(1000*int(price)-1))
 
 
 def plan(action='UPDATE_PRICE', price='26070'):
@@ -291,21 +292,18 @@ def test_auto_sends_limits_caps_sell_capacity_and_verifies(db, setup, monkeypatc
 
 
 @pytest.mark.parametrize('same_price',[False,True])
-def test_buy_ignores_legacy_limits_and_only_updates_price(db,setup,monkeypatch,same_price):
+def test_buy_ignores_legacy_limits_and_preserves_budget(db,setup,monkeypatch,same_price):
     setup.side='BUY'
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
     original=ad(side='buy',price='26070' if same_price else '26080')
     original.update(minOrderSize='1000000',maxOrderSize='5000000')
-    final=ad('456','26070',side='buy');final.update(minOrderSize='1000000',maxOrderSize='5000000')
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
+    final=ad('456','26070',side='buy');final.update(availableAmount='191.79136940',minOrderSize='1000000',maxOrderSize='5000000')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,original,final]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
-    if same_price:
-        write.assert_not_awaited()
-    else:
-        assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070'}
-        assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','cryptoAmount':'191.79136940','minOrderLimit':'1000000','maxOrderLimit':'5000000'}
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
     assert db.get(worker.OKXPendingLimits,setup.id) is None
 
 

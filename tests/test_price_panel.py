@@ -95,7 +95,7 @@ def test_old_buy_limits_buttons_do_not_save_or_disable_auto(db):
     assert ui.modal('limits','BUY')['type']==4
     payload={'data':{'custom_id':'price:form:limits:BUY','components':[]}}
     result=asyncio.run(ui.execute_panel(payload,db,'owner'))
-    assert 'chỉ bám giá' in result['content']
+    assert 'ngân sách VND còn lại' in result['content']
     assert db.query(OKXAutoLimits).count()==0
     assert db.query(OKXSlot).one().auto_enabled
     ids={c['custom_id'] for row in ui.panel()['components'] for c in row['components']}
