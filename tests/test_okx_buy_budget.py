@@ -11,7 +11,8 @@ from app import okx_buy_budget as b
 from app import okx_ad_worker as w
 
 @pytest.fixture
-def db():
+def db(monkeypatch):
+    monkeypatch.setattr(b,'read_buy_quantum',AsyncMock(return_value=Decimal('.01')))
     engine=create_engine('sqlite://')
     Base.metadata.create_all(engine)
     with Session(engine) as db:
@@ -37,7 +38,7 @@ def prepare(db, ad=None, price='26495'):
 def test_legacy_replacements_exact_budget_and_restart(db,monkeypatch):
     reader=AsyncMock(return_value=[order()]);monkeypatch.setattr(b,'read_order_page',reader)
     result=prepare(db)
-    assert result['terms']=={'cryptoAmount':'983.46861673','minOrderLimit':'20000000','maxOrderLimit':'26057000'}
+    assert result['terms']=={'cryptoAmount':'983.47','minOrderLimit':'20000000','maxOrderLimit':'26057000'}
     assert result['left']=='26057000'
     db.add(b.OKXPendingBuyBudget(slot_id=slot(db).id,root_ad_id='100',old_ad_id='200',quantity=1000));db.commit()
     b.bind_result(db,slot(db).id,'200','300');slot(db).adv_id='300';db.commit();db.expire_all()
@@ -93,7 +94,7 @@ def test_worker_sends_remaining_not_initial_quantity_and_keeps_hidden(db,monkeyp
     monkeypatch.setattr(w,'valid_webhook',lambda _:True)
     monkeypatch.setattr(w,'send_discord_message',AsyncMock(return_value=True))
     monkeypatch.setattr(b,'read_order_page',AsyncMock(return_value=[order()]))
-    final=source();final.update(adId='300',unitPrice='26475',availableAmount='984.21155808',maxOrderSize='26057000')
+    final=source();final.update(adId='300',unitPrice='26475',availableAmount='984.22',maxOrderSize='26057000')
     monkeypatch.setattr(w,'read_ad',AsyncMock(side_effect=[source(),source(),final]))
     monkeypatch.setattr(w,'read_rank_plan',AsyncMock(return_value={'action':'UPDATE_PRICE','proposed_price':'26475'}))
     write=AsyncMock(return_value={'oldAdId':'200','newAdId':'300'});monkeypatch.setattr(w,'request',write)
@@ -115,3 +116,47 @@ def test_worker_does_not_post_if_order_arrives_between_reads(db,monkeypatch):
     asyncio.run(w.process_ad_pricing(db,None))
     write.assert_not_awaited()
     assert db.get(w.OKXAdPriceAttempt,slot(db).id).state=='IDLE'
+
+
+def test_live_error_regression_budget_fits_after_okx_two_decimal_rounding(db,monkeypatch):
+    monkeypatch.setattr(b,'read_order_page',AsyncMock(return_value=[]))
+    original=source();original.update(availableAmount='7500.00',minOrderSize='20000000',maxOrderSize='190000000')
+    result=prepare(db,original,'26222')
+    assert result['terms']['cryptoAmount']=='7245.83'
+    assert result['terms']['maxOrderLimit']=='190000000'
+    assert Decimal(result['terms']['cryptoAmount'])*Decimal('26222')>190000000
+    assert Decimal('7245.82')*Decimal('26222')<190000000
+
+
+@pytest.mark.parametrize('scale',['0','2','6','8'])
+def test_exchange_precision_controls_amount_instead_of_fixed_eight_decimals(db,monkeypatch,scale):
+    monkeypatch.setattr(b,'read_buy_quantum',AsyncMock(return_value=Decimal(1).scaleb(-int(scale))))
+    monkeypatch.setattr(b,'read_order_page',AsyncMock(return_value=[order()]))
+    result=prepare(db)
+    q=Decimal(result['terms']['cryptoAmount'])
+    assert q.as_tuple().exponent==-int(scale)
+    assert q*26495>Decimal(result['terms']['maxOrderLimit'])
+
+
+@pytest.mark.parametrize('rows,accepted',[
+    ([{'cryptoCurrency':'USDT','fiatCurrency':'VND','cryptoScale':'2'}],True),
+    ([{'cryptoCurrency':'BTC','fiatCurrency':'VND','cryptoScale':'8'}],False),
+    ([{'cryptoCurrency':'USDT','fiatCurrency':'VND','cryptoScale':'9'}],False),
+    ([{'cryptoCurrency':'USDT','fiatCurrency':'USD','cryptoScale':'2'}],False),
+    ([{'cryptoCurrency':'USDT','fiatCurrency':'VND','cryptoScale':'2'}]*2,False),
+    ([{'cryptoCurrency':'USDT','fiatCurrency':'VND'}],False),
+])
+def test_authenticated_precision_reader_validates_exact_currency_pair(rows,accepted):
+    import httpx
+    paths=[]
+    def handle(request):
+        paths.append(str(request.url))
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':'0','data':rows})
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            return await b.read_buy_quantum(client)
+    if accepted: assert asyncio.run(check())==Decimal('.01')
+    else:
+        with pytest.raises(b.BuyBudgetError):asyncio.run(check())
+    assert paths[0].endswith('/api/v5/p2p/currency/currency-pair-list?fiatCurrency=VND')

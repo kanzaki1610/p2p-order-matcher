@@ -20,6 +20,7 @@ def db():
 
 @pytest.fixture
 def setup(monkeypatch, db):
+    monkeypatch.setattr(worker.buy_budget, 'read_buy_quantum', AsyncMock(return_value=Decimal('.01')))
     monkeypatch.setattr(worker.buy_budget, 'read_order_page', AsyncMock(return_value=[]))
     monkeypatch.setattr(worker.settings, 'okx_ad_pricing_enabled', True)
     monkeypatch.setattr(worker.settings, 'database_schema', 'public')
@@ -297,12 +298,12 @@ def test_buy_ignores_legacy_limits_and_preserves_budget(db,setup,monkeypatch,sam
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
     original=ad(side='buy',price='26070' if same_price else '26080')
     original.update(minOrderSize='1000000',maxOrderSize='5000000')
-    final=ad('456','26070',side='buy');final.update(availableAmount='191.79136940',minOrderSize='1000000',maxOrderSize='5000000')
+    final=ad('456','26070',side='buy');final.update(availableAmount='191.80',minOrderSize='1000000',maxOrderSize='5000000')
     monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,original,final]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
-    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','cryptoAmount':'191.79136940','minOrderLimit':'1000000','maxOrderLimit':'5000000'}
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','cryptoAmount':'191.80','minOrderLimit':'1000000','maxOrderLimit':'5000000'}
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
     assert db.get(worker.OKXPendingLimits,setup.id) is None
 
