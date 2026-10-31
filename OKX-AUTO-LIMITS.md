@@ -1,8 +1,10 @@
 # Hạn mức khi bám giá OKX
 
 Trong kênh điều khiển OKX, dùng `/gia bang` để lấy bảng nút mới.
-Chiều mua USDT chỉ bám giá (`unitPrice`), không gửi hoặc thay đổi Min/Max,
-kể cả slot từng lưu hạn mức mua trước đây. Giữ nguyên hạn mức quảng cáo mua trên OKX.
+Chiều mua USDT không cần nhập Min/Max thủ công. Bot giữ Min đang có trên OKX,
+lưu Max ban đầu làm ngân sách VND và trừ số tiền của các lệnh mua đã hoàn tất.
+Khi bám giá, bot gửi giá, lượng USDT tính lại từ ngân sách còn lại và Min/Max
+cùng nhau để quảng cáo thay thế không khôi phục lượng mua ban đầu.
 Nút hạn mức mua cũ chỉ hiển thị hướng dẫn, không lưu cấu hình hay tắt Auto.
 
 Với chiều bán, chọn **Min bán · Max tự động**, nhập slot và Min VND cho mỗi
@@ -17,8 +19,7 @@ Khi chạy chiều bán, bot gửi `unitPrice`, `minOrderLimit`, `maxOrderLimit`
 yêu cầu cập nhật. Với SELL, Max = `floor(availableAmount × unitPrice) - 1` VND.
 Ví dụ 3000 USDT × 26500 → Max 79499999; giá giảm về 26100 → Max 78299999.
 Max tăng/giảm theo giá mới và số USDT còn khả dụng, không lấy số lượng ban đầu
-hoặc Max cũ làm trần. Các Max mua/bán từng lưu trước đây không dùng làm giới hạn
-cho luồng bám giá mới. Nếu Max tính được dưới Min hoặc không xác minh được
+hoặc Max cũ làm trần. Các Max SELL từng lưu trước đây không dùng làm trần giá trị SELL mới. Nếu Max tính được dưới Min hoặc không xác minh được
 lượng USDT khả dụng, bot báo lỗi và không sửa quảng cáo.
 Hạn mức chỉ gắn với đúng quảng cáo của slot và được chuyển sang ID mới
 sau khi xác minh thành công việc thay quảng cáo của OKX.
@@ -47,3 +48,12 @@ Kết quả và toàn bộ thông tin yêu cầu cũ được lưu vào nhật k
 slot về IDLE; giữ Min đã nhập và thời điểm gửi cũ để không bỏ qua giới hạn tần suất.
 Nếu cấu hình/yêu cầu đổi trong lúc đọc OKX, bot không ghi đè. Sau khi khôi phục,
 operator tự kiểm tra Min/Max, giá vốn, vị trí rồi bật Auto khi sẵn sàng.
+
+
+## BUY: persistent remaining VND budget
+
+Auto BUY requires no manual Min/Max entry. It preserves exchange Min, records the initial Max as a VND budget, and subtracts authenticated completed BUY order fiat amounts across all replacement ad IDs. It also sends remaining cryptoAmount so an OKX replacement cannot restore the original quantity. Pending purchases block repricing until resolved; cancelled purchases do not consume budget.
+
+Example: budget 158,532,000 VND, completed purchase 132,475,000 VND (5,000 USDT): remaining budget 26,057,000 VND with USDT quantity recalculated from that remaining VND budget at each new price. Max is the remaining VND budget. Crypto stock is rounded up to 8 decimals from (remaining VND + 1) / price so that Max fits below its value; this does not increase the VND spending limit. Changing price never replenishes spent VND. If below Min or exhausted, hide the ad; never reopen a manually hidden ad.
+
+Tables okx_buy_budgets / okx_buy_budget_ads / okx_buy_budget_orders persist budget, ID lineage and deduplicated orders. okx_pending_buy_budgets verifies replacement quantity before confirmation or operator recovery. Initial bootstrap traces confirmed automatic BUY replacements in the audit journal and reads paginated authenticated history. Missing/inconsistent history blocks a write. New unrelated/manual replacement ads start a separate budget. No credentials or private order records belong in this repository.
