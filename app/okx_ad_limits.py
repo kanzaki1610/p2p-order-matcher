@@ -27,16 +27,12 @@ def price_limits(db, slot, ad, price):
     if slot.side == 'BUY':
         return {}
     config = db.get(OKXAutoLimits, slot.id)
-    if config is None or config.ad_id != slot.adv_id:
-        return {}
-    lower, upper = number(config.minimum), number(config.maximum)
-    if lower > upper:
-        raise ValueError('Hạn mức Min phải nhỏ hơn hoặc bằng Max.')
-    if slot.side == 'SELL':
-        capacity = (number(ad.get('availableAmount')) * number(price)).to_integral_value(rounding=ROUND_DOWN)
-        upper = min(upper, capacity)
-        if upper < lower:
-            raise ValueError(f'USDT khả dụng chỉ đủ {capacity:,.0f} VND ở giá mới, thấp hơn Min {lower:,.0f} VND. Chưa sửa quảng cáo.')
+    lower = number(config.minimum) if config and config.ad_id == slot.adv_id else number(ad.get('minOrderSize'))
+    # Use current remaining stock, not the original quantity or a previous Max.
+    # Keep a one-dong margin below the total fiat value, as requested.
+    upper = (number(ad.get('availableAmount')) * number(price)).to_integral_value(rounding=ROUND_DOWN) - 1
+    if upper < lower:
+        raise ValueError(f'Max tự tính còn {upper:,.0f} VND ở giá mới, thấp hơn Min {lower:,.0f} VND. Chưa sửa quảng cáo.')
     return {'minOrderLimit': format(lower, 'f'), 'maxOrderLimit': format(upper, 'f')}
 
 

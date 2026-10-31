@@ -65,7 +65,7 @@ def panel():
     for side,label in [('BUY','Mua'),('SELL','Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
-    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Hạn mức bán Min/Max','limits:SELL')]})
+    rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
     rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL')]})
     return {'content':'**Điều khiển giá OKX**\nChỉ operator được sử dụng. Đặt giá thủ công cần xác nhận và tắt Auto của slot. Tạm dừng không ẩn quảng cáo trên sàn.','components':rows,'allowed_mentions':{'parse':[]}}
 
@@ -73,7 +73,7 @@ def modal(action,side):
     if action == 'limits' and side == 'BUY':
         return {'type':4,'data':{'content':'Auto mua USDT chỉ bám giá, không cần nhập Min/Max. Bot giữ nguyên hạn mức mua trên OKX.','flags':64}}
     if action == 'limits':
-        fields = [('slot','Slot 1 hoặc 2','1'),('minimum','Min VND/giao dịch (ví dụ 20000000)',None),('maximum','Max VND/giao dịch (ví dụ 180000000)',None)]
+        fields = [('slot','Slot 1 hoặc 2','1'),('minimum','Min VND/giao dịch (Max tự tính theo giá)',None)]
         return {'type':9,'data':{'custom_id':f'price:form:limits:{side}','title':'Hạn mức bám giá '+side,'components':[{'type':1,'components':[dict(type=4,custom_id=key,label=label,style=1,required=True,max_length=30,**({'value':value} if value else {}))]} for key,label,value in fields]}}
     labels={'cost':('Nhập giá vốn','Giá mua VND/USDT (ví dụ 26050)'), 'price':('Đặt giá thủ công','Giá VND/USDT (số nguyên, không dấu phân cách)'), 'rank':('Chọn vị trí','Vị trí từ 1 đến 50'), 'ad':('Chọn quảng cáo','ID quảng cáo OKX')}
     title,label=labels[action]
@@ -187,17 +187,15 @@ async def execute_panel(payload,db,owner):
             if side not in {'BUY','SELL'} or values.get('slot') not in {'1','2'}:
                 raise ValueError('Chọn BUY/SELL và slot 1 hoặc 2.')
             lower=input_number(values.get('minimum',''),money=True)
-            upper=input_number(values.get('maximum',''),money=True)
-            if lower>upper: raise ValueError('Min phải nhỏ hơn hoặc bằng Max.')
             slot=db.scalar(select(OKXSlot).where(OKXSlot.side==side,OKXSlot.slot_number==int(values['slot'])).with_for_update())
             if slot is None or not slot.adv_id: raise ValueError('Chọn quảng cáo cho slot trước.')
-            db.merge(OKXAutoLimits(slot_id=slot.id,ad_id=slot.adv_id,minimum=lower,maximum=upper))
+            db.merge(OKXAutoLimits(slot_id=slot.id,ad_id=slot.adv_id,minimum=lower,maximum=0))
             slot.auto_enabled=False
-            db.add(OKXAuditLog(action='OKX_AUTO_LIMITS_SAVED',actor='discord:'+owner,detail=f'{side} slot {slot.slot_number}; ad={slot.adv_id}; min={lower}; max={upper}'))
+            db.add(OKXAuditLog(action='OKX_AUTO_LIMITS_SAVED',actor='discord:'+owner,detail=f'{side} slot {slot.slot_number}; ad={slot.adv_id}; min={lower}; max=AUTO_AVAILABLE_X_PRICE_MINUS_1'))
             db.commit()
             attempt=db.get(OKXAdPriceAttempt,slot.id)
             pending='\nSlot còn yêu cầu cũ chưa rõ kết quả; cần xác minh trước khi bật lại.' if attempt and attempt.state!='IDLE' else '\nBấm Auto '+('Mua' if side=='BUY' else 'Bán')+' để bật sau khi kiểm tra.'
-            return {'content':f'Đã lưu {side} slot {slot.slot_number}: Min {lower:,.0f} · Max {upper:,.0f} VND/giao dịch. Auto của slot đã tắt để bạn kiểm tra.\nKhi bám giá, bot gửi giá và Min/Max cùng một yêu cầu. Max bán thực tế không vượt USDT khả dụng × giá mới.'+pending,'components':[]}
+            return {'content':f'Đã lưu {side} slot {slot.slot_number}: Min {lower:,.0f} VND/giao dịch. Max tự động = USDT khả dụng × giá mới − 1 VND. Auto của slot đã tắt để bạn kiểm tra.\nKhi bám giá, bot gửi giá và Min/Max cùng một yêu cầu; Max tăng/giảm theo giá và lượng USDT còn lại.'+pending,'components':[]}
         if action=='cost':
             return {'content':save_cost(db,input_number(value,money=True),'discord:'+owner)+'\nÁp dụng cho cả hai slot bán ở lần quét tiếp theo nếu Auto đang bật.','components':[]}
         if action=='price':
