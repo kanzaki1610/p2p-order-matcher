@@ -15,6 +15,26 @@ from app.mexc_sync import _get_order_detail_with_retry, sync_mexc_orders
 from app.models import P2POrder
 
 
+def test_signed_unicode_ad_terms_use_rfc3986_bytes_for_get_and_post():
+    value='spaces and commas, unicode kiểm tra & + %'
+    requests=[]
+    async def handler(request):
+        requests.append(request)
+        unsigned,signature=request.url.query.rsplit(b'&signature=',1)
+        assert b'+' not in unsigned and b'%20' in unsigned and b'%2B' in unsigned
+        assert b'%2C' in unsigned and b'%26' in unsigned and b'%25' in unsigned
+        assert parse_qs(unsigned.decode())['tradeTerms']==[value]
+        assert signature.decode()==hmac.new(b'secret',unsigned,hashlib.sha256).hexdigest()
+        return httpx.Response(200,json={'code':0,'data':'a123'})
+    async def check():
+        async with MexcP2PClient(api_key='key',api_secret='secret',transport=httpx.MockTransport(handler)) as client:
+            for method in ['GET','POST']:
+                assert await client._request_once('/api/v3/fiat/merchant/ads/save_or_update',
+                    params={'advNo':'a123','tradeTerms':value},method=method)=='a123'
+    asyncio.run(check())
+    assert [r.method for r in requests]==['GET','POST']
+
+
 def test_mexc_signature_is_hmac_sha256_hex():
     client = MexcP2PClient(api_key="key", api_secret="secret")
     query = "advOrderNo=123&recvWindow=10000&timestamp=1700000000000"

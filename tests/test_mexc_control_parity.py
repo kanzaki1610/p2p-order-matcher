@@ -185,3 +185,23 @@ def test_same_slot_and_cost_in_two_databases_are_isolated():
             assert primary.get(MexcPricingSwitch,1) is None and friend.get(MexcPricingSwitch,1).enabled is False
     finally:
         for engine in engines:engine.dispose()
+
+
+@pytest.mark.parametrize('error,accepted',[
+    ('MEXC HTTP 400 · mã API 700002.',True),
+    ('MEXC HTTP 429 · mã API 700002.',False),
+    ('MEXC HTTP 400 · mã API 99999.',False),
+    ('Không xác minh được phản hồi MEXC (ReadTimeout).',False),
+])
+def test_legacy_recovery_only_accepts_explicit_signature_rejection(db,setup,monkeypatch,error,accepted):
+    slot,row=setup;slot.state='UNKNOWN';slot.action='PRICE';slot.attempt_id='old';slot.last_action=1
+    slot.reason='Chưa rõ kết quả sửa/ẩn quảng cáo. '+error+' Không tự gửi lại; kiểm tra MEXC.';db.commit()
+    class API:
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+    monkeypatch.setattr(recovery,'MexcP2PClient',API)
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(return_value=row))
+    result=asyncio.run(recovery.recover(db,'owner','SELL',1))
+    assert slot.state==('IDLE' if accepted else 'UNKNOWN') and not slot.enabled
+    if accepted:assert '700002' in result
+    worker.write_price.assert_not_awaited();worker.write_visibility.assert_not_awaited()
