@@ -19,7 +19,7 @@ from app.mexc import MexcP2PClient
 
 def ad(side='SELL', status='OPEN'):
     return dict(advNo='a123',side=side,advStatus=status,coinName='USDT',coinId='usdt-id',
-        fiatUnit='VND',price='26080',quantity='100',payTimeLimit=15,
+        fiatUnit='VND',price='26080',quantity='100',availableQuantity='100',frozenQuantity='0',createTime=1,payTimeLimit=15,
         minSingleTransAmount='100000',maxSingleTransAmount='2000000',
         userAllTradeCountMin=3,userAllTradeCountMax=0,payMethod='1',
         paymentInfo=[{'id':777,'payMethod':1}],paymethodIds='1,2',
@@ -35,6 +35,8 @@ def db(monkeypatch):
     monkeypatch.setattr(worker.settings,'mexc_ad_pricing_seconds',5)
     monkeypatch.setattr(worker.settings,'discord_webhook_mexc_pricing','test-hook')
     monkeypatch.setattr(worker,'valid_webhook',lambda value:bool(value))
+    from app import mexc_auto_terms
+    monkeypatch.setattr(mexc_auto_terms,'read_ad_limits',AsyncMock(return_value={k:Decimal(v) for k,v in dict(minPrice='1',maxPrice='100000',minQuantity='1',maxQuantity='100000000',minSingleTransAmount='1',maxSingleTransAmount='100000000000').items()}))
     monkeypatch.setattr(worker,'send_discord_message',AsyncMock(return_value=True))
     with Session(engine,expire_on_commit=False) as session:yield session
     engine.dispose()
@@ -49,7 +51,12 @@ def setup(db,monkeypatch):
     async def read(*args):return dict(current)
     monkeypatch.setattr(worker,'read_ad',read)
     monkeypatch.setattr(worker,'rank_plan',AsyncMock(return_value={'action':'UPDATE_PRICE','proposed_price':'26070'}))
-    async def price(api,row,value):current['price']=str(value)
+    async def price(api,row,value,body=None):
+        current['price']=str(value)
+        if body:
+            for k in ('minSingleTransAmount','maxSingleTransAmount'):current[k]=body[k]
+            delta=Decimal(body.get('supplyQuantity','0'))-Decimal(body.get('reduceQuantity','0'))
+            for k in ('quantity','availableQuantity'):current[k]=str(Decimal(current[k])+delta)
     async def visibility(api,code,visible):current['advStatus']='OPEN' if visible else 'CLOSE'
     monkeypatch.setattr(worker,'write_price',AsyncMock(side_effect=price))
     monkeypatch.setattr(worker,'write_visibility',AsyncMock(side_effect=visibility))
@@ -222,7 +229,9 @@ def test_unknown_slot_cannot_be_reconfigured_to_resubmit(db,setup):
 def test_stale_confirmation_cannot_reset_newer_attempt(db,setup,monkeypatch):
     slot,current=setup
     slot.state='UNKNOWN';slot.attempt_id='old';slot.wanted_price=Decimal('26070');slot.wanted_status='OPEN';db.commit()
-    async def newer(*args):
+    from app.mexc_price_state import record_pending
+    record_pending(db,slot,current,ads.update_body(current,Decimal('26070')));db.commit()
+    async def newer(*args,**kwargs):
         slot.attempt_id='new';slot.wanted_price=Decimal('26090');db.commit()
         return dict(current,price='26070')
     monkeypatch.setattr(worker,'read_ad',newer)
@@ -232,7 +241,7 @@ def test_stale_confirmation_cannot_reset_newer_attempt(db,setup,monkeypatch):
 
 def test_late_post_response_cannot_overwrite_newer_attempt(db,setup,monkeypatch):
     slot,current=setup
-    async def newer(*args):
+    async def newer(*args,**kwargs):
         slot.attempt_id='new';slot.state='UNKNOWN';slot.wanted_price=Decimal('26090');db.commit()
     monkeypatch.setattr(worker,'write_price',AsyncMock(side_effect=newer))
     run(db)

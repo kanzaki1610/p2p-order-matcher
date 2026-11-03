@@ -22,7 +22,7 @@ def setup(monkeypatch):
         slot=MexcPriceSlot(key='SELL:1',ad='a123',enabled=True,rank=10,nickname='Own')
         db.add(slot);cost_settings(db).cost=Decimal('26050');db.commit()
         row=dict(advNo='a123',side='SELL',advStatus='CLOSE',coinName='USDT',coinId='usdt',fiatUnit='VND',
-            price='26080',quantity='100',payTimeLimit=15,minSingleTransAmount='100000',maxSingleTransAmount='2000000',
+            price='26080',quantity='100',availableQuantity='100',frozenQuantity='0',payTimeLimit=15,minSingleTransAmount='100000',maxSingleTransAmount='2000000',
             userAllTradeCountMin=0,userAllTradeCountMax=0,paymentInfo=[{'id':77}],payMethod='1',tradeTerms='unchanged')
         async def read(*args):return dict(row)
         monkeypatch.setattr(manual,'read_ad',read)
@@ -31,7 +31,9 @@ def setup(monkeypatch):
         async def write(path,params,method):
             assert method=='POST'
             row['price']=params['price']
-            row['quantity']=str(Decimal(row['quantity'])+Decimal(params.get('supplyQuantity','0'))-Decimal(params.get('reduceQuantity','0')))
+            delta=Decimal(params.get('supplyQuantity','0'))-Decimal(params.get('reduceQuantity','0'))
+            row['quantity']=str(Decimal(row['quantity'])+delta)
+            row['availableQuantity']=str(Decimal(row['availableQuantity'])+delta)
             for key in ('minSingleTransAmount','maxSingleTransAmount','advStatus'):row[key]=params[key]
             return 'a123'
         api._request_once=AsyncMock(side_effect=write)
