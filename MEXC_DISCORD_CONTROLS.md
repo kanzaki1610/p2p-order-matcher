@@ -15,6 +15,11 @@ Mỗi tài khoản có bảng riêng trong `#bam-gia-mexc`. Cảnh báo gửi v�
 - **Auto Mua/Bán**: bật/tắt riêng slot 1 hoặc 2. Chỉ bật khi quảng cáo đang
   OPEN và không có yêu cầu chưa rõ kết quả. Bot không mở lại quảng cáo chủ tự tắt.
 - **Trạng thái**, **Quảng cáo mua/bán**: xem cấu hình và giá quảng cáo thực tế.
+  Bật công tắc chỉ xác nhận đã lưu lựa chọn Auto, không có nghĩa sàn đã đổi giá.
+  Trạng thái UNKNOWN hiển thị rõ đang dừng; bám giá chung tạm dừng hoặc chưa
+  có slot Auto sẵn sàng đều được báo riêng. Hồ sơ lỗi mới giữ HTTP status và
+  mã API kể cả khi MEXC trả HTTP 200 kèm mã lỗi nghiệp vụ; không đưa thông điệp
+  phản hồi thô, khóa API hay tài khoản ngân hàng vào cảnh báo.
 - **Tạm dừng/Tiếp tục bám giá**: công tắc riêng của MEXC, giữ lựa chọn Auto
   từng slot; không thay công tắc mở khóa USDT hoặc OKX. Yêu cầu đã gửi vẫn có
   thể hoàn tất.
