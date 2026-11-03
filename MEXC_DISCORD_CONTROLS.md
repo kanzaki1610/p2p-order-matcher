@@ -34,6 +34,15 @@ Mỗi tài khoản có bảng riêng trong `#bam-gia-mexc`. Cảnh báo gửi v�
   Ngoại lệ hẹp: yêu cầu PRICE cũ bị MEXC từ chối chữ ký rõ ràng bằng HTTP 400,
   mã 700002, có thể đối chiếu lại quảng cáo đúng chủ rồi gỡ khóa với Auto tắt.
   Không áp dụng cho timeout, HTTP 429 hoặc lỗi không xác định.
+  Với hồ sơ đầy đủ từ bản cũ làm mất mã lỗi, riêng PRICE SELL không cộng/giảm
+  lượng có bước đối chiếu trạng thái hiện tại sau ít nhất 10 phút. Cần cập nhật
+  sàn mới hơn yêu cầu cũ, toàn bộ giá/tổng lượng/Min/Max/ngân hàng/điều kiện
+  vẫn giống dữ liệu trước yêu cầu, không có USDT đang giữ và hai lần GET cho
+  cùng một ảnh chụp ổn định. Lượng khả dụng có thể giảm do đã bán. Đây là
+  đối chiếu trạng thái hiện tại do operator yêu cầu, không xác nhận yêu cầu cũ
+  thành công và không gửi lại POST; lưu hồ sơ cũ vào nhật ký, Auto vẫn tắt.
+  Không áp dụng cho BUY, thay đổi lượng/hiển thị, hồ sơ thiếu nguồn hoặc lỗi
+  mới đã có trường chẩn đoán HTTP/API.
 
 ## Ngân sách mua
 
