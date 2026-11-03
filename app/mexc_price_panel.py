@@ -1,6 +1,8 @@
 """MEXC pricing buttons, isolated from all OKX controls and cost settings."""
 import re
 import uuid
+import json
+import time
 from decimal import Decimal
 
 from sqlalchemy import select, update
@@ -13,7 +15,7 @@ from .okx_ads import number
 from .discord_price_panel import input_number
 from .mexc_manual_price import preview as manual_preview, confirm as manual_confirm, MexcManualPriceDraft
 from .discord_notifications import valid_webhook
-from .mexc_price_state import MexcAutoLimits, MexcPricingSwitch, active
+from .mexc_price_state import MexcAutoLimits, MexcPricingSwitch, MexcPendingPrice, active
 from .mexc_price_recovery import recover
 
 
@@ -154,14 +156,24 @@ async def execute_panel(payload, db, owner):
         if enabled and slot.state!='IDLE': raise ValueError('Yêu cầu vừa được gửi; chưa bật lại Auto.')
         slot.enabled=enabled;slot.revision=uuid.uuid4().hex
         db.add(OKXAuditLog(action='MEXC_PRICE_AUTO',actor=actor,detail=f'{slot.key} Auto={enabled}'));db.commit()
-        return {'content':f'MEXC {slot.key}: Auto '+('bật' if enabled else 'tắt')+'.','components':[]}
+        message=f'MEXC {slot.key}: Auto '+('bật' if enabled else 'tắt')+'.'
+        if enabled:
+            message+=' Đã lưu công tắc, chưa xác nhận đổi giá trên sàn.'
+            if not active(db):message+=' Bám giá chung đang TẠM DỪNG; cần bấm Tiếp tục bám giá.'
+        return {'content':message,'components':[]}
     if action in {'pause','resume'}:
         enabled=action=='resume'
         if enabled and (not settings.mexc_ad_pricing_enabled or not valid_webhook(settings.discord_webhook_mexc_pricing)):
             raise ValueError('Chưa bật tính năng hoặc webhook MEXC trên Render; chưa tiếp tục bám giá.')
         db.merge(MexcPricingSwitch(id=1,enabled=enabled))
         db.add(OKXAuditLog(action='MEXC_PRICING_SWITCH',actor=actor,detail=str(enabled)));db.commit()
-        return {'content':('Đã tiếp tục bám giá MEXC theo các slot đang Auto.' if enabled else 'Đã tạm dừng bám giá MEXC; giữ cấu hình Auto từng slot để tiếp tục sau. Yêu cầu đã gửi vẫn có thể hoàn tất.')+' Không thay đổi OKX hoặc Auto mở khóa.','components':[]}
+        message=('Đã bật công tắc bám giá chung MEXC; chưa xác nhận đổi giá trên sàn.' if enabled else 'Đã tạm dừng bám giá MEXC; giữ cấu hình Auto từng slot để tiếp tục sau. Yêu cầu đã gửi vẫn có thể hoàn tất.')
+        if enabled:
+            slots=db.scalars(select(MexcPriceSlot)).all()
+            ready=[s for s in slots if s.enabled and s.state=='IDLE']
+            if not ready:message+=' Chưa có slot Auto sẵn sàng. Chọn quảng cáo, nhập giá vốn bán, kiểm tra slot lỗi rồi bật Auto từng slot.'
+            else:message+=' Slot chờ chu kỳ kiểm tra: '+', '.join(s.key for s in ready)+'.'
+        return {'content':message+' Không thay đổi OKX hoặc Auto mở khóa.','components':[]}
     if action=='recover' and len(parts)==3 and parts[2] in {'BUY','SELL'}:
         return {'content':'Chọn slot MEXC cần kiểm tra/khôi phục. Chỉ đọc API, không gửi lại yêu cầu; Auto slot sẽ tắt.','components':[{'type':1,'components':[
             button('Slot '+str(i),f'checkslot:{parts[2]}:{i}') for i in (1,2)]}]}
@@ -169,12 +181,21 @@ async def execute_panel(payload, db, owner):
         return {'content':await recover(db,owner,parts[2],parts[3]),'components':[]}
     if action=='status':
         config=cost_settings(db)
-        text='MEXC · '+('Sẵn sàng' if settings.mexc_ad_pricing_enabled else 'Render đang tắt')+'\n'
+        text='MEXC · '+('Tính năng được bật trên Render' if settings.mexc_ad_pricing_enabled else 'Render đang tắt')+'\n'
         if not settings.discord_webhook_mexc_pricing:text+='Auto còn chờ cấu hình kênh cảnh báo. Đặt giá thủ công vẫn dùng được.\n'
         text+=('Bám giá chung: BẬT\n' if active(db) else 'Bám giá chung: TẠM DỪNG\n')
         text+='Giá vốn riêng: '+(f'{config.cost:,.0f}đ · sàn bán {config.cost+10:,.0f}đ' if config.cost else 'chưa nhập')
-        for slot in db.scalars(select(MexcPriceSlot)).all():
+        slots=db.scalars(select(MexcPriceSlot)).all()
+        if not slots:text+='\nChưa chọn quảng cáo cho slot nào; chưa có slot bám giá.'
+        for slot in slots:
             text+=f'\n{slot.key}: {slot.ad} · vị trí {slot.rank} · Auto {slot.enabled} · {slot.state}'
+            if slot.state!='IDLE':text+='\nĐANG DỪNG vì kết quả yêu cầu cũ chưa rõ; không gửi đổi giá tiếp.'
+            elif not slot.enabled:text+='\nAuto slot đang tắt.'
+            if slot.state!='IDLE' and slot.wanted_price is not None:
+                text+=f'\nGiá yêu cầu gần nhất: {slot.wanted_price:,.0f}đ/USDT.'
+                pending=db.get(MexcPendingPrice,slot.key)
+                if pending and time.time()-float(slot.last_action)>120 and 'api_http_status' not in json.loads(pending.expected_json):
+                    text+=' Hồ sơ cũ chưa lưu mã API gốc; chưa thể xác định lỗi chỉ từ thông báo chung.'
             if slot.reason:text+='\n'+slot.reason
         return {'content':text,'components':[]}
     if action=='list' and len(parts)==3 and parts[2] in {'BUY','SELL'}:

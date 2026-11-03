@@ -220,6 +220,13 @@ async def process_pricing(db, api, source):
             if isinstance(error, MexcAPIError):
                 code=re.match(r'MEXC HTTP ([0-9]{3}) · ([A-Za-z0-9_-]{1,20}):',str(error))
                 if code: reason=f'MEXC HTTP {code[1]} · mã API {code[2]}.'
+                if slot.state in {'UNKNOWN','CONFIRMING'}:
+                    pending=db.get(MexcPendingPrice,slot.key)
+                    if pending and pending.attempt==slot.attempt_id:
+                        expected=json.loads(pending.expected_json)
+                        expected['api_http_status']=error.http_status
+                        expected['api_code']=error.api_code
+                        pending.expected_json=json.dumps(expected,sort_keys=True)
             if slot.state != 'IDLE':
                 slot.reason='Chưa rõ kết quả sửa/ẩn quảng cáo. '+reason+' Không tự gửi lại; kiểm tra MEXC.'
                 db.commit(); reason=slot.reason

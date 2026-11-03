@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .config import settings
 from .database import Base
 from .models import OKXAuditLog
-from .mexc import MexcP2PClient
+from .mexc import MexcP2PClient, MexcAPIError
 from .mexc_ads import read_ad, update_body
 from .mexc_pricing import MexcPriceSlot, cost_settings
 from .okx_ads import number
@@ -150,6 +150,13 @@ async def confirm(db,owner,draft_id):
         except Exception as error:
             db.rollback()
             reason=str(error) if isinstance(error,ValueError) else 'Không xác minh được phản hồi MEXC ('+type(error).__name__+').'
+            if isinstance(error,MexcAPIError) and error.http_status is not None:
+                reason=f'MEXC HTTP {error.http_status} · mã API {error.api_code or "UNKNOWN"}.'
+                pending=db.get(MexcPendingPrice,draft.slot)
+                if pending and pending.attempt==attempt:
+                    saved=json.loads(pending.expected_json)
+                    saved.update(api_http_status=error.http_status,api_code=error.api_code)
+                    pending.expected_json=json.dumps(saved,sort_keys=True)
             db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==draft.slot,MexcPriceSlot.attempt_id==attempt).values(reason=reason[:450]))
             db.commit()
             return 'Chưa rõ kết quả: '+reason[:450]+' Auto đã tắt; không tự gửi lại, cần kiểm tra MEXC.'

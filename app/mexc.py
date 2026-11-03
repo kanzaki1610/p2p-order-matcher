@@ -3,6 +3,7 @@ import logging
 import hashlib
 import hmac
 import time
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode, quote
@@ -16,6 +17,12 @@ logger = logging.getLogger("uvicorn.error.mexc")
 
 class MexcAPIError(RuntimeError):
     """Safe-to-display MEXC error that never contains credentials."""
+
+    def __init__(self, message, *, http_status=None, api_code=None):
+        super().__init__(message)
+        self.http_status = http_status
+        value = str(api_code) if api_code is not None else ''
+        self.api_code = value if re.fullmatch(r'-?[0-9]{1,12}', value) else None
 
 
 @dataclass(frozen=True)
@@ -121,26 +128,28 @@ class MexcP2PClient:
             result = response.json()
         except httpx.HTTPStatusError as exc:
             code = "UNKNOWN"
-            message = "Không có nội dung lỗi"
             try:
                 error_data = exc.response.json()
                 if isinstance(error_data, dict):
-                    code = str(error_data.get("code") or code)[:50]
-                    message = str(error_data.get("msg") or error_data.get("message") or message)[:300]
-            except ValueError:
-                if exc.response.text.strip():
-                    message = exc.response.text.strip()[:300]
-            raise MexcAPIError(f"MEXC HTTP {exc.response.status_code} · {code}: {message}") from exc
+                    value = str(error_data.get("code", ''))
+                    if re.fullmatch(r'-?[0-9]{1,12}',value): code=value
+            except ValueError: pass
+            # Never echo response messages: providers may include signed URLs,
+            # API keys, submitted terms or payment-account information in them.
+            raise MexcAPIError(f"MEXC HTTP {exc.response.status_code} · {code}: Sàn trả lỗi yêu cầu.",
+                http_status=exc.response.status_code,api_code=code) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise MexcAPIError(f"Không thể kết nối MEXC: {type(exc).__name__}") from exc
 
         if method == "POST" and (not isinstance(result, dict) or str(result.get("code")) != "0"):
-            raise MexcAPIError("MEXC chưa xác nhận tiếp nhận yêu cầu mở khóa")
+            value = str(result.get('code','')) if isinstance(result,dict) else ''
+            code = value if re.fullmatch(r'-?[0-9]{1,12}',value) else 'UNKNOWN'
+            raise MexcAPIError(f"MEXC HTTP {response.status_code} · {code}: Chưa xác nhận yêu cầu ghi; không gửi lại.",
+                http_status=response.status_code,api_code=code)
         if isinstance(result, dict) and str(result.get("code", "0")) not in {"0", "200", "None"}:
-            raise MexcAPIError(
-                f"MEXC {str(result.get('code', 'UNKNOWN'))[:50]}: "
-                f"{str(result.get('msg') or result.get('message') or 'API error')[:300]}"
-            )
+            value=str(result.get('code',''));code=value if re.fullmatch(r'-?[0-9]{1,12}',value) else 'UNKNOWN'
+            raise MexcAPIError(f"MEXC HTTP {response.status_code} · {code}: Sàn trả lỗi yêu cầu.",
+                http_status=response.status_code,api_code=code)
         return result.get("data") if isinstance(result, dict) and "data" in result else result
 
     async def release_coin(self, order_code: str) -> None:
