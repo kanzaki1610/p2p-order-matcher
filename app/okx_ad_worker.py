@@ -54,7 +54,8 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
     key = hashlib.sha256((kind + reason).encode()).hexdigest()
     if attempt.notified_key == key:
         return
-    text = (f"OKX · VNTrader · cảnh báo giá {kind}\nMã quảng cáo: {slot.adv_id}\n"
+    merchant = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
+    text = (f"OKX · {merchant} · cảnh báo giá {kind}\nMã quảng cáo: {slot.adv_id}\n"
             f"Chiều: {slot.side}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\nLý do: {reason}")
     if plan:
         text += f"\nGiá vị trí {plan.get('target_rank', 10)}: {plan.get('proposed_price')}đ/USDT"
@@ -129,7 +130,7 @@ def pending_reason(attempt):
 
 
 async def process_ad_pricing(db, client):
-    if not pricing_active(db) or settings.database_schema == "kayhap":
+    if not pricing_active(db):
         return
     try:
         if not valid_webhook(settings.discord_webhook_pricing_alerts):

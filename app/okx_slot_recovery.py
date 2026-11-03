@@ -24,7 +24,7 @@ def snapshot(attempt):
 
 
 async def recover_slot(db, owner, side, slot_number):
-    if settings.database_schema == 'kayhap':
+    if settings.database_schema == 'kayhap' and not settings.discord_pricing_commands_enabled:
         raise ValueError('Chức năng bám giá này chỉ dành cho tài khoản gốc.')
     if side not in {'BUY', 'SELL'} or type(slot_number) is not int or slot_number not in {1, 2}:
         raise ValueError('Chọn chiều mua/bán và slot 1 hoặc 2.')

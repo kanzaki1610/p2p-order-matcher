@@ -41,9 +41,9 @@ mexc_pricing_task: asyncio.Task | None = None
 @app.on_event("startup")
 async def start_ad_pricing():
     global pricing_task, mexc_pricing_task
-    if settings.okx_ad_pricing_enabled and settings.database_schema != "kayhap":
+    if settings.okx_ad_pricing_enabled:
         pricing_task = asyncio.create_task(run_isolated(pricing_loop))
-    if settings.mexc_ad_pricing_enabled and settings.database_schema != 'kayhap':
+    if settings.mexc_ad_pricing_enabled:
         mexc_pricing_task = asyncio.create_task(run_isolated(mexc_pricing_loop))
 
 

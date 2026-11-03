@@ -28,12 +28,38 @@ def validate_account(primary: Settings, secondary: Settings) -> None:
         raise ValueError("kayhap requires three distinct authentication keys separate from the original account")
     if secondary.telegram_fallback_enabled or secondary.telegram_commands_enabled:
         raise ValueError("kayhap Telegram must be explicitly disabled")
-    if secondary.discord_commands_enabled or secondary.discord_pricing_commands_enabled:
-        raise ValueError("Configure interactive Discord commands separately before enabling")
+    if secondary.discord_commands_enabled:
+        raise ValueError("General interactive Discord commands remain disabled for kayhap")
     if secondary.bitget_p2p_enabled:
         raise ValueError("kayhap supports OKX and MEXC only")
-    if secondary.okx_ad_pricing_enabled or secondary.mexc_ad_pricing_enabled:
-        raise ValueError("Ad pricing is available only for the original account")
+    if secondary.okx_ad_pricing_enabled or secondary.mexc_ad_pricing_enabled or secondary.discord_pricing_commands_enabled:
+        from .discord_notifications import valid_webhook
+        if (not secondary.discord_pricing_commands_enabled or not secondary.discord_guild_id
+                or secondary.discord_guild_id == primary.discord_guild_id
+                or secondary.discord_application_id != primary.discord_application_id
+                or not primary.discord_application_id
+                or secondary.discord_public_key != primary.discord_public_key or not primary.discord_public_key
+                or not secondary.discord_allowed_user_ids or secondary.discord_allowed_role_ids):
+            raise ValueError('Pricing requires separately bound kayhap guild, operator and shared application signature')
+        owner_ids = {v.strip() for v in secondary.discord_release_allowed_user_ids.split(',') if v.strip()}
+        operators = {v.strip() for v in secondary.discord_allowed_user_ids.split(',') if v.strip()}
+        if not operators.issubset(owner_ids):
+            raise ValueError('Pricing operators must already be kayhap account operators')
+        channels = {v.strip() for v in secondary.discord_command_channel_ids.split(',') if v.strip()}
+        main_channels = {v.strip() for v in primary.discord_command_channel_ids.split(',') if v.strip()}
+        main_channels.add(primary.discord_mexc_pricing_channel_id)
+        if (len(channels) != 1 or not secondary.discord_mexc_pricing_channel_id
+                or secondary.discord_mexc_pricing_channel_id in channels
+                or (channels | {secondary.discord_mexc_pricing_channel_id}) & main_channels):
+            raise ValueError('Pricing requires distinct OKX/MEXC control channels isolated from the original account')
+        price_hooks = [secondary.discord_webhook_pricing_alerts, secondary.discord_webhook_mexc_pricing]
+        if (not all(valid_webhook(v) for v in price_hooks) or len(set(price_hooks)) != 2
+                or set(price_hooks) & {primary.discord_webhook_pricing_alerts, primary.discord_webhook_mexc_pricing}):
+            raise ValueError('Pricing requires two kayhap-only alert webhooks')
+        if secondary.okx_ad_pricing_enabled and (not secondary.okx_p2p_enabled or not secondary.okx_merchant_nicknames):
+            raise ValueError('Enable isolated OKX reader and merchant nickname before pricing')
+        if secondary.mexc_ad_pricing_enabled and not secondary.mexc_p2p_enabled:
+            raise ValueError('Enable isolated MEXC reader before pricing')
     if secondary.notification_provider != "discord":
         raise ValueError("kayhap notifications must use Discord")
     hooks = ("discord_webhook_orders", "discord_webhook_payment_detected",

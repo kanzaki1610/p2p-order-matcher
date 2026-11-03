@@ -20,7 +20,7 @@ def validate_rank(rank):
 
 
 def pricing_active(db):
-    if not settings.okx_ad_pricing_enabled or settings.database_schema == 'kayhap':
+    if not settings.okx_ad_pricing_enabled or (settings.database_schema == 'kayhap' and not settings.discord_pricing_commands_enabled):
         return False
     switch = db.get(OKXPricingSwitch, 1)
     return settings.okx_ad_pricing_enabled and (switch is None or switch.enabled)
@@ -142,7 +142,7 @@ def selected_rank(db, side):
 
 
 def save_ranks(db, changes, actor="dashboard"):
-    if settings.database_schema == "kayhap":
+    if settings.database_schema == "kayhap" and not settings.discord_pricing_commands_enabled:
         raise ValueError("Bám giá hiện chỉ hỗ trợ tài khoản gốc.")
     if not changes or set(changes) - {"buy_rank", "sell_rank"}:
         raise ValueError("Chỉ cập nhật vị trí mua hoặc bán.")
@@ -173,7 +173,7 @@ def parse_price_command(data):
 
 
 async def execute_price_command(data, db, user_id):
-    if settings.database_schema == "kayhap":
+    if settings.database_schema == "kayhap" and not settings.discord_pricing_commands_enabled:
         return "Bám giá hiện chỉ hỗ trợ tài khoản gốc."
     commands=data.get('options',[])
     if len(commands)==1 and commands[0].get('name') in {'bamtat','danhsach','quangcao','auto'}:

@@ -1,5 +1,6 @@
 """Separate MEXC pricing state; never resubmit uncertain exchange writes."""
 import asyncio
+import json
 import logging
 import re
 import time
@@ -8,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import httpx
-from sqlalchemy import Boolean, Integer, Numeric, String, Text, select, update
+from sqlalchemy import Boolean, Integer, Numeric, String, Text, select, update, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .config import settings
@@ -16,6 +17,8 @@ from .database import Base, SessionLocal
 from .mexc import MexcP2PClient, MexcAPIError
 from .mexc_ads import read_ad, update_body, write_price, write_visibility
 from .okx_ads import number
+from .mexc_price_state import MexcPendingPrice, active, source_snapshot, record_pending, matches
+from .mexc_auto_terms import prepare as prepare_auto_terms
 from .okx_rank import plan_rank_price
 from .notifications import notify_once
 from .discord_notifications import send_discord_message, valid_webhook
@@ -80,38 +83,58 @@ async def rank_plan(client, slot, cost):
 
 async def confirm(db, api, slot):
     attempt_id = slot.attempt_id
+    pending = db.get(MexcPendingPrice, slot.key)
+    if pending is None or pending.attempt != attempt_id or pending.ad != slot.ad:
+        await alert(db, slot, 'Yêu cầu cũ thiếu hồ sơ giá/số lượng/hạn mức; chưa thể xác minh đầy đủ, không gửi lại.', 'unknown')
+        return False
+    expected = pending.expected_json
     row = await read_ad(api, slot.ad, slot.key.split(':')[0])
     db.refresh(slot)
-    if slot.attempt_id != attempt_id or slot.state not in {'UNKNOWN','CONFIRMING'}:
+    db.refresh(pending)
+    if (slot.attempt_id != attempt_id or slot.state not in {'UNKNOWN','CONFIRMING'}
+            or pending.expected_json != expected or pending.attempt != attempt_id):
         return False
-    if number(row['price']) != slot.wanted_price or row['advStatus'] != slot.wanted_status:
-        await alert(db, slot, slot.reason or 'Chưa xác minh được kết quả sửa/ẩn quảng cáo. Bot dừng gửi lại; kiểm tra MEXC.', 'unknown')
+    if not matches(row, json.loads(expected)):
+        await alert(db, slot, slot.reason or 'Giá, số lượng, Min/Max hoặc hiển thị chưa khớp yêu cầu; không gửi lại, cần kiểm tra MEXC.', 'unknown')
         return False
-    action = slot.action
+    action, cause = slot.action, pending.cause
     values = {'state':'IDLE', 'reason':None}
-    if action == 'HIDE': values['paused_by_floor'] = True
+    if action == 'HIDE': values['paused_by_floor'] = cause == 'FLOOR'
     if action == 'SHOW': values['paused_by_floor'] = False
     changed = db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==slot.key,
         MexcPriceSlot.attempt_id==attempt_id,MexcPriceSlot.state.in_(['UNKNOWN','CONFIRMING'])).values(**values))
-    db.commit()
-    if changed.rowcount != 1: return False
-    db.refresh(slot)
+    if changed.rowcount != 1:
+        db.rollback()
+        return False
+    db.delete(pending)
+    db.commit();db.refresh(slot)
     if action in {'HIDE','SHOW'}:
-        await alert(db, slot, 'Đã xác minh tạm ẩn: giá vị trí thấp hơn giá vốn +10đ.' if action=='HIDE' else 'Đã xác minh hiển thị lại quảng cáo do bot tạm ẩn; giá đạt giá vốn +10đ.', 'confirmed')
+        message = ('Đã xác minh tạm ẩn vì ngân sách/số dư còn lại không đủ Min.' if cause == 'BUDGET' else
+                   'Đã xác minh tạm ẩn: giá vị trí thấp hơn giá vốn +10đ.') if action=='HIDE' else 'Đã xác minh hiển thị lại quảng cáo do bot tạm ẩn; giá đạt giá vốn +10đ.'
+        await alert(db, slot, message, 'confirmed')
     return True
 
 
+def release_claim(db, key, attempt):
+    db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==key,
+        MexcPriceSlot.attempt_id==attempt, MexcPriceSlot.state=='SUBMITTING').values(state='IDLE'))
+    db.commit()
+
+
 async def process_pricing(db, api, source):
-    if (not settings.mexc_ad_pricing_enabled or settings.database_schema == 'kayhap'
+    if (not settings.mexc_ad_pricing_enabled or (settings.database_schema == 'kayhap' and not settings.discord_pricing_commands_enabled) or not active(db)
             or not valid_webhook(settings.discord_webhook_mexc_pricing)):
         return
     slots = db.scalars(select(MexcPriceSlot).where(MexcPriceSlot.enabled.is_(True))).all()
     for slot in slots:
+        attempt = None
         try:
+            if slot.state == 'SUBMITTING':
+                continue
             if slot.state != 'IDLE':
                 await confirm(db, api, slot)
                 continue
-            if sum(other.ad == slot.ad for other in slots) != 1:
+            if db.scalar(select(MexcPriceSlot.key).where(MexcPriceSlot.key != slot.key, MexcPriceSlot.ad == slot.ad)):
                 raise ValueError('Một quảng cáo đang được gán cho nhiều slot; chưa sửa giá.')
             side = slot.key.split(':')[0]
             row = await read_ad(api, slot.ad, side)
@@ -126,33 +149,57 @@ async def process_pricing(db, api, source):
             current, proposed = number(row['price']), number(plan['proposed_price'])
             action = 'HIDE' if plan['action']=='HIDE_AD' else 'PRICE'
             if action=='HIDE' and row['advStatus']=='CLOSE': continue
-            if action=='PRICE' and current==proposed:
-                if slot.paused_by_floor and row['advStatus']=='CLOSE': action='SHOW'
-                else: continue
+            body, cause = {}, 'FLOOR' if action == 'HIDE' else 'PRICE'
+            if action == 'PRICE':
+                terms = await prepare_auto_terms(db, api, slot, row, proposed)
+                if terms['exhausted']:
+                    if row['advStatus'] == 'CLOSE':
+                        await alert(db, slot, 'Ngân sách/số dư còn lại không đủ Min; giữ ẩn quảng cáo.', 'budget')
+                        continue
+                    action, cause = 'HIDE', 'BUDGET'
+                else:
+                    body = terms['body']
+                    from .mexc_price_state import expected_for
+                    unchanged = matches(row, expected_for(row, body))
+                    if current == proposed and unchanged:
+                        if slot.paused_by_floor and row['advStatus']=='CLOSE': action='SHOW'
+                        else: continue
             price = proposed if action=='PRICE' else current
             wanted_status = 'CLOSE' if action=='HIDE' else 'OPEN' if action=='SHOW' else row['advStatus']
-            if action=='PRICE': update_body(row, price)  # Validate every required field before claiming.
+            if action == 'PRICE':
+                latest = db.scalar(select(func.max(MexcPriceSlot.last_action)))
+                if latest and time.time() - float(latest) < max(30, settings.mexc_ad_min_update_seconds): continue
             if time.time()-float(slot.last_action) < max(5, settings.mexc_ad_pricing_seconds): continue
             attempt = uuid.uuid4().hex
             claim = db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==slot.key,
                 MexcPriceSlot.state=='IDLE', MexcPriceSlot.enabled.is_(True), MexcPriceSlot.revision==slot_revision).values(
-                    state='UNKNOWN', action=action, wanted_price=price, wanted_status=wanted_status,
+                    state='SUBMITTING', action=action, wanted_price=price, wanted_status=wanted_status,
                     attempt_id=attempt, last_action=Decimal(str(time.time())), reason=None))
+            if claim.rowcount != 1:
+                db.rollback(); continue
+            db.refresh(slot)
+            record_pending(db, slot, row, body, status=wanted_status, cause=cause)
             db.commit()
-            if claim.rowcount != 1: continue
             db.refresh(slot)
             if cost_settings(db).revision != revision:
-                slot.state='IDLE'; db.commit(); continue
+                release_claim(db, slot.key, attempt); continue
             # Verify the original ad has not changed since the plan was calculated.
             latest = await read_ad(api, slot.ad, side)
-            if latest != row:
-                slot.state='IDLE'; db.commit(); continue
+            if source_snapshot(latest) != source_snapshot(row):
+                release_claim(db, slot.key, attempt); continue
             db.refresh(slot)
-            if not slot.enabled or slot.revision != slot_revision:
-                slot.state='IDLE'; db.commit(); continue
+            if not slot.enabled or slot.revision != slot_revision or not active(db, lock=True):
+                release_claim(db, slot.key, attempt); continue
             if cost_settings(db).revision != revision:
-                slot.state='IDLE'; db.commit(); continue
-            if action=='PRICE': await write_price(api, row, price)
+                release_claim(db, slot.key, attempt); continue
+            changed = db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==slot.key,
+                MexcPriceSlot.attempt_id==attempt, MexcPriceSlot.state=='SUBMITTING',
+                MexcPriceSlot.revision==slot_revision, MexcPriceSlot.enabled.is_(True)).values(state='UNKNOWN'))
+            if changed.rowcount != 1:
+                db.rollback(); continue
+            db.refresh(slot)
+            db.commit()  # Persist UNKNOWN before the only POST; exact intent was recorded with the claim.
+            if action=='PRICE': await write_price(api, row, price, body=body)
             else: await write_visibility(api, slot.ad, action=='SHOW')
             changed=db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==slot.key,
                 MexcPriceSlot.attempt_id==attempt,MexcPriceSlot.state=='UNKNOWN').values(state='CONFIRMING'))
@@ -164,6 +211,10 @@ async def process_pricing(db, api, source):
             raise
         except Exception as error:
             db.rollback(); db.refresh(slot)
+            if attempt and slot.attempt_id != attempt:
+                continue
+            if attempt and slot.state == 'SUBMITTING':
+                release_claim(db, slot.key, attempt); db.refresh(slot)
             # Never display signed URLs, response bodies or arbitrary network errors.
             reason = str(error)[:450] if isinstance(error, ValueError) else 'Không xác minh được phản hồi MEXC ('+type(error).__name__+').'
             if isinstance(error, MexcAPIError):

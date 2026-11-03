@@ -145,6 +145,22 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
             return {'type': 4, 'data': {'content': 'Bạn không có quyền dùng nút Auto trong server/kênh này.', 'flags': 64}}
         background_tasks.add_task(run_release_control, payload)
         return {'type': 5, 'data': {'flags': 64}}
+    custom = str(payload.get('data', {}).get('custom_id', ''))
+    pricing = payload.get('data', {}).get('name') == 'gia' or custom.startswith(('price:', 'mprice:'))
+    if pricing:
+        from .pricing_accounts import resolve
+        package = resolve(payload)
+        if package is None:
+            return {'type': 4, 'data': {'content': 'Bạn không có quyền điều khiển giá trong server/kênh này.', 'flags': 64}}
+        if package != __package__:
+            import importlib
+            account = importlib.import_module(package + '.discord_commands')
+            return await account.handle_verified_payload(payload, background_tasks)
+    return await handle_verified_payload(payload, background_tasks)
+
+
+async def handle_verified_payload(payload, background_tasks):
+    """Internal entry only, called after signature and account routing checks."""
     if not (settings.discord_commands_enabled or settings.discord_pricing_commands_enabled):
         raise HTTPException(404, "Discord commands disabled")
     if payload.get("type") not in {2,3,5} or not authorized(payload):
@@ -155,7 +171,7 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
     pricing = payload.get("data", {}).get("name") == "gia" or custom.startswith(('price:','mprice:'))
     if (mexc_control and not mexc_channel) or (mexc_channel and not (mexc_control or payload.get('data',{}).get('name')=='gia')):
         return {'type':4,'data':{'content':'Dùng đúng kênh điều khiển của sàn tương ứng.','flags':64}}
-    if ((pricing and (not settings.discord_pricing_commands_enabled or settings.database_schema == "kayhap"))
+    if ((pricing and not settings.discord_pricing_commands_enabled)
             or (not pricing and not settings.discord_commands_enabled)):
         return {"type": 4, "data": {"content": "Lệnh này chưa được bật cho tài khoản này.", "flags": 64}}
     try:
@@ -166,7 +182,7 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
             return {'type':4,'data':{'content':'Dùng /gia bang rồi bấm các nút điều khiển MEXC.','flags':64}}
         if mexc_control and payload.get('type') == 3:
             parts = custom.split(':')
-            if len(parts)==3 and parts[1] in {'config','cost','price'}:
+            if len(parts)==3 and parts[1] in {'config','cost','price','rank','ad','limits'}:
                 return mexc_price_panel.modal(parts[1],parts[2])
         if pricing and payload.get('type') == 3:
             parts = data['custom_id'].split(':')

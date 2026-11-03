@@ -67,8 +67,8 @@ def update_body(row, price):
     return {k: str(v).lower() if isinstance(v, bool) else str(v) for k, v in result.items()}
 
 
-async def write_price(client, row, price):
-    body = update_body(row, price)
+async def write_price(client, row, price, body=None):
+    body = update_body(row, price) if body is None else body
     result = await client._request_once('/api/v3/fiat/merchant/ads/save_or_update', params=body, method='POST')
     if str(result) != str(row['advNo']):
         raise ValueError('Kết quả chỉnh quảng cáo MEXC chưa xác nhận đúng ID; không gửi lại.')

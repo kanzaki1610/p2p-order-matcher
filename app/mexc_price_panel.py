@@ -13,6 +13,8 @@ from .okx_ads import number
 from .discord_price_panel import input_number
 from .mexc_manual_price import preview as manual_preview, confirm as manual_confirm, MexcManualPriceDraft
 from .discord_notifications import valid_webhook
+from .mexc_price_state import MexcAutoLimits, MexcPricingSwitch, active
+from .mexc_price_recovery import recover
 
 
 def button(label, action, style=2):
@@ -20,30 +22,41 @@ def button(label, action, style=2):
 
 
 def panel():
-    return {'content':'Điều khiển bám giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. Chọn quảng cáo, vị trí, biệt danh và bật Auto từng slot. Bot không tự mở quảng cáo bạn tắt thủ công.',
-        'components':[{'type':1,'components':[button('Đặt giá Mua','price:BUY',1),button('Cài Mua','config:BUY'),button('Auto Mua','auto:BUY'),button('Quảng cáo mua','list:BUY')]},
-                      {'type':1,'components':[button('Đặt giá Bán','price:SELL',1),button('Cài Bán','config:SELL'),button('Auto Bán','auto:SELL'),button('Quảng cáo bán','list:SELL')]},
-                      {'type':1,'components':[button('Giá vốn MEXC','cost:SELL',1),button('Trạng thái','status'),button('Tắt toàn bộ Auto','pause',4)]}]}
+    rows = []
+    for side, label in [('BUY', 'Mua'), ('SELL', 'Bán')]:
+        rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),
+            button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
+    rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),
+        button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
+    rows.append({'type':1,'components':[button('Nhập giá vốn MEXC','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
+    rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL')]})
+    return {'content':'Điều khiển giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. BUY giữ ngân sách VND còn lại; SELL tự tính Max theo USDT khả dụng và giá mới. Chỉ operator của tài khoản này được dùng. Không tự mở quảng cáo bạn tắt thủ công.',
+        'components':rows,'allowed_mentions':{'parse':[]}}
 
 
 def modal(action, side):
-    if side not in {'BUY','SELL'} or action not in {'config','cost','price'}: raise ValueError('Nút MEXC không hợp lệ.')
-    fields = [('cost','Giá mua trước đó (VND/USDT)', 'Ví dụ 25905')] if action=='cost' else [
-        ('slot','Slot 1 hoặc 2','1'),('ad','ID quảng cáo MEXC','a...'),
-        ('rank','Bám vị trí đối thủ (1–50)','10'),('nickname','Biệt danh MEXC của bạn','Nhập đúng biệt danh trên bảng giá')]
-    if action=='price':
-        fields=[('slot','Slot 1 hoặc 2','1'),('price','Giá VND/USDT','26050'),
-                ('quantity','Số lượng USDT (trống: giữ nguyên)',''),
-                ('minimum','Tối thiểu VND/giao dịch (trống: giữ nguyên)',''),
-                ('maximum','Tối đa VND/giao dịch (trống: giữ nguyên)','')]
-    return {'type':9,'data':{'custom_id':f'mprice:form:{action}:{side}',
-        'title':'Giá vốn riêng MEXC' if action=='cost' else ('Đặt giá MEXC ' if action=='price' else 'Bám giá MEXC ')+side,
+    if side not in {'BUY','SELL'} or action not in {'config','cost','price','rank','ad','limits'}:
+        raise ValueError('Nút MEXC không hợp lệ.')
+    if action == 'limits' and side == 'BUY':
+        return {'type':4,'data':{'content':'Auto mua tự giữ Min và trừ tiền đã mua khỏi ngân sách VND. Không cần nhập Min/Max mua.','flags':64}}
+    fields = {
+        'cost':[('cost','Giá mua trước đó (VND/USDT)','Ví dụ 25905')],
+        'config':[('slot','Slot 1 hoặc 2','1'),('ad','ID quảng cáo MEXC','a...'),('rank','Bám vị trí đối thủ (1–50)','10'),('nickname','Biệt danh MEXC của bạn','Nhập đúng biệt danh trên bảng giá')],
+        'ad':[('slot','Slot 1 hoặc 2','1'),('ad','ID quảng cáo MEXC','a...'),('nickname','Biệt danh (trống: giữ nguyên)','')],
+        'rank':[('slot','Slot 1 hoặc 2','1'),('rank','Vị trí đối thủ (1–50)','10'),('nickname','Biệt danh (trống: giữ nguyên)','')],
+        'limits':[('slot','Slot 1 hoặc 2','1'),('minimum','Min VND/giao dịch (Max tự tính)','20000000')],
+        'price':[('slot','Slot 1 hoặc 2','1'),('price','Giá VND/USDT','26050'),('quantity','Số lượng USDT (trống: giữ nguyên)',''),
+            ('minimum','Tối thiểu VND/giao dịch (trống: giữ nguyên)',''),('maximum','Tối đa VND/giao dịch (trống: giữ nguyên)','')],
+    }[action]
+    labels={'cost':'Giá vốn riêng MEXC','config':'Cấu hình MEXC','ad':'Chọn quảng cáo MEXC','rank':'Vị trí MEXC','limits':'Min bán MEXC','price':'Đặt giá MEXC'}
+    return {'type':9,'data':{'custom_id':f'mprice:form:{action}:{side}','title':labels[action]+('' if action in {'cost','limits'} else ' '+side),
         'components':[{'type':1,'components':[{'type':4,'custom_id':key,'label':label,'style':1,
-            'required':key not in {'quantity','minimum','maximum'},'max_length':100,'placeholder':placeholder}]} for key,label,placeholder in fields]}}
+            'required':key not in {'quantity','minimum','maximum'} and not (key=='nickname' and action in {'ad','rank'}) or action=='limits',
+            'max_length':100,'placeholder':placeholder}]} for key,label,placeholder in fields]}}
 
 
 async def execute_panel(payload, db, owner):
-    if settings.database_schema == 'kayhap': raise ValueError('Bám giá MEXC chỉ được cấu hình cho tài khoản gốc.')
+    if not settings.discord_pricing_commands_enabled and settings.database_schema == 'kayhap': raise ValueError('Điều khiển giá chưa được bật cho tài khoản này.')
     parts = str(payload.get('data',{}).get('custom_id','')).split(':')
     if not parts or parts[0] != 'mprice': raise ValueError('Nút MEXC không hợp lệ.')
     action = parts[1] if len(parts)>1 else ''
@@ -64,6 +77,33 @@ async def execute_panel(payload, db, owner):
             config=cost_settings(db);config.cost=Decimal(raw);config.revision=uuid.uuid4().hex
             db.add(OKXAuditLog(action='MEXC_PRICE_COST',actor=actor,detail='Giá vốn MEXC='+raw));db.commit()
             return {'content':f'Đã lưu giá vốn MEXC {int(raw):,}đ · bán tối thiểu {int(raw)+10:,}đ/USDT. Không thay giá vốn OKX.','components':[]}
+        if action in {'rank','ad','limits'}:
+            if values.get('slot') not in {'1','2'}: raise ValueError('Chọn slot 1 hoặc 2.')
+            key=side+':'+values['slot']
+            slot=db.get(MexcPriceSlot,key,populate_existing=True)
+            if action=='limits':
+                if side=='BUY':return {'content':'BUY tự giữ ngân sách VND còn lại, không cần nhập Min/Max.','components':[]}
+                if slot is None or not slot.ad:raise ValueError('Chọn quảng cáo MEXC cho slot trước.')
+                lower=input_number(values.get('minimum',''),money=True)
+                if lower<=0:raise ValueError('Min phải là VND nguyên dương.')
+                db.merge(MexcAutoLimits(slot=key,ad=slot.ad,minimum=lower))
+                slot.enabled=False;slot.revision=uuid.uuid4().hex
+                db.add(OKXAuditLog(action='MEXC_PRICE_LIMITS',actor=actor,detail=f'{key} Min={lower}; Max=remaining stock * price - 1; Auto=False'))
+                db.commit()
+                return {'content':f'Đã lưu MEXC {key}: Min {lower:,.0f} VND. Max tự tính theo USDT khả dụng × giá mới − 1 VND, trong giới hạn sàn. Auto slot đã tắt; yêu cầu cũ nếu còn khóa vẫn cần khôi phục.','components':[]}
+            if action=='rank':
+                if slot is None or not slot.ad:raise ValueError('Chọn quảng cáo MEXC cho slot trước.')
+                if not re.fullmatch(r'[0-9]{1,2}',values.get('rank','')) or not 1<=int(values['rank'])<=50:raise ValueError('Vị trí phải từ 1 đến 50.')
+                nickname=values.get('nickname') or slot.nickname or settings.mexc_merchant_nicknames.split(',')[0].strip()
+                if not nickname:raise ValueError('Nhập biệt danh MEXC để loại quảng cáo của chính bạn.')
+                slot.rank=int(values['rank']);slot.nickname=nickname;slot.revision=uuid.uuid4().hex
+                db.add(OKXAuditLog(action='MEXC_PRICE_RANK',actor=actor,detail=f'{key} rank={slot.rank}'))
+                db.commit()
+                return {'content':f'Đã lưu vị trí MEXC {key}: {slot.rank}. Giữ nguyên công tắc Auto; yêu cầu cũ chưa rõ kết quả không được gửi lại.','components':[]}
+            # Reuse the existing owned-ad validation for ID changes.
+            action='config'
+            values['rank']=str(slot.rank if slot else 10)
+            values['nickname']=values.get('nickname') or (slot.nickname if slot else '') or settings.mexc_merchant_nicknames.split(',')[0].strip()
         if action!='config' or values.get('slot') not in {'1','2'}: raise ValueError('Chọn slot 1 hoặc 2.')
         if not re.fullmatch(r'[0-9]{1,2}',values.get('rank','')) or not 1<=int(values['rank'])<=50: raise ValueError('Vị trí phải từ 1 đến 50.')
         nick=values.get('nickname','')
@@ -115,14 +155,23 @@ async def execute_panel(payload, db, owner):
         slot.enabled=enabled;slot.revision=uuid.uuid4().hex
         db.add(OKXAuditLog(action='MEXC_PRICE_AUTO',actor=actor,detail=f'{slot.key} Auto={enabled}'));db.commit()
         return {'content':f'MEXC {slot.key}: Auto '+('bật' if enabled else 'tắt')+'.','components':[]}
-    if action=='pause':
-        for slot in db.scalars(select(MexcPriceSlot)).all():slot.enabled=False;slot.revision=uuid.uuid4().hex
-        db.add(OKXAuditLog(action='MEXC_PRICE_PAUSE',actor=actor,detail='Auto=False tất cả slot'));db.commit()
-        return {'content':'Đã tắt Auto MEXC. Yêu cầu đã gửi vẫn có thể hoàn tất. Không thay đổi OKX.','components':[]}
+    if action in {'pause','resume'}:
+        enabled=action=='resume'
+        if enabled and (not settings.mexc_ad_pricing_enabled or not valid_webhook(settings.discord_webhook_mexc_pricing)):
+            raise ValueError('Chưa bật tính năng hoặc webhook MEXC trên Render; chưa tiếp tục bám giá.')
+        db.merge(MexcPricingSwitch(id=1,enabled=enabled))
+        db.add(OKXAuditLog(action='MEXC_PRICING_SWITCH',actor=actor,detail=str(enabled)));db.commit()
+        return {'content':('Đã tiếp tục bám giá MEXC theo các slot đang Auto.' if enabled else 'Đã tạm dừng bám giá MEXC; giữ cấu hình Auto từng slot để tiếp tục sau. Yêu cầu đã gửi vẫn có thể hoàn tất.')+' Không thay đổi OKX hoặc Auto mở khóa.','components':[]}
+    if action=='recover' and len(parts)==3 and parts[2] in {'BUY','SELL'}:
+        return {'content':'Chọn slot MEXC cần kiểm tra/khôi phục. Chỉ đọc API, không gửi lại yêu cầu; Auto slot sẽ tắt.','components':[{'type':1,'components':[
+            button('Slot '+str(i),f'checkslot:{parts[2]}:{i}') for i in (1,2)]}]}
+    if action=='checkslot' and len(parts)==4:
+        return {'content':await recover(db,owner,parts[2],parts[3]),'components':[]}
     if action=='status':
         config=cost_settings(db)
         text='MEXC · '+('Sẵn sàng' if settings.mexc_ad_pricing_enabled else 'Render đang tắt')+'\n'
         if not settings.discord_webhook_mexc_pricing:text+='Auto còn chờ cấu hình kênh cảnh báo. Đặt giá thủ công vẫn dùng được.\n'
+        text+=('Bám giá chung: BẬT\n' if active(db) else 'Bám giá chung: TẠM DỪNG\n')
         text+='Giá vốn riêng: '+(f'{config.cost:,.0f}đ · sàn bán {config.cost+10:,.0f}đ' if config.cost else 'chưa nhập')
         for slot in db.scalars(select(MexcPriceSlot)).all():
             text+=f'\n{slot.key}: {slot.ad} · vị trí {slot.rank} · Auto {slot.enabled} · {slot.state}'
@@ -132,5 +181,5 @@ async def execute_panel(payload, db, owner):
         async with MexcP2PClient() as api: rows=await my_ads(api)
         rows=[r for r in rows if r.get('side')==parts[2] and r.get('coinName')=='USDT']
         return {'content':'Quảng cáo MEXC '+parts[2]+' (tối đa 10 gần nhất):\n'+('\n'.join(
-            f"{r.get('advNo')} · {r.get('price')}đ · {r.get('advStatus')} · còn {r.get('availableQuantity')} USDT" for r in rows) or 'Không có.'),'components':[]}
+            f"{r.get('advNo')} · {r.get('price')}đ · {r.get('advStatus')} · còn {r.get('availableQuantity')} USDT · Min {r.get('minSingleTransAmount')} / Max {r.get('maxSingleTransAmount')} VND" for r in rows) or 'Không có.'),'components':[]}
     raise ValueError('Nút MEXC không hợp lệ.')

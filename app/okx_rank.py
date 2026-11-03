@@ -72,7 +72,7 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
                 f"Giá bán vị trí {target_rank} là {price:,.0f}đ, thấp hơn giá vốn {cost:,.0f}đ +10đ = {floor:,.0f}đ. "
                 "Đề xuất tạm ẩn quảng cáo và báo kênh cảnh báo giá; chưa gửi yêu cầu ẩn thật."}
     return {**base, "action": "UPDATE_PRICE", "reason":
-        f"Đề xuất bám cùng giá đối thủ vị trí {target_rank} sau khi loại VNTrader; không cộng/trừ thêm 1đ. "
+        f"Đề xuất bám cùng giá đối thủ vị trí {target_rank} sau khi loại quảng cáo của mình; không cộng/trừ thêm 1đ. "
         "Chênh giá 10đ là trước phí nếu có. Chưa gửi yêu cầu sửa thật."}
 
 
@@ -82,7 +82,9 @@ async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK)
         raise ValueError("Chiều quảng cáo phải là BUY hoặc SELL")
     response = await client.get("https://autop2p.biz/", params={"api": "panel", "panel": "okx_" + side.lower()})
     response.raise_for_status()
-    return plan_rank_price(response.json(), side, cost_basis, target_rank=target_rank)
+    from .config import settings
+    own_nickname = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
+    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank)
 
 
 async def send_preview_alert(plan):
@@ -92,7 +94,7 @@ async def send_preview_alert(plan):
     from datetime import datetime, timezone
     if not settings.discord_webhook_pricing_alerts or plan.get("action") != "HIDE_AD":
         return False
-    message = ("[MÔ PHỎNG CẢNH BÁO GIÁ — chưa ẩn quảng cáo thật]\nOKX · VNTrader\n"
+    message = ("[MÔ PHỎNG CẢNH BÁO GIÁ — chưa ẩn quảng cáo thật]\nOKX\n"
         f"Thời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\n"
         f"Giá vốn: {plan['cost_basis']}đ/USDT\n"
         f"Giá bán vị trí {plan['target_rank']}: {plan['proposed_price']}đ/USDT\n"

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     mexc_merchant_nicknames: str = ""
     mexc_ad_pricing_enabled: bool = False
     mexc_ad_pricing_seconds: int = 5
+    mexc_ad_min_update_seconds: int = 30
     okx_ad_pricing_enabled: bool = False
     okx_ad_pricing_seconds: int = 5
     # Automatic price writes share this interval; the worker enforces >=30s.
