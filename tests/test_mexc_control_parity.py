@@ -205,3 +205,35 @@ def test_legacy_recovery_only_accepts_explicit_signature_rejection(db,setup,monk
     assert slot.state==('IDLE' if accepted else 'UNKNOWN') and not slot.enabled
     if accepted:assert '700002' in result
     worker.write_price.assert_not_awaited();worker.write_visibility.assert_not_awaited()
+
+
+def test_business_rejection_code_is_preserved_in_alert_and_pending_intent(db,setup,monkeypatch):
+    from app.mexc import MexcAPIError
+    slot,_=setup
+    monkeypatch.setattr(worker,'write_price',AsyncMock(side_effect=MexcAPIError(
+        'MEXC HTTP 200 · 700007: rejected',http_status=200,api_code=700007)))
+    asyncio.run(worker.process_pricing(db,None,None))
+    assert slot.state=='UNKNOWN' and '700007' in slot.reason
+    saved=json.loads(db.get(MexcPendingPrice,slot.key).expected_json)
+    assert saved['api_http_status']==200 and saved['api_code']=='700007'
+    asyncio.run(worker.process_pricing(db,None,None));worker.write_price.assert_awaited_once()
+
+
+def test_resume_does_not_claim_actual_repricing_without_ready_slots(db,monkeypatch):
+    monkeypatch.setattr(panel,'valid_webhook',lambda value:True)
+    result=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:resume'}},db,'owner'))
+    assert 'Chưa có slot Auto sẵn sàng' in result['content']
+    assert 'chưa xác nhận đổi giá trên sàn' in result['content']
+
+
+def test_status_explicitly_reports_unknown_as_stopped(db,setup):
+    slot,_=setup;slot.state='UNKNOWN';db.commit()
+    result=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:status'}},db,'owner'))
+    assert 'ĐANG DỪNG' in result['content'] and 'Sẵn sàng' not in result['content']
+
+
+def test_status_reports_requested_price_and_missing_legacy_api_code(db,setup):
+    slot,row=setup;slot.state='UNKNOWN';slot.attempt_id='old';slot.wanted_price=Decimal('26195');slot.last_action=1
+    record_pending(db,slot,row,terms.update_body(row,slot.wanted_price));db.commit()
+    result=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:status'}},db,'owner'))
+    assert '26,195đ' in result['content'] and 'chưa lưu mã API gốc' in result['content']

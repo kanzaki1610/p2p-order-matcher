@@ -5,6 +5,7 @@ from decimal import Decimal
 from urllib.parse import parse_qs
 
 import httpx
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,27 @@ from app.database import Base
 from app.mexc import MexcAPIError, MexcP2PClient
 from app.mexc_sync import _get_order_detail_with_retry, sync_mexc_orders
 from app.models import P2POrder
+
+
+@pytest.mark.parametrize('status,code',[(200,700007),(200,99999),(200,200),(400,700002),(403,700007)])
+def test_rejected_writes_keep_safe_status_and_code_without_echoing_response(status,code):
+    calls=[]
+    async def handler(request):
+        calls.append(request)
+        return httpx.Response(status,json={'code':code,'msg':'SECRET signed URL and bank data','data':None})
+    client=MexcP2PClient(api_key='key',api_secret='secret',transport=httpx.MockTransport(handler))
+    with pytest.raises(MexcAPIError) as exc:
+        asyncio.run(client._request_once('/api/v3/fiat/merchant/ads/save_or_update',params={'advNo':'a123'},method='POST'))
+    assert exc.value.http_status==status and exc.value.api_code==str(code)
+    assert str(code) in str(exc.value) and 'SECRET' not in str(exc.value)
+    assert len(calls)==1
+
+
+def test_malformed_acknowledgement_does_not_echo_arbitrary_code_or_count_as_success():
+    async def handler(request):return httpx.Response(200,json={'code':'SECRET_URL','msg':'SECRET_URL'})
+    client=MexcP2PClient(api_key='key',api_secret='secret',transport=httpx.MockTransport(handler))
+    with pytest.raises(MexcAPIError) as exc:asyncio.run(client._request_once('/test',method='POST'))
+    assert exc.value.api_code is None and 'SECRET_URL' not in str(exc.value)
 
 
 def test_signed_unicode_ad_terms_use_rfc3986_bytes_for_get_and_post():
