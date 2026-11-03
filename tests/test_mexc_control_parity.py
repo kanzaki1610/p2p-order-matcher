@@ -249,7 +249,7 @@ def legacy_pending(db,setup):
     return slot,pending,current
 
 
-@pytest.mark.parametrize('guard',['recent','no_later_update','buy','relative_quantity','new_diagnostics',
+@pytest.mark.parametrize('guard',['recent','no_later_update','buy','relative_quantity','absolute_quantity','new_diagnostics',
     'new_unknown_transport','price_changed','quantity_changed','limits_changed','payment_changed',
     'terms_changed','frozen','available_increased','different_error'])
 def test_legacy_source_reconciliation_does_not_relax_other_unknown_fences(db,setup,guard):
@@ -259,6 +259,7 @@ def test_legacy_source_reconciliation_does_not_relax_other_unknown_fences(db,set
     elif guard=='no_later_update':current['updateTime']=1
     elif guard=='buy':slot.key='BUY:1'
     elif guard=='relative_quantity':pending.body_json=json.dumps({**json.loads(pending.body_json),'supplyQuantity':'1'})
+    elif guard=='absolute_quantity':pending.body_json=json.dumps({**json.loads(pending.body_json),'initQuantity':'101'})
     elif guard in {'new_diagnostics','new_unknown_transport'}:
         pending.expected_json=json.dumps({**json.loads(pending.expected_json),'api_http_status':200 if guard=='new_diagnostics' else None})
     elif guard=='price_changed':current['price']='26075'
