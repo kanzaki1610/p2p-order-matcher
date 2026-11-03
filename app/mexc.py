@@ -5,7 +5,7 @@ import hmac
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 import httpx
 
@@ -101,7 +101,10 @@ class MexcP2PClient:
                 ("timestamp", str(int(time.time() * 1000))),
             ]
         )
-        query = urlencode(signed_params)
+        # MEXC verifies RFC3986 query encoding. Form-style '+' for spaces is
+        # rejected (700002), including spaces in advertisement terms/replies.
+        # Sign exactly the percent-encoded bytes sent on the wire.
+        query = urlencode(signed_params, quote_via=quote)
         signature = self._signature(query)
         request_path = f"{path}?{query}&signature={signature}"
         try:
