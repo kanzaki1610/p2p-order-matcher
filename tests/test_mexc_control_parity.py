@@ -237,3 +237,53 @@ def test_status_reports_requested_price_and_missing_legacy_api_code(db,setup):
     record_pending(db,slot,row,terms.update_body(row,slot.wanted_price));db.commit()
     result=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:status'}},db,'owner'))
     assert '26,195đ' in result['content'] and 'chưa lưu mã API gốc' in result['content']
+
+
+def legacy_pending(db,setup):
+    slot,row=setup;slot.state='UNKNOWN';slot.action='PRICE';slot.attempt_id='legacy';slot.last_action=Decimal(str(time.time()-1000))
+    slot.reason=('Chưa rõ kết quả sửa/ẩn quảng cáo. Không xác minh được phản hồi MEXC '
+                 '(MexcAPIError). Không tự gửi lại; kiểm tra MEXC.')
+    pending=record_pending(db,slot,row,{**terms.update_body(row,Decimal('26070')),'advStatus':row['advStatus']})
+    db.commit()
+    current=dict(row,availableQuantity='80',updateTime=int(time.time()*1000)-1000)
+    return slot,pending,current
+
+
+@pytest.mark.parametrize('guard',['recent','no_later_update','buy','relative_quantity','new_diagnostics',
+    'new_unknown_transport','price_changed','quantity_changed','limits_changed','payment_changed',
+    'terms_changed','frozen','available_increased','different_error'])
+def test_legacy_source_reconciliation_does_not_relax_other_unknown_fences(db,setup,guard):
+    slot,pending,current=legacy_pending(db,setup)
+    assert recovery.legacy_source_reconcilable(slot,pending,current)
+    if guard=='recent':slot.last_action=Decimal(str(time.time()-100))
+    elif guard=='no_later_update':current['updateTime']=1
+    elif guard=='buy':slot.key='BUY:1'
+    elif guard=='relative_quantity':pending.body_json=json.dumps({**json.loads(pending.body_json),'supplyQuantity':'1'})
+    elif guard in {'new_diagnostics','new_unknown_transport'}:
+        pending.expected_json=json.dumps({**json.loads(pending.expected_json),'api_http_status':200 if guard=='new_diagnostics' else None})
+    elif guard=='price_changed':current['price']='26075'
+    elif guard=='quantity_changed':current['quantity']='101'
+    elif guard=='limits_changed':current['maxSingleTransAmount']='1999999'
+    elif guard=='payment_changed':current['paymentInfo']=[{'id':888,'payMethod':1}]
+    elif guard=='terms_changed':current['tradeTerms']='changed'
+    elif guard=='frozen':current['frozenQuantity']='1'
+    elif guard=='available_increased':current['availableQuantity']='101'
+    elif guard=='different_error':slot.reason='Timeout'
+    assert not recovery.legacy_source_reconcilable(slot,pending,current)
+
+
+@pytest.mark.parametrize('stock_changes_during_check',[False,True])
+def test_operator_legacy_source_reconciliation_is_get_only_and_leaves_auto_off(db,setup,monkeypatch,stock_changes_during_check):
+    slot,pending,current=legacy_pending(db,setup)
+    class API:
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+    monkeypatch.setattr(recovery,'MexcP2PClient',API)
+    monkeypatch.setattr(recovery.asyncio,'sleep',AsyncMock())
+    second=dict(current,availableQuantity='79') if stock_changes_during_check else dict(current)
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(side_effect=[current,second]))
+    text=asyncio.run(recovery.recover(db,'owner','SELL',1))
+    assert slot.state==('UNKNOWN' if stock_changes_during_check else 'IDLE') and not slot.enabled
+    assert recovery.read_ad.await_count==2
+    if not stock_changes_during_check:assert 'chưa xác nhận yêu cầu cũ thành công' in text
+    worker.write_price.assert_not_awaited();worker.write_visibility.assert_not_awaited()
