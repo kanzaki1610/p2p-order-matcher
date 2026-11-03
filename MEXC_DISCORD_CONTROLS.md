@@ -26,6 +26,9 @@ Mỗi tài khoản có bảng riêng trong `#bam-gia-mexc`. Cảnh báo gửi v�
   120 giây và so với hồ sơ yêu cầu. Chỉ gỡ khóa khi xác minh đủ giá, tổng
   số lượng, Min/Max và trạng thái hiển thị. Không gửi lại POST. Yêu cầu cũ
   thiếu hồ sơ xác minh vẫn giữ khóa; không có nút bỏ qua bảo vệ.
+  Ngoại lệ hẹp: yêu cầu PRICE cũ bị MEXC từ chối chữ ký rõ ràng bằng HTTP 400,
+  mã 700002, có thể đối chiếu lại quảng cáo đúng chủ rồi gỡ khóa với Auto tắt.
+  Không áp dụng cho timeout, HTTP 429 hoặc lỗi không xác định.
 
 ## Ngân sách mua
 
@@ -78,3 +81,7 @@ Render để dùng các nút mới.
 MEXC cập nhật cùng ID quảng cáo bằng query parameters; `supplyQuantity` và
 `reduceQuantity` là lượng cộng/giảm. Giữ phương thức thanh toán và điều kiện
 quảng cáo gốc; không sao chép payload OKX sang MEXC.
+
+Chữ ký dùng đúng chuỗi query mã hóa RFC3986 gửi đi, khoảng trắng là `%20`,
+không dùng `+`. Đã xác minh bằng GET trên môi trường thật với ký tự Unicode,
+khoảng trắng, dấu phẩy, `&`, `+` và `%`; không cần gửi POST để kiểm tra chữ ký.
