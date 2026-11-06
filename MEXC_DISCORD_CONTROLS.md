@@ -78,10 +78,11 @@ giao dịch mới được phép; dữ liệu không khớp vẫn giữ khóa, k
 Đây là bản sửa ánh xạ từ biểu mẫu MEXC; cần chủ tự xác nhận lần gửi thật
 và kiểm tra readback trước khi kết luận giải quyết được mã 60048.
 
-### Tự xử lý slot Bán bị khóa sau khi sửa quảng cáo trên MEXC
+### Tự xử lý slot Mua/Bán và kiểm tra ngân sách
 
 Bấm **Kiểm tra/khôi phục Bán**, chọn slot. Nếu dữ liệu không còn khớp yêu
-cầu cũ, bấm **Nhận cấu hình hiện tại** trong phản hồi hoặc trên bảng nút.
+cầu cũ, bấm **Nhận cấu hình hiện tại** trong phản hồi hoặc chọn
+**Nhận cấu hình Mua** / **Nhận cấu hình Bán** trên bảng nút.
 Bot đọc quảng cáo hai lần, hiện giá, tổng/khả dụng USDT, Min/Max và trạng thái.
 Chủ tài khoản bấm **Xác nhận nhận cấu hình** trong 5 phút để dùng dữ liệu
 đang có trên MEXC làm mốc hiện tại. Nếu dữ liệu đã đổi, phải xem trước lại.
@@ -91,11 +92,23 @@ hồ sơ cũ và cấu hình vừa nhận vào nhật ký của đúng tài kho�
 quả cũ vẫn chưa xác nhận, gỡ khóa và giữ Auto TẮT. Quảng cáo đóng vẫn đóng;
 không tự mở lại. Sau đó kiểm tra giá vốn, vị trí, Min rồi tự bật Auto Bán.
 
-Chỉ áp dụng yêu cầu PRICE của SELL đã bị khóa ít nhất 10 phút, có đủ hồ sơ,
-không cộng/trừ hoặc thay số lượng tổng trong yêu cầu cũ, không đổi hiển thị
-và không có USDT đang giữ. BUY/ngân sách mua, yêu cầu mới đang gửi, đổi số
-lượng/ẩn hiện hoặc thiếu hồ sơ vẫn giữ khóa. Xác nhận ràng buộc operator,
-slot, revision và toàn bộ yêu cầu cũ; chỉ dùng một lần. Có nút Hủy.
+Yêu cầu PRICE bị khóa phải đủ 10 phút và có hồ sơ đầy đủ. Bán không nhận
+lại yêu cầu thay số lượng hoặc đổi hiển thị. Mua cho phép hồ sơ PRICE có
+cộng/trừ lượng đúng phép tính gốc, nhưng phải có sổ ngân sách cùng slot,
+xác minh lại lịch sử, không có lệnh đang chờ hay USDT đang giữ. Yêu cầu
+MANUAL/MANUAL_REBASE, thay hiển thị hoặc thiếu hồ sơ vẫn giữ khóa.
+
+Mua đang IDLE nhưng bị chặn ở bước đọc lịch sử cũng có thể dùng nút Mua:
+bot xác minh ngân sách và hiện số VND còn lại để chủ xác nhận. Giữ nguyên
+tổng ngân sách và mọi khoản đã chi; tuyệt đối không lấy Max mới trên sàn
+để đặt lại ngân sách. Xác nhận ràng buộc operator, slot, revision, toàn bộ
+yêu cầu cũ và sổ ngân sách/lệnh; thay đổi tiền đã chi hay cấu hình giữa hai
+bước sẽ yêu cầu xem trước lại. Có nút Hủy và xác nhận chỉ dùng một lần.
+
+Khi danh sách lịch sử bỏ sót ID đã ghi sổ, bot dùng GET chi tiết từng ID
+để xác minh đúng quảng cáo, số tiền, USDT, tiền tệ và trạng thái. Không xóa
+khoản chi cũ, không trừ lại hai lần, không bỏ qua ID không đọc được. Nếu
+lệnh đã hoàn tất/hủy thay đổi trạng thái hoặc số tiền thì vẫn chặn.
 
 Áp dụng cùng mã cho kanzaki và kayhap với bảng xác nhận và nhật ký trong
 schema riêng; không thêm biến môi trường. Không liên quan Auto mở khóa USDT.
