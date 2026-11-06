@@ -2,6 +2,7 @@
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 from .mexc_ads import update_body
+from .config import settings
 from .mexc_buy_budget import remaining
 from .mexc_price_state import MexcAutoLimits, amount
 
@@ -33,6 +34,20 @@ async def prepare(db, api, slot, row, price):
     lower = amount(row.get('minSingleTransAmount'))
     left = None
     expected_extra = {}
+    if slot.key.startswith('BUY:') and settings.mexc_buy_price_only:
+        # Preserve the same cumulative baseline used by authenticated BUY
+        # edits, without relative supply/reduce operations or budget rebasing.
+        maximum = amount(row.get('maxSingleTransAmount'))
+        if amount(row.get('frozenQuantity')) > 0:
+            raise ValueError('Có lệnh mua MEXC đang giữ USDT; chờ xử lý xong trước khi đổi giá.')
+        if (lower <= 0 or lower != lower.to_integral_value()
+                or maximum != maximum.to_integral_value() or maximum < lower
+                or lower < limits['minSingleTransAmount'] or maximum > limits['maxSingleTransAmount']
+                or not limits['minQuantity'] <= total <= limits['maxQuantity']
+                or maximum > available * price):
+            raise ValueError('Min/Max hoặc số USDT hiện tại không hợp lệ với giá mới. Chế độ chỉ đổi giá không tự sửa hạn mức; hãy chỉnh trên MEXC.')
+        return {'body': body, 'exhausted': False, 'remaining_vnd': None,
+                'expected_extra': {'stock_ceiling': str(available)}}
     if slot.key.startswith('BUY:'):
         left = await remaining(db, api, slot, row)
         # A cent-USDT increment is deliberately conservative for BigDecimal input.

@@ -34,7 +34,8 @@ def panel():
     rows.append({'type':1,'components':[button('Nhập giá vốn MEXC','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
     rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL'),
         button('Nhận cấu hình Mua','adopt:BUY'),button('Nhận cấu hình Bán','adopt:SELL')]})
-    return {'content':'Điều khiển giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. BUY giữ ngân sách VND còn lại; SELL tự tính Max theo USDT khả dụng và giá mới. Chỉ operator của tài khoản này được dùng. Không tự mở quảng cáo bạn tắt thủ công.',
+    buy_mode = 'BUY chỉ đổi giá, giữ Min/Max và USDT' if settings.mexc_buy_price_only else 'BUY giữ ngân sách VND còn lại'
+    return {'content':f'Điều khiển giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. {buy_mode}; SELL tự tính Max theo USDT khả dụng và giá mới. Chỉ operator của tài khoản này được dùng. Không tự mở quảng cáo bạn tắt thủ công.',
         'components':rows,'allowed_mentions':{'parse':[]}}
 
 
@@ -42,7 +43,7 @@ def modal(action, side):
     if side not in {'BUY','SELL'} or action not in {'config','cost','price','rank','ad','limits'}:
         raise ValueError('Nút MEXC không hợp lệ.')
     if action == 'limits' and side == 'BUY':
-        return {'type':4,'data':{'content':'Auto mua tự giữ Min và trừ tiền đã mua khỏi ngân sách VND. Không cần nhập Min/Max mua.','flags':64}}
+        return {'type':4,'data':{'content':('Auto mua chỉ đổi giá; giữ Min/Max và USDT trên sàn.' if settings.mexc_buy_price_only else 'Auto mua tự giữ Min và trừ tiền đã mua khỏi ngân sách VND. Không cần nhập Min/Max mua.'),'flags':64}}
     fields = {
         'cost':[('cost','Giá mua trước đó (VND/USDT)','Ví dụ 25905')],
         'config':[('slot','Slot 1 hoặc 2','1'),('ad','ID quảng cáo MEXC','a...'),('rank','Bám vị trí đối thủ (1–50)','10'),('nickname','Biệt danh MEXC của bạn','Nhập đúng biệt danh trên bảng giá')],
@@ -187,7 +188,7 @@ async def execute_panel(payload, db, owner):
             'components':[{'type':1,'components':[button('Nhận cấu hình hiện tại',f'adoptpreview:{parts[2]}:{parts[3]}')]}] if fallback else []}
     if action=='adopt' and len(parts)==3 and parts[2] in {'BUY','SELL'}:
         side=parts[2]
-        return {'content':'Chọn slot '+('Mua' if side=='BUY' else 'Bán')+' MEXC để xem cấu hình hiện tại. Auto slot sẽ tắt; chưa gỡ khóa cho đến khi bạn xác nhận.'+(' Mua sẽ xác minh lịch sử và giữ ngân sách VND còn lại.' if side=='BUY' else ''),
+        return {'content':'Chọn slot '+('Mua' if side=='BUY' else 'Bán')+' MEXC để xem cấu hình hiện tại. Auto slot sẽ tắt; chưa gỡ khóa cho đến khi bạn xác nhận.'+((' Mua chỉ đổi giá, giữ Min/Max và USDT.' if settings.mexc_buy_price_only else ' Mua sẽ xác minh lịch sử và giữ ngân sách VND còn lại.') if side=='BUY' else ''),
             'components':[{'type':1,'components':[button('Slot '+str(i),f'adoptpreview:{side}:{i}') for i in (1,2)]}]}
     if action=='adoptpreview' and len(parts) in {3,4}:
         return await adoption_preview(db,owner,parts[-1],parts[2] if len(parts)==4 else 'SELL')

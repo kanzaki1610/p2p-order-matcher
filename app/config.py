@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     okx_merchant_nicknames: str = ""
     mexc_merchant_nicknames: str = ""
     mexc_ad_pricing_enabled: bool = False
+    mexc_buy_price_only: bool = False
     mexc_ad_pricing_seconds: int = 5
     mexc_ad_min_update_seconds: int = 30
     okx_ad_pricing_enabled: bool = False

@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import Boolean, Numeric, String, Text, select
 from sqlalchemy.orm import Mapped, mapped_column
 
+from .config import settings
 from .database import Base
 from .models import OKXAuditLog
 from .mexc import MexcP2PClient
@@ -45,7 +46,9 @@ def record(slot, pending, db=None, *, lock=False):
     result = {'slot': list(slot_snapshot(slot)), 'enabled': slot.enabled,
             'pending': None if pending is None else {k: getattr(pending, k) for k in
                 ('ad', 'attempt', 'cause', 'before_json', 'expected_json', 'body_json')}}
-    if db is not None and slot.key.startswith('BUY:'):result['budget']=budget_record(db,slot,lock=lock)
+    if db is not None and slot.key.startswith('BUY:'):
+        result['buy_price_only']=settings.mexc_buy_price_only
+        if not settings.mexc_buy_price_only:result['budget']=budget_record(db,slot,lock=lock)
     return result
 
 
@@ -95,7 +98,7 @@ async def stable_source(slot, db=None):
         source = source_snapshot(first)
         if Decimal(source['frozen']) != 0:
             raise ValueError('Quảng cáo có lệnh giữ USDT; chờ xử lý xong rồi kiểm tra lại.')
-        if side=='BUY':
+        if side=='BUY' and not settings.mexc_buy_price_only:
             budget_record(db,slot)
             left=await remaining(db,api,slot,first,force=True)
             if left<0:raise ValueError('Ngân sách Mua còn lại âm; cần kiểm tra trước khi nhận cấu hình.')
@@ -138,7 +141,9 @@ async def preview(db, owner, number, side='SELL'):
         '\nBạn xác nhận dùng cấu hình MEXC này làm mốc hiện tại, lưu hồ sơ và gỡ khóa slot nếu có.'
         '\nChỉ đọc API; không gửi lại, không sửa quảng cáo. Auto giữ TẮT.'
         '\nXác nhận hết hạn sau 5 phút; có thay đổi dữ liệu sẽ dừng.')
-    if side=='BUY':
+    if side=='BUY' and settings.mexc_buy_price_only:
+        text+='\nChế độ Mua: chỉ đổi giá, giữ nguyên Min/Max và USDT trên sàn. Không dùng ngân sách VND để tính lại.'
+    elif side=='BUY':
         saved=prior['budget'];spent=sum((Decimal(x[2]) for x in saved['orders'] if x[1]=='DONE'),Decimal(0))
         text+=f'\nNgân sách Mua còn lại: {Decimal(saved["total_vnd"])-spent:,.0f} VND. Giữ sổ tiền đã chi; không đặt lại theo Max trên sàn.'
     if pending is not None:text+='\nKết quả yêu cầu cũ vẫn chưa được xác nhận.'
