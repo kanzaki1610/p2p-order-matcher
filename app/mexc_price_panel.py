@@ -17,6 +17,7 @@ from .mexc_manual_price import preview as manual_preview, confirm as manual_conf
 from .discord_notifications import valid_webhook
 from .mexc_price_state import MexcAutoLimits, MexcPricingSwitch, MexcPendingPrice, active
 from .mexc_price_recovery import recover
+from .mexc_price_adoption import preview as adoption_preview, confirm as adoption_confirm, MexcAdoptionDraft
 
 
 def button(label, action, style=2):
@@ -31,7 +32,8 @@ def panel():
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),
         button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
     rows.append({'type':1,'components':[button('Nhập giá vốn MEXC','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
-    rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL')]})
+    rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL'),
+        button('Nhận cấu hình hiện tại','adopt:SELL')]})
     return {'content':'Điều khiển giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. BUY giữ ngân sách VND còn lại; SELL tự tính Max theo USDT khả dụng và giá mới. Chỉ operator của tài khoản này được dùng. Không tự mở quảng cáo bạn tắt thủ công.',
         'components':rows,'allowed_mentions':{'parse':[]}}
 
@@ -178,7 +180,23 @@ async def execute_panel(payload, db, owner):
         return {'content':'Chọn slot MEXC cần kiểm tra/khôi phục. Chỉ đọc API, không gửi lại yêu cầu; Auto slot sẽ tắt.','components':[{'type':1,'components':[
             button('Slot '+str(i),f'checkslot:{parts[2]}:{i}') for i in (1,2)]}]}
     if action=='checkslot' and len(parts)==4:
-        return {'content':await recover(db,owner,parts[2],parts[3]),'components':[]}
+        message=await recover(db,owner,parts[2],parts[3])
+        slot=db.get(MexcPriceSlot,parts[2]+':'+parts[3],populate_existing=True)
+        fallback=parts[2]=='SELL' and slot is not None and slot.state in {'UNKNOWN','CONFIRMING'}
+        return {'content':message+('\nNếu đã sửa quảng cáo trên sàn: bấm Nhận cấu hình hiện tại để xem và xác nhận dữ liệu mới.' if fallback else ''),
+            'components':[{'type':1,'components':[button('Nhận cấu hình hiện tại','adoptpreview:'+parts[3])]}] if fallback else []}
+    if action=='adopt' and parts==['mprice','adopt','SELL']:
+        return {'content':'Chọn slot Bán MEXC để xem cấu hình hiện tại. Auto slot sẽ tắt; chưa gỡ khóa cho đến khi bạn xác nhận.',
+            'components':[{'type':1,'components':[button('Slot '+str(i),'adoptpreview:'+str(i)) for i in (1,2)]}]}
+    if action=='adoptpreview' and len(parts)==3:
+        return await adoption_preview(db,owner,parts[2])
+    if action=='adoptconfirm' and len(parts)==3:
+        return {'content':await adoption_confirm(db,owner,parts[2]),'components':[]}
+    if action=='adoptcancel' and len(parts)==3:
+        changed=db.execute(update(MexcAdoptionDraft).where(MexcAdoptionDraft.id==parts[2],
+            MexcAdoptionDraft.owner==owner,MexcAdoptionDraft.used.is_(False)).values(used=True))
+        db.commit()
+        return {'content':'Đã hủy; giữ khóa cũ và Auto tắt.' if changed.rowcount else 'Xác nhận đã xử lý hoặc không thuộc tài khoản này.','components':[]}
     if action=='status':
         config=cost_settings(db)
         text='MEXC · '+('Tính năng được bật trên Render' if settings.mexc_ad_pricing_enabled else 'Render đang tắt')+'\n'
