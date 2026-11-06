@@ -129,7 +129,7 @@ def test_shared_cooldown_between_sell_slots(db,setup):
 
 def test_panel_has_full_controls_and_valid_discord_dimensions():
     board=panel.panel();buttons=[b for r in board['components'] for b in r['components']]
-    assert len(board['components'])==5 and len(buttons)==17
+    assert len(board['components'])==5 and len(buttons)==18
     assert all(len(r['components'])<=5 for r in board['components'])
     for action in ('price','rank','ad','auto','list','recover'):
         assert all(any(b['custom_id']=='mprice:'+action+':'+side for b in buttons) for side in ('BUY','SELL'))
