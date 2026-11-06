@@ -65,6 +65,28 @@ số lượng còn mua theo giá mới để đủ ngân sách VND và giữ Min
 
 ## Vận hành và cấu hình
 
+### Tự xử lý slot Bán bị khóa sau khi sửa quảng cáo trên MEXC
+
+Bấm **Kiểm tra/khôi phục Bán**, chọn slot. Nếu dữ liệu không còn khớp yêu
+cầu cũ, bấm **Nhận cấu hình hiện tại** trong phản hồi hoặc trên bảng nút.
+Bot đọc quảng cáo hai lần, hiện giá, tổng/khả dụng USDT, Min/Max và trạng thái.
+Chủ tài khoản bấm **Xác nhận nhận cấu hình** trong 5 phút để dùng dữ liệu
+đang có trên MEXC làm mốc hiện tại. Nếu dữ liệu đã đổi, phải xem trước lại.
+
+Bước này chỉ GET, không gửi lại yêu cầu cũ hoặc sửa quảng cáo. Lưu toàn bộ
+hồ sơ cũ và cấu hình vừa nhận vào nhật ký của đúng tài khoản, đánh dấu kết
+quả cũ vẫn chưa xác nhận, gỡ khóa và giữ Auto TẮT. Quảng cáo đóng vẫn đóng;
+không tự mở lại. Sau đó kiểm tra giá vốn, vị trí, Min rồi tự bật Auto Bán.
+
+Chỉ áp dụng yêu cầu PRICE của SELL đã bị khóa ít nhất 10 phút, có đủ hồ sơ,
+không cộng/trừ hoặc thay số lượng tổng trong yêu cầu cũ, không đổi hiển thị
+và không có USDT đang giữ. BUY/ngân sách mua, yêu cầu mới đang gửi, đổi số
+lượng/ẩn hiện hoặc thiếu hồ sơ vẫn giữ khóa. Xác nhận ràng buộc operator,
+slot, revision và toàn bộ yêu cầu cũ; chỉ dùng một lần. Có nút Hủy.
+
+Áp dụng cùng mã cho kanzaki và kayhap với bảng xác nhận và nhật ký trong
+schema riêng; không thêm biến môi trường. Không liên quan Auto mở khóa USDT.
+
 - `MEXC_AD_PRICING_ENABLED`: cho phép tính năng chỉnh giá, không tự bật Auto slot.
 - `MEXC_AD_PRICING_SECONDS=5`: chu kỳ kiểm tra tối thiểu 5 giây.
 - `MEXC_AD_MIN_UPDATE_SECONDS=30`: tối thiểu 30 giây giữa lần sửa giá, dùng chung
