@@ -32,6 +32,7 @@ async def prepare(db, api, slot, row, price):
         raise ValueError('Số dư khả dụng/đang giữ vượt số lượng quảng cáo; chưa đổi giá MEXC.')
     lower = amount(row.get('minSingleTransAmount'))
     left = None
+    expected_extra = {}
     if slot.key.startswith('BUY:'):
         left = await remaining(db, api, slot, row)
         # A cent-USDT increment is deliberately conservative for BigDecimal input.
@@ -46,6 +47,16 @@ async def prepare(db, api, slot, row, price):
         maximum = min(left, limits['maxSingleTransAmount'],
                       (wanted * price).to_integral_value(rounding=ROUND_DOWN) - 1)
     else:
+        # The edit form's quantity is remaining sellable stock, whereas the
+        # pagination `quantity` includes previously sold/supplied crypto.
+        # Send the remaining stock as initQuantity, with no relative stock
+        # operations, and require the cumulative quantity to remain unchanged
+        # on readback. Never replenish already sold crypto while repricing.
+        if available > limits['maxQuantity']:
+            raise ValueError('USDT còn bán vượt giới hạn số lượng MEXC; cần điều chỉnh trên sàn trước khi bám giá.')
+        body['initQuantity'] = format(available, 'f')
+        expected_extra = {'quantity':str(total), 'quantity_mode':'SELL_AVAILABLE',
+            'stock_ceiling':str(available + amount(row.get('frozenQuantity')))}
         config = db.get(MexcAutoLimits, slot.key)
         if config and config.ad == slot.ad:
             lower = amount(config.minimum)
@@ -54,10 +65,10 @@ async def prepare(db, api, slot, row, price):
         next_total = total
     if lower < limits['minSingleTransAmount'] or lower != lower.to_integral_value():
         raise ValueError('Min giao dịch MEXC phải là VND nguyên và đạt mức tối thiểu của sàn.')
-    exhausted = maximum < lower or next_total < limits['minQuantity'] or lower <= 0
+    exhausted = maximum < lower or (available if slot.key.startswith('SELL:') else next_total) < limits['minQuantity'] or lower <= 0
     if slot.key.startswith('BUY:') and next_total > limits['maxQuantity']:
         raise ValueError('Số lượng mua tính từ ngân sách vượt giới hạn MEXC; cần giảm ngân sách thủ công.')
     if not exhausted:
         body.update(minSingleTransAmount=format(lower, 'f'), maxSingleTransAmount=format(maximum, 'f'),
                     advStatus=row['advStatus'])
-    return {'body': body, 'exhausted': exhausted, 'remaining_vnd': left}
+    return {'body': body, 'exhausted': exhausted, 'remaining_vnd': left, 'expected_extra':expected_extra}

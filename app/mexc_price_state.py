@@ -81,6 +81,8 @@ def expected_for(row, body, *, status=None):
 def matches(row, expected):
     try:
         return (row.get('advStatus') == expected['advStatus']
+                and ('stock_ceiling' not in expected or
+                    amount(row.get('availableQuantity')) + amount(row.get('frozenQuantity')) <= amount(expected['stock_ceiling']))
                 and all(amount(row.get(key)) == amount(expected[key])
                         for key in ('price', 'quantity', 'minSingleTransAmount', 'maxSingleTransAmount')))
     except (ValueError, KeyError, TypeError):

@@ -150,6 +150,7 @@ async def process_pricing(db, api, source):
             action = 'HIDE' if plan['action']=='HIDE_AD' else 'PRICE'
             if action=='HIDE' and row['advStatus']=='CLOSE': continue
             body, cause = {}, 'FLOOR' if action == 'HIDE' else 'PRICE'
+            expected_extra = {}
             if action == 'PRICE':
                 terms = await prepare_auto_terms(db, api, slot, row, proposed)
                 if terms['exhausted']:
@@ -159,8 +160,9 @@ async def process_pricing(db, api, source):
                     action, cause = 'HIDE', 'BUDGET'
                 else:
                     body = terms['body']
+                    expected_extra = terms.get('expected_extra', {})
                     from .mexc_price_state import expected_for
-                    unchanged = matches(row, expected_for(row, body))
+                    unchanged = matches(row, {**expected_for(row, body), **expected_extra})
                     if current == proposed and unchanged:
                         if slot.paused_by_floor and row['advStatus']=='CLOSE': action='SHOW'
                         else: continue
@@ -178,7 +180,8 @@ async def process_pricing(db, api, source):
             if claim.rowcount != 1:
                 db.rollback(); continue
             db.refresh(slot)
-            record_pending(db, slot, row, body, status=wanted_status, cause=cause)
+            record_pending(db, slot, row, body, status=wanted_status, cause=cause,
+                expected_extra=expected_extra if action=='PRICE' else None)
             db.commit()
             db.refresh(slot)
             if cost_settings(db).revision != revision:

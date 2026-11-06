@@ -45,9 +45,14 @@ def eligible(slot, pending):
         body = json.loads(pending.body_json)
         before = json.loads(pending.before_json)
         expected = json.loads(pending.expected_json)
+        initial = Decimal(body['initQuantity'])
+        unchanged_quantity = initial == Decimal(before['body']['initQuantity'])
+        remaining_quantity = (expected.get('quantity_mode') == 'SELL_AVAILABLE'
+            and initial == Decimal(before['available'])
+            and Decimal(expected['stock_ceiling']) == Decimal(before['available']) + Decimal(before['frozen']))
         if (body['advNo'] != slot.ad or body['side'] != 'SELL'
                 or {'supplyQuantity', 'reduceQuantity'} & set(body)
-                or Decimal(body['initQuantity']) != Decimal(before['body']['initQuantity'])
+                or not (unchanged_quantity or remaining_quantity)
                 or Decimal(expected['quantity']) != Decimal(before['body']['initQuantity'])
                 or body['advStatus'] != before['status']):
             raise ValueError()
