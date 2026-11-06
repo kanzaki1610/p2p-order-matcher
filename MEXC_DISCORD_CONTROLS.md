@@ -65,6 +65,19 @@ số lượng còn mua theo giá mới để đủ ngân sách VND và giữ Min
 
 ## Vận hành và cấu hình
 
+Auto Bán gửi `initQuantity` theo USDT còn khả dụng như ô Số lượng trên
+biểu mẫu sửa MEXC, thay vì tổng `quantity` lũy kế sau nhiều lần bán/nạp thêm.
+Max = floor(USDT khả dụng × giá mới) − 1 VND trong hạn mức sàn. Không gửi
+`supplyQuantity`/`reduceQuantity` khi bám giá Bán. Chặn trước khi gửi nếu
+lượng còn bán vượt `maxQuantity`; dưới Min thì dùng luồng hết số dư hiện có.
+
+Hồ sơ kết quả giữ tổng lũy kế gốc và trần số dư khả dụng + đang giữ trước
+yêu cầu. Chỉ xác nhận thành công khi đọc lại đúng giá/Min/Max/hiển thị,
+tổng không đổi và số dư không tăng. Số dư giảm/chuyển sang đang giữ do
+giao dịch mới được phép; dữ liệu không khớp vẫn giữ khóa, không gửi lại.
+Đây là bản sửa ánh xạ từ biểu mẫu MEXC; cần chủ tự xác nhận lần gửi thật
+và kiểm tra readback trước khi kết luận giải quyết được mã 60048.
+
 ### Tự xử lý slot Bán bị khóa sau khi sửa quảng cáo trên MEXC
 
 Bấm **Kiểm tra/khôi phục Bán**, chọn slot. Nếu dữ liệu không còn khớp yêu
