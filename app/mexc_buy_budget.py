@@ -65,7 +65,7 @@ async def read_history(api, row):
     raise ValueError('Chưa đọc hết lịch sử mua MEXC; không đoán số tiền còn lại.')
 
 
-async def remaining(db, api, slot, row):
+async def remaining(db, api, slot, row, *, force=False):
     available, total = amount(row.get('availableQuantity')), amount(row.get('quantity'))
     if amount(row.get('frozenQuantity')) > 0:
         raise ValueError('Có lệnh mua MEXC đang giữ số dư; chờ lệnh hoàn tất hoặc hủy trước khi đổi giá.')
@@ -79,9 +79,25 @@ async def remaining(db, api, slot, row):
         db.flush()
     if budget.slot != slot.key:
         raise ValueError('Quảng cáo đã thuộc ngân sách slot MEXC khác.')
-    if not (budget.last_scan and time.time() - float(budget.last_scan) < 30
+    if force or not (budget.last_scan and time.time() - float(budget.last_scan) < 30
             and budget.last_available == available and budget.last_total == total):
         rows = await read_history(api, row)
+        # Pagination can omit older settled orders. Never erase their spending
+        # or silently trust an incomplete list: resolve each known missing ID
+        # using its authenticated detail endpoint and the same validation below.
+        old_orders = db.scalars(select(MexcBudgetOrder).where(MexcBudgetOrder.ad == slot.ad)).all()
+        returned = {str(item['advOrderNo']) for item in rows}
+        for old in old_orders:
+            if old.order in returned:
+                continue
+            try:
+                detail = await api.get_order_detail(old.order)
+            except Exception:
+                raise ValueError('Lịch sử mua MEXC thiếu lệnh; chưa xác minh được chi tiết lệnh đã ghi sổ, chưa đổi giá.') from None
+            if (not isinstance(detail, dict) or str(detail.get('advOrderNo')) != old.order
+                    or str(detail.get('advNo')) != slot.ad):
+                raise ValueError('Chi tiết lệnh MEXC không khớp ID/quảng cáo đã ghi sổ; chưa đổi giá.')
+            rows.append(detail)
         seen = set()
         for item in rows:
             code, state = str(item['advOrderNo']), item.get('state')

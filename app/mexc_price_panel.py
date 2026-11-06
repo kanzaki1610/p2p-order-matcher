@@ -33,7 +33,7 @@ def panel():
         button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
     rows.append({'type':1,'components':[button('Nhập giá vốn MEXC','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
     rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL'),
-        button('Nhận cấu hình hiện tại','adopt:SELL')]})
+        button('Nhận cấu hình Mua','adopt:BUY'),button('Nhận cấu hình Bán','adopt:SELL')]})
     return {'content':'Điều khiển giá MEXC · USDT/VND\nGiá vốn MEXC riêng; bán tối thiểu giá vốn +10đ. BUY giữ ngân sách VND còn lại; SELL tự tính Max theo USDT khả dụng và giá mới. Chỉ operator của tài khoản này được dùng. Không tự mở quảng cáo bạn tắt thủ công.',
         'components':rows,'allowed_mentions':{'parse':[]}}
 
@@ -182,14 +182,15 @@ async def execute_panel(payload, db, owner):
     if action=='checkslot' and len(parts)==4:
         message=await recover(db,owner,parts[2],parts[3])
         slot=db.get(MexcPriceSlot,parts[2]+':'+parts[3],populate_existing=True)
-        fallback=parts[2]=='SELL' and slot is not None and slot.state in {'UNKNOWN','CONFIRMING'}
+        fallback=slot is not None and (slot.state in {'UNKNOWN','CONFIRMING'} or parts[2]=='BUY')
         return {'content':message+('\nNếu đã sửa quảng cáo trên sàn: bấm Nhận cấu hình hiện tại để xem và xác nhận dữ liệu mới.' if fallback else ''),
-            'components':[{'type':1,'components':[button('Nhận cấu hình hiện tại','adoptpreview:'+parts[3])]}] if fallback else []}
-    if action=='adopt' and parts==['mprice','adopt','SELL']:
-        return {'content':'Chọn slot Bán MEXC để xem cấu hình hiện tại. Auto slot sẽ tắt; chưa gỡ khóa cho đến khi bạn xác nhận.',
-            'components':[{'type':1,'components':[button('Slot '+str(i),'adoptpreview:'+str(i)) for i in (1,2)]}]}
-    if action=='adoptpreview' and len(parts)==3:
-        return await adoption_preview(db,owner,parts[2])
+            'components':[{'type':1,'components':[button('Nhận cấu hình hiện tại',f'adoptpreview:{parts[2]}:{parts[3]}')]}] if fallback else []}
+    if action=='adopt' and len(parts)==3 and parts[2] in {'BUY','SELL'}:
+        side=parts[2]
+        return {'content':'Chọn slot '+('Mua' if side=='BUY' else 'Bán')+' MEXC để xem cấu hình hiện tại. Auto slot sẽ tắt; chưa gỡ khóa cho đến khi bạn xác nhận.'+(' Mua sẽ xác minh lịch sử và giữ ngân sách VND còn lại.' if side=='BUY' else ''),
+            'components':[{'type':1,'components':[button('Slot '+str(i),f'adoptpreview:{side}:{i}') for i in (1,2)]}]}
+    if action=='adoptpreview' and len(parts) in {3,4}:
+        return await adoption_preview(db,owner,parts[-1],parts[2] if len(parts)==4 else 'SELL')
     if action=='adoptconfirm' and len(parts)==3:
         return {'content':await adoption_confirm(db,owner,parts[2]),'components':[]}
     if action=='adoptcancel' and len(parts)==3:
