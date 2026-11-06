@@ -93,7 +93,8 @@ def test_sell_max_uses_remaining_stock_not_initial_total(db,price,maximum):
     row=ad();row.update(quantity='5000',availableQuantity='3000',frozenQuantity='100')
     result=asyncio.run(terms.prepare(db,None,slot,row,Decimal(price)))
     assert result['body']['maxSingleTransAmount']==maximum
-    assert result['body']['initQuantity']=='5000'
+    assert result['body']['initQuantity']=='3000'
+    assert result['expected_extra']['quantity']=='5000'
     assert 'supplyQuantity' not in result['body'] and 'reduceQuantity' not in result['body']
 
 
