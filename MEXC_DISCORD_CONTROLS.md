@@ -147,3 +147,10 @@ quảng cáo gốc; không sao chép payload OKX sang MEXC.
 Chữ ký dùng đúng chuỗi query mã hóa RFC3986 gửi đi, khoảng trắng là `%20`,
 không dùng `+`. Đã xác minh bằng GET trên môi trường thật với ký tự Unicode,
 khoảng trắng, dấu phẩy, `&`, `+` và `%`; không cần gửi POST để kiểm tra chữ ký.
+
+
+### Per-account BUY price-only mode
+
+`MEXC_BUY_PRICE_ONLY=true` makes automatic MEXC BUY repricing preserve current exchange Min, Max and crypto quantity. It sends no supply/reduce operations and does not rebase or consume the saved VND budget. The default remains `false` (remaining-VND-budget mode); leave `KAYHAP_MEXC_BUY_PRICE_ONLY=false` or unset to preserve kayhap behavior. OKX and MEXC SELL are unaffected. Pause BUY slots before changing mode; re-enable only after inspecting the current terms.
+
+If unchanged Max exceeds available USDT value at the proposed price, or the current terms violate exchange limits, the worker blocks with a specific explanation instead of silently changing Min/Max, quantity or visibility. Pending/frozen orders and unknown writes remain blocked. BUY adoption shows the selected mode and binds confirmation to it.
