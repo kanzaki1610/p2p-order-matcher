@@ -253,3 +253,42 @@ def test_closed_ad_confirmation_explains_exchange_step_without_enable_button(db,
     assert 'mở quảng cáo trên MEXC trước' in response['content']
     assert not any('setauto' in b['custom_id'] for r in response['components'] for b in r['components'])
     assert not slot.enabled
+
+
+@pytest.fixture
+def legacy_show(db,scenario):
+    slot,row,read=scenario
+    before=dict(row,advStatus='CLOSE',price='25969',quantity='45155.011',availableQuantity='6936.4101',minSingleTransAmount='50000000',maxSingleTransAmount='180131632')
+    slot.state='CONFIRMING';slot.action='SHOW';slot.wanted_price=Decimal('25969');slot.wanted_status='OPEN'
+    body=adoption.source_snapshot(before)['body'];body.update(initQuantity='6936.4101',advStatus='CLOSE')
+    record_pending(db,slot,before,body,status='OPEN',cause='PRICE');db.commit()
+    return slot,row,read
+
+
+def test_real_legacy_show_with_unsent_sell_quantity_body_can_be_adopted(db,legacy_show):
+    slot,row,read=legacy_show
+    _,nonce=preview(db)
+    asyncio.run(adoption.confirm(db,'owner',nonce))
+    assert slot.state=='IDLE' and not slot.enabled
+    assert db.get(MexcPendingPrice,slot.key) is None
+    detail=json.loads(db.scalar(select(OKXAuditLog).where(OKXAuditLog.action=='MEXC_SLOT_ADOPTED')).detail)
+    assert detail['previous']['pending']['body_json']
+    assert not detail['exchange_write'] and read.await_count==4
+
+
+@pytest.mark.parametrize('change',['relative','stock','price','limits','bank','side','frozen','status'])
+def test_legacy_show_requires_exact_known_unused_body_shape(db,legacy_show,change):
+    slot,row,_=legacy_show
+    pending=db.get(MexcPendingPrice,slot.key)
+    body=json.loads(pending.body_json);before=json.loads(pending.before_json)
+    if change=='relative':body['supplyQuantity']='1'
+    if change=='stock':body['initQuantity']='999'
+    if change=='price':body['price']='25000'
+    if change=='limits':body['maxSingleTransAmount']='1'
+    if change=='bank':body['payMethod']='999'
+    if change=='side':body['side']='BUY'
+    if change=='frozen':before['frozen']='1'
+    if change=='status':body['advStatus']='OPEN'
+    pending.body_json=json.dumps(body);pending.before_json=json.dumps(before);db.commit()
+    with pytest.raises(ValueError):preview(db)
+    assert slot.state=='CONFIRMING' and db.get(MexcPendingPrice,slot.key) is not None

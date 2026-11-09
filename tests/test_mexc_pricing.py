@@ -268,3 +268,23 @@ def test_changed_nickname_before_mexc_submit_drops_plan(db,setup,monkeypatch):
     monkeypatch.setattr(worker,'rank_plan',planner)
     run(db)
     worker.write_price.assert_not_awaited()
+
+
+def test_show_records_visibility_only_with_cumulative_sell_quantity(db,setup,monkeypatch):
+    slot,current=setup
+    current.update(advStatus='CLOSE',price='26070',quantity='100',availableQuantity='20',maxSingleTransAmount='521399')
+    slot.paused_by_floor=True;db.commit()
+    worker.rank_plan.return_value={'action':'UPDATE_PRICE','proposed_price':'26070'}
+    record=worker.record_pending
+    seen=[]
+    def capture(*args,**kw):
+        seen.append(args[3])
+        return record(*args,**kw)
+    monkeypatch.setattr(worker,'record_pending',capture)
+    run(db)
+    worker.write_price.assert_not_awaited()
+    worker.write_visibility.assert_awaited_once_with(None,'a123',True)
+    assert seen==[{}]
+    assert current['quantity']=='100' and current['availableQuantity']=='20'
+    assert current['advStatus']=='OPEN' and slot.state=='IDLE'
+    assert not slot.paused_by_floor
