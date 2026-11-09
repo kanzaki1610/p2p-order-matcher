@@ -13,8 +13,9 @@ from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwit
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
-    from app.nickname_target import NicknameTarget
+    from app.nickname_target import NicknameTarget, NicknamePriceBound
     NicknameTarget.__table__.create(engine)
+    NicknamePriceBound.__table__.create(engine)
     for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()

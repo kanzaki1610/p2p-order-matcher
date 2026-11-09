@@ -142,3 +142,94 @@ def test_mexc_get_uses_own_exchange_and_target():
             return await rank_plan(client,SimpleNamespace(key='BUY:1',nickname='VNTrader',rank=10),None,('1phut30s',-1,'revision'))
     assert asyncio.run(run())['proposed_price']=='26089'
     assert 'mexc_buy' in urls[0]
+
+
+@pytest.mark.parametrize('side,reference,offset,bound,expected,clamped', [
+    ('SELL','25900',0,25600,'25900',False),
+    ('SELL','25000',0,25600,'25600',True),
+    ('SELL','25600',-1,25600,'25600',True),
+    ('SELL','25601',-1,25600,'25600',False),
+    ('BUY','25000',0,25600,'25000',False),
+    ('BUY','25900',0,25600,'25600',True),
+    ('BUY','25600',1,25600,'25600',True),
+    ('BUY','25599',1,25600,'25600',False),
+])
+def test_bound_clamps_after_offset(side,reference,offset,bound,expected,clamped):
+    data=board(side,rows=[{'nick':'other','price':reference}])
+    result=plan_rank_price(data,side,'24000',target_nickname='other',price_offset=offset,price_bound=bound)
+    assert result['action']=='UPDATE_PRICE'
+    assert result['proposed_price']==expected
+    assert result['bound_applied']==clamped
+
+
+def test_sell_resumes_following_when_reference_returns_above_floor():
+    prices=[]
+    for price in ['25900','25000','25700']:
+        result=plan_rank_price(board(rows=[{'nick':'other','price':price}]),'SELL','24000',target_nickname='other',price_bound=25600)
+        prices.append(result['proposed_price'])
+    assert prices==['25900','25600','25700']
+
+
+def test_cost_floor_still_protects_when_bound_is_too_low():
+    result=plan_rank_price(board(rows=[{'nick':'other','price':'25000'}]),'SELL','25700',target_nickname='other',price_bound=25600)
+    assert result['action']=='HIDE_AD'
+    assert result['minimum_sell_price']=='25710'
+
+
+@pytest.mark.parametrize('raw',['-1','1.2','abc','1e4','NaN','1000000000000'])
+def test_invalid_bound_rejected(raw):
+    from app.nickname_target import validate_bound
+    with pytest.raises(ValueError):validate_bound(raw)
+
+
+@pytest.mark.parametrize('raw,expected',[('',0),('0',0),('25600',25600),('25.600',25600)])
+def test_bound_input(raw,expected):
+    from app.nickname_target import validate_bound
+    assert validate_bound(raw)==expected
+
+
+@pytest.mark.parametrize('exchange',['OKX','MEXC'])
+def test_bound_persisted_in_target_snapshot_and_clear(db,exchange):
+    from app.nickname_target import NicknamePriceBound, summary
+    save(db,exchange,'BUY',{'slot':'1','target':'other','offset':'1','bound':'25600'},'owner')
+    before=target(db,exchange,'BUY',1)
+    assert before[3]==25600 and '25,600' in summary(db,exchange,'BUY',1)
+    assert target(db,exchange,'BUY',2) is None
+    save(db,exchange,'BUY',{'slot':'1','target':'other','offset':'1','bound':'25500'},'owner')
+    after=target(db,exchange,'BUY',1)
+    assert after!=before and after[3]==25500
+    clear(db,exchange,'BUY',1);db.commit()
+    assert target(db,exchange,'BUY',1) is None
+    assert db.get(NicknamePriceBound,exchange+':BUY:1') is None
+
+
+def test_existing_target_without_bound_is_compatible(db):
+    db.add(NicknameTarget(key='OKX:BUY:1',nickname='old',offset=-1,revision='old'))
+    db.commit()
+    assert target(db,'OKX','BUY',1)==('old',-1,'old',0)
+
+
+@pytest.mark.parametrize('ui,prefix',[(okx_ui,'price'),(mexc_ui,'mprice')])
+@pytest.mark.parametrize('side',['BUY','SELL'])
+def test_bound_modal_is_optional_and_side_specific(ui,prefix,side):
+    fields=[r['components'][0] for r in ui.modal('follow',side)['data']['components']]
+    bound=next(f for f in fields if f['custom_id']=='bound')
+    assert not bound['required']
+    assert ('cao nhất' if side=='BUY' else 'thấp nhất') in bound['label']
+    assert len(fields)==4
+
+
+def test_mexc_planner_uses_bound():
+    data={**board('BUY',rows=[{'nick':'other','price':'25900'}]),'exchange':'mexc','panel':'mexc_buy','side':'BUY','cache':'new'}
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r:httpx.Response(200,json=data))) as client:
+            return await rank_plan(client,SimpleNamespace(key='BUY:1',nickname='VNTrader',rank=10),None,('other',1,'revision',25600))
+    assert asyncio.run(run())['proposed_price']=='25600'
+
+
+def test_okx_planner_uses_bound():
+    data=board('BUY',rows=[{'nick':'other','price':'25900'}])
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r:httpx.Response(200,json=data))) as client:
+            return await read_rank_plan(client,'BUY',target_nickname='other',price_offset=1,price_bound=25600)
+    assert asyncio.run(run())['proposed_price']=='25600'
