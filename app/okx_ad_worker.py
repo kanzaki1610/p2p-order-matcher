@@ -20,7 +20,7 @@ from .okx_ads import read_ad, number
 from .okx_cost import read_last_buy_cost, read_pricing_cost, cost_summary, cost_revision, save_cost
 from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
-from .nickname_target import target as nickname_target
+from .nickname_target import target as nickname_target, plan_options
 from .okx_release import request, failure_reason
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, price_limits, limits_match
 from . import okx_buy_budget as buy_budget
@@ -184,7 +184,7 @@ async def process_ad_pricing(db, client):
                     continue
             rank = selected_rank(db, slot.side)
             follow = nickname_target(db, 'OKX', slot.side, slot.slot_number)
-            kwargs = {'target_nickname':follow[0], 'price_offset':follow[1]} if follow else {}
+            kwargs = plan_options(follow)
             plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None, target_rank=rank, **kwargs)
             if slot.side == "SELL":
                 plan["cost_source"] = cost

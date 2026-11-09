@@ -20,7 +20,7 @@ from .okx_ads import number
 from .mexc_price_state import MexcPendingPrice, active, source_snapshot, record_pending, matches
 from .mexc_auto_terms import prepare as prepare_auto_terms
 from .okx_rank import plan_rank_price
-from .nickname_target import target as nickname_target
+from .nickname_target import target as nickname_target, plan_options
 from .notifications import notify_once
 from .discord_notifications import send_discord_message, valid_webhook
 
@@ -79,7 +79,7 @@ async def rank_plan(client, slot, cost, follow=None):
     # AutoP2P MEXC uses uppercase side and cache=new for newly fetched snapshots.
     normalized = {**data, 'exchange':'okx', 'side':side.lower(), 'panel':'okx_'+side.lower()}
     if data.get('cache') == 'new': normalized['cache'] = 'fresh'
-    kwargs = {'target_nickname':follow[0], 'price_offset':follow[1]} if follow else {}
+    kwargs = plan_options(follow)
     return plan_rank_price(normalized, side, cost, own_nickname=slot.nickname, target_rank=slot.rank, **kwargs)
 
 
