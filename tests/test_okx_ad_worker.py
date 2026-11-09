@@ -13,6 +13,8 @@ from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwit
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
+    from app.nickname_target import NicknameTarget
+    NicknameTarget.__table__.create(engine)
     for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
@@ -321,3 +323,29 @@ def test_insufficient_or_unconfirmed_limits_never_succeed(db, setup, monkeypatch
     else:
         assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='CONFIRMING'
         assert setup.adv_id=='123'
+
+
+def test_nickname_target_reaches_okx_worker(db,setup,monkeypatch):
+    from app.nickname_target import save
+    save(db,'OKX','SELL',{'slot':'1','target':'other','offset':'-1'},'owner')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    planner=AsyncMock(return_value=plan());monkeypatch.setattr(worker,'read_rank_plan',planner)
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    assert planner.call_args.kwargs['target_nickname']=='other'
+    assert planner.call_args.kwargs['price_offset']==-1
+    assert write.await_count==1
+
+
+def test_changed_nickname_before_submit_drops_old_plan(db,setup,monkeypatch):
+    from app.nickname_target import save
+    save(db,'OKX','SELL',{'slot':'1','target':'other','offset':'-1'},'owner')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    async def planner(*a,**kw):
+        save(db,'OKX','SELL',{'slot':'1','target':'different','offset':'2'},'owner')
+        return plan()
+    monkeypatch.setattr(worker,'read_rank_plan',planner)
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'

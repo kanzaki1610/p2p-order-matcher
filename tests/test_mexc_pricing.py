@@ -249,3 +249,22 @@ def test_late_post_response_cannot_overwrite_newer_attempt(db,setup,monkeypatch)
 
 
 REAL_RANK_PLAN=worker.rank_plan
+
+
+def test_nickname_target_reaches_mexc_worker(db,setup,monkeypatch):
+    from app.nickname_target import save
+    save(db,'MEXC','SELL',{'slot':'1','target':'other','offset':'-1'},'owner')
+    run(db)
+    assert worker.rank_plan.call_args.kwargs['follow'][:2]==('other',-1)
+    assert worker.write_price.await_count==1
+
+
+def test_changed_nickname_before_mexc_submit_drops_plan(db,setup,monkeypatch):
+    from app.nickname_target import save
+    save(db,'MEXC','SELL',{'slot':'1','target':'other','offset':'-1'},'owner')
+    async def planner(*a,**kw):
+        save(db,'MEXC','SELL',{'slot':'1','target':'different','offset':'2'},'owner')
+        return {'action':'UPDATE_PRICE','proposed_price':'26070'}
+    monkeypatch.setattr(worker,'rank_plan',planner)
+    run(db)
+    worker.write_price.assert_not_awaited()
