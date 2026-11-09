@@ -34,3 +34,24 @@ python -m pytest -q
 ```
 
 Không dùng giá trong tài liệu làm cấu hình cho quảng cáo thật.
+
+
+## Giới hạn sàn bán / trần mua
+
+Biểu mẫu Bám biệt danh có thêm ô **Giá bán thấp nhất** hoặc **Giá mua cao nhất**,
+đơn vị VND/USDT. Trống hoặc 0 = bỏ giới hạn riêng này. Đặt riêng từng slot.
+Giới hạn áp dụng sau chênh giá:
+
+- Bán: `max(giá đối thủ + chênh giá, giá sàn)`.
+- Mua: `min(giá đối thủ + chênh giá, giá trần)`.
+
+Ví dụ bán sàn 25.600: đối thủ từ 25.900 xuống 25.000 thì giữ giá bán 25.600.
+Khi đối thủ lên lại trên sàn, tiếp tục bám giá bình thường. Đây là chặn giá tại
+mức giới hạn, không tắt công tắc Auto. Giá vốn bán +10đ vẫn bắt buộc; nếu giá
+đã chặn thấp hơn giá vốn +10đ, quy tắc bảo vệ bán hiện có vẫn áp dụng.
+Không có dữ liệu đối thủ hợp lệ thì không dùng riêng giá sàn/trần để sửa giá.
+
+Bảng bổ sung `pricing_nickname_bounds` được tạo khi khởi động, không cần ALTER
+bảng mục tiêu cũ. Cấu hình cũ chưa có giới hạn tiếp tục chạy như trước. Lưu lại
+biểu mẫu với ô giới hạn trống sẽ xóa giới hạn riêng của slot đó. Trạng thái hiển
+thị giá sàn/trần, và mọi thay đổi giới hạn đều làm mất hiệu lực kế hoạch cũ chưa gửi.
