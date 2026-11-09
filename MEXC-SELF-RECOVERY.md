@@ -24,3 +24,15 @@ USDT, tự bật Auto, sửa giá hoặc thử lại POST cũ.
 
 Không cần biến môi trường hoặc quyền Discord mới. Bản sửa áp dụng trong
 module MEXC theo schema tài khoản hiện có; không thay đổi luồng OKX.
+
+
+## Hồ sơ SHOW cũ chứa phần sửa giá chưa gửi
+
+Một phiên bản trước giữ lại body chuẩn bị sửa giá khi đổi sang hành động SHOW,
+trong khi API thực tế chỉ nhận yêu cầu đổi hiển thị. Với SELL, body nháp dùng
+USDT khả dụng còn snapshot gốc dùng tổng USDT tích lũy; so sánh nhầm hai số
+làm quảng cáo đã mở vẫn mắc CONFIRMING. Worker nay ghi hồ sơ SHOW/HIDE chỉ
+cho phần hiển thị. Hồ sơ lịch sử chỉ được nhận lại khi khớp đầy đủ dạng lỗi
+đã xác định (SHOW, cùng giá/Min/Max/phương thức/điều kiện, lượng nháp đúng
+khả dụng, không delta số lượng, không lệnh giữ USDT trong hồ sơ gốc).
+Vẫn cần chủ tài khoản xem và xác nhận cấu hình hiện tại; không gửi lại POST.
