@@ -53,18 +53,36 @@ def record(slot, pending, db=None, *, lock=False):
 
 
 def eligible(slot, pending):
-    if slot is not None and slot.key.startswith('BUY:') and slot.state=='IDLE' and pending is None:
-        return  # A blocked history read has no submitted write to reconcile.
+    if slot is not None and slot.state=='IDLE' and pending is None:
+        return  # No submitted write to reconcile; still require stable owner-confirmed reads.
     if (slot is None or slot.key.split(':')[0] not in {'BUY','SELL'}
-            or slot.state not in {'UNKNOWN', 'CONFIRMING'} or slot.action != 'PRICE'
+            or slot.state not in {'UNKNOWN', 'CONFIRMING'} or slot.action not in {'PRICE','SHOW','HIDE'}
             or time.time() - float(slot.last_action) < 600):
-        raise ValueError('Chỉ nhận lại slot bị khóa giá từ ít nhất 10 phút; yêu cầu mới hoặc đổi hiển thị vẫn cần kiểm tra.')
-    if pending is None or pending.ad != slot.ad or pending.attempt != slot.attempt_id or pending.cause != 'PRICE':
-        raise ValueError('Thiếu hồ sơ yêu cầu giá cũ; chưa nhận cấu hình mới.')
+        raise ValueError('Yêu cầu còn đang gửi hoặc chưa đủ 10 phút từ lần gửi cuối. Chờ đủ 10 phút rồi bấm Kiểm tra/khôi phục lại; Auto giữ tắt.')
+    if pending is None or pending.ad != slot.ad or pending.attempt != slot.attempt_id:
+        raise ValueError('Hồ sơ cũ thiếu hoặc sai ID quảng cáo/yêu cầu. Không thể nhận cấu hình chỉ dựa vào giá; giữ khóa và Auto tắt.')
     try:
         body = json.loads(pending.body_json)
         before = json.loads(pending.before_json)
         expected = json.loads(pending.expected_json)
+        if slot.action in {'SHOW','HIDE'}:
+            wanted = 'OPEN' if slot.action == 'SHOW' else 'CLOSE'
+            # Visibility calls have no quantity delta or price/terms payload.
+            # Keep the entire original intent in the confirmation/audit record.
+            if (body != {} or pending.cause not in {'PRICE','FLOOR','BUDGET'}
+                    or before['body']['advNo'] != slot.ad
+                    or before['body']['side'] != slot.key.split(':')[0]
+                    or before['status'] != ('CLOSE' if slot.action == 'SHOW' else 'OPEN')
+                    or expected['advStatus'] != wanted or slot.wanted_status != wanted
+                    or Decimal(slot.wanted_price) != Decimal(expected['price'])
+                    or any(Decimal(expected[k]) != Decimal(before['body'][source]) for k,source in (
+                        ('price','price'), ('quantity','initQuantity'),
+                        ('minSingleTransAmount','minSingleTransAmount'),
+                        ('maxSingleTransAmount','maxSingleTransAmount')))):
+                raise ValueError()
+            return
+        if pending.cause != 'PRICE':
+            raise ValueError()
         initial = Decimal(body['initQuantity'])
         if slot.key.startswith('BUY:'):
             supply=Decimal(body.get('supplyQuantity','0'));reduce=Decimal(body.get('reduceQuantity','0'))
@@ -88,7 +106,7 @@ def eligible(slot, pending):
                 or body['advStatus'] != before['status']):
             raise ValueError()
     except (ValueError, TypeError, KeyError, ArithmeticError):
-        raise ValueError('Yêu cầu cũ có đổi số lượng/hiển thị hoặc thiếu dữ liệu; chưa nhận cấu hình mới.') from None
+        raise ValueError('Hồ sơ yêu cầu cũ thiếu hoặc mâu thuẫn về giá, số lượng hoặc hiển thị; giữ khóa. Không nhận lại cấu hình khi chưa xác minh đúng hồ sơ.') from None
 
 
 async def stable_source(slot, db=None):
@@ -146,7 +164,12 @@ async def preview(db, owner, number, side='SELL'):
     elif side=='BUY':
         saved=prior['budget'];spent=sum((Decimal(x[2]) for x in saved['orders'] if x[1]=='DONE'),Decimal(0))
         text+=f'\nNgân sách Mua còn lại: {Decimal(saved["total_vnd"])-spent:,.0f} VND. Giữ sổ tiền đã chi; không đặt lại theo Max trên sàn.'
-    if pending is not None:text+='\nKết quả yêu cầu cũ vẫn chưa được xác nhận.'
+    if pending is not None:
+        expected=json.loads(pending.expected_json)
+        actual={**body,'quantity':body['initQuantity'],'advStatus':source['status']}
+        from .mexc_price_recovery import difference_summary
+        text+='\n'+difference_summary(actual,expected)
+        text+='\nXác nhận này lưu hồ sơ cũ và nhận mốc hiện tại; không đánh dấu yêu cầu cũ thành công.'
     return {'content': text, 'components': [{'type': 1, 'components': [
         {'type': 2, 'style': 3, 'label': 'Xác nhận nhận cấu hình', 'custom_id': 'mprice:adoptconfirm:' + draft.id},
         {'type': 2, 'style': 2, 'label': 'Hủy', 'custom_id': 'mprice:adoptcancel:' + draft.id}]}]}

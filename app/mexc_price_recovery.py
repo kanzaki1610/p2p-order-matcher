@@ -25,6 +25,26 @@ def pending_snapshot(pending):
     return None if pending is None else (pending.attempt, pending.ad, pending.before_json, pending.expected_json, pending.cause)
 
 
+def difference_summary(row, expected):
+    labels={'price':'Giá','quantity':'Tổng USDT','minSingleTransAmount':'Min',
+            'maxSingleTransAmount':'Max','advStatus':'Hiển thị'}
+    differences=[]
+    def render(value, field):
+        if field=='advStatus':
+            return str(value)
+        text=format(Decimal(str(value)),',f')
+        return text.rstrip('0').rstrip('.') if '.' in text else text
+    for field,label in labels.items():
+        old,new=expected.get(field),row.get(field)
+        try:
+            same=old==new if field=='advStatus' else Decimal(str(old))==Decimal(str(new))
+            if not same:
+                differences.append(f'{label}: hồ sơ cũ {render(old,field)} → hiện tại {render(new,field)}')
+        except (ValueError,TypeError,ArithmeticError):
+            differences.append(label+': thiếu dữ liệu để so sánh')
+    return 'Khác cấu hình cũ:\n'+'\n'.join(differences) if differences else 'Giá, tổng USDT, Min/Max và hiển thị khớp hồ sơ cũ.'
+
+
 def legacy_source_reconcilable(slot, pending, row):
     """Narrow migration for the old wrapper that discarded the API result.
 
@@ -103,9 +123,11 @@ async def recover(db, owner, side, number):
                 return 'Quảng cáo vừa thay đổi trong lúc đối chiếu; giữ khóa, Auto tắt.'
             outcome = 'LEGACY_SOURCE_RECONCILED'
         else:
-            return 'Chưa khớp đầy đủ giá, số lượng, Min/Max và hiển thị đã gửi; giữ khóa, Auto tắt. Không gửi lại MEXC.'
-    except Exception:
-        return 'Chưa đọc/xác minh được quảng cáo MEXC của tài khoản này. Auto tắt; không gửi lại.'
+            return difference_summary(row,json.loads(pending.expected_json))+'\nChưa xác nhận yêu cầu cũ. Auto tắt; nhận cấu hình hiện tại để xem và xác nhận mốc mới, không gửi lại yêu cầu cũ.'
+    except Exception as error:
+        from .mexc import MexcAPIError
+        detail = str(error) if isinstance(error,MexcAPIError) else 'Chưa đọc được đầy đủ dữ liệu quảng cáo.'
+        return 'Chưa xác minh được MEXC: '+detail+' Auto tắt. Bấm Kiểm tra/khôi phục lại sau; không gửi lại yêu cầu sửa/ẩn.'
     db.expire_all()
     slot = db.scalar(select(MexcPriceSlot).where(MexcPriceSlot.key == key)
         .with_for_update().execution_options(populate_existing=True))

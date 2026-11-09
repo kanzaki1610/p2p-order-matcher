@@ -191,9 +191,16 @@ async def execute_panel(payload, db, owner):
     if action=='checkslot' and len(parts)==4:
         message=await recover(db,owner,parts[2],parts[3])
         slot=db.get(MexcPriceSlot,parts[2]+':'+parts[3],populate_existing=True)
-        fallback=slot is not None and (slot.state in {'UNKNOWN','CONFIRMING'} or parts[2]=='BUY')
-        return {'content':message+('\nNếu đã sửa quảng cáo trên sàn: bấm Nhận cấu hình hiện tại để xem và xác nhận dữ liệu mới.' if fallback else ''),
-            'components':[{'type':1,'components':[button('Nhận cấu hình hiện tại',f'adoptpreview:{parts[2]}:{parts[3]}')]}] if fallback else []}
+        if slot is not None and slot.state in {'UNKNOWN','CONFIRMING'}:
+            try:
+                preview=await adoption_preview(db,owner,parts[3],parts[2])
+                preview['content']='Kiểm tra chưa xác nhận yêu cầu cũ. Đã đọc hai lần cấu hình MEXC hiện tại.\n'+preview['content']
+                return preview
+            except ValueError as error:
+                message+='\nChưa thể nhận cấu hình: '+str(error)
+        return {'content':message,'components':[{'type':1,'components':[
+            button('Kiểm tra lại',f'checkslot:{parts[2]}:{parts[3]}'),
+            button('Nhận cấu hình hiện tại',f'adoptpreview:{parts[2]}:{parts[3]}')]}] if slot is not None else []}
     if action=='adopt' and len(parts)==3 and parts[2] in {'BUY','SELL'}:
         side=parts[2]
         return {'content':'Chọn slot '+('Mua' if side=='BUY' else 'Bán')+' MEXC để xem cấu hình hiện tại. Auto slot sẽ tắt; chưa gỡ khóa cho đến khi bạn xác nhận.'+((' Mua chỉ đổi giá, giữ Min/Max và USDT.' if settings.mexc_buy_price_only else ' Mua sẽ xác minh lịch sử và giữ ngân sách VND còn lại.') if side=='BUY' else ''),
@@ -201,7 +208,15 @@ async def execute_panel(payload, db, owner):
     if action=='adoptpreview' and len(parts) in {3,4}:
         return await adoption_preview(db,owner,parts[-1],parts[2] if len(parts)==4 else 'SELL')
     if action=='adoptconfirm' and len(parts)==3:
-        return {'content':await adoption_confirm(db,owner,parts[2]),'components':[]}
+        message=await adoption_confirm(db,owner,parts[2])
+        draft=db.get(MexcAdoptionDraft,parts[2],populate_existing=True)
+        side,number=draft.slot.split(':')
+        source=json.loads(draft.source)
+        if source['status']!='OPEN':
+            return {'content':message+'\nQuảng cáo đang '+source['status']+' trên MEXC. Bạn cần mở quảng cáo trên MEXC trước; nhận cấu hình không tự mở quảng cáo.',
+                    'components':[{'type':1,'components':[button('Trạng thái','status')]}]}
+        return {'content':message+'\nNếu các thông số đúng, bạn có thể tự bấm Bật Auto bên dưới.',
+                'components':[{'type':1,'components':[button('Bật Auto '+side+' slot '+number,f'setauto:{side}:{number}:1',3),button('Trạng thái','status')]}]}
     if action=='adoptcancel' and len(parts)==3:
         changed=db.execute(update(MexcAdoptionDraft).where(MexcAdoptionDraft.id==parts[2],
             MexcAdoptionDraft.owner==owner,MexcAdoptionDraft.used.is_(False)).values(used=True))
