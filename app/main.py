@@ -15,6 +15,7 @@ from .okx_sync import okx_sync_loop
 from .okx_release import OKXReleaseAttempt
 from .okx_ad_worker import pricing_loop
 from .mexc_pricing import pricing_loop as mexc_pricing_loop
+from .buy_payment_qr import buy_payment_qr_loop, enabled as buy_qr_enabled
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
 from .matching import match_transaction
@@ -36,6 +37,24 @@ mexc_task: asyncio.Task | None = None
 okx_task: asyncio.Task | None = None
 pricing_task: asyncio.Task | None = None
 mexc_pricing_task: asyncio.Task | None = None
+buy_qr_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def start_buy_payment_qr():
+    global buy_qr_task
+    if buy_qr_enabled():
+        buy_qr_task = asyncio.create_task(run_isolated(buy_payment_qr_loop))
+
+
+@app.on_event("shutdown")
+async def stop_buy_payment_qr():
+    global buy_qr_task
+    if buy_qr_task:
+        buy_qr_task.cancel()
+        try: await buy_qr_task
+        except asyncio.CancelledError: pass
+        buy_qr_task = None
 
 
 @app.on_event("startup")

@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     discord_application_id: str = ""
     discord_public_key: str = ""
     discord_bot_token: str = ""
+    buy_payment_qr_enabled: bool = False
+    discord_buy_payment_channel_id: str = ""
+    buy_payment_qr_seconds: int = 15
     discord_guild_id: str = ""
     discord_allowed_user_ids: str = ""
     discord_allowed_role_ids: str = ""
