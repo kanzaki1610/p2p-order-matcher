@@ -20,6 +20,7 @@ from .okx_ads import number
 from .mexc_price_state import MexcPendingPrice, active, source_snapshot, record_pending, matches
 from .mexc_auto_terms import prepare as prepare_auto_terms
 from .okx_rank import plan_rank_price
+from .nickname_target import target as nickname_target
 from .notifications import notify_once
 from .discord_notifications import send_discord_message, valid_webhook
 
@@ -67,7 +68,7 @@ async def alert(db, slot, reason, suffix=''):
         sender=lambda event, body: send_discord_message(event, body))
 
 
-async def rank_plan(client, slot, cost):
+async def rank_plan(client, slot, cost, follow=None):
     side = slot.key.split(':')[0]
     response = await client.get('https://autop2p.biz/', params={'api':'panel','panel':'mexc_'+side.lower()})
     response.raise_for_status()
@@ -78,7 +79,8 @@ async def rank_plan(client, slot, cost):
     # AutoP2P MEXC uses uppercase side and cache=new for newly fetched snapshots.
     normalized = {**data, 'exchange':'okx', 'side':side.lower(), 'panel':'okx_'+side.lower()}
     if data.get('cache') == 'new': normalized['cache'] = 'fresh'
-    return plan_rank_price(normalized, side, cost, own_nickname=slot.nickname, target_rank=slot.rank)
+    kwargs = {'target_nickname':follow[0], 'price_offset':follow[1]} if follow else {}
+    return plan_rank_price(normalized, side, cost, own_nickname=slot.nickname, target_rank=slot.rank, **kwargs)
 
 
 async def confirm(db, api, slot):
@@ -144,7 +146,9 @@ async def process_pricing(db, api, source):
             cost, revision, slot_revision = config.cost, config.revision, slot.revision
             if side == 'SELL' and cost is None:
                 raise ValueError('Chưa nhập giá vốn MEXC riêng; chưa chỉnh hoặc ẩn quảng cáo bán.')
-            plan = await rank_plan(source, slot, cost if side=='SELL' else None)
+            follow = nickname_target(db,'MEXC',side,slot.key.split(':')[1])
+            kwargs = {'follow':follow} if follow else {}
+            plan = await rank_plan(source, slot, cost if side=='SELL' else None, **kwargs)
             if plan['action']=='BLOCKED': raise ValueError(plan['reason'])
             current, proposed = number(row['price']), number(plan['proposed_price'])
             action = 'HIDE' if plan['action']=='HIDE_AD' else 'PRICE'

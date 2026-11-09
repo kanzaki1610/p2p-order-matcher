@@ -147,6 +147,8 @@ def save_ranks(db, changes, actor="dashboard"):
     if not changes or set(changes) - {"buy_rank", "sell_rank"}:
         raise ValueError("Chỉ cập nhật vị trí mua hoặc bán.")
     for rank in changes.values(): validate_rank(rank)
+    from .nickname_target import clear
+    for field in changes: clear(db,'OKX',field.split('_')[0].upper())
     get_preferences(db)
     # Update only selected fields so simultaneous BUY/SELL edits do not overwrite each other.
     db.execute(update(OKXPricePreferences).where(OKXPricePreferences.id == 1).values(**changes))
@@ -192,8 +194,10 @@ async def execute_price_command(data, db, user_id):
     status = "ĐANG BẬT" if pricing_active(db) else "ĐANG TẮT — chỉ lưu vị trí, chưa sửa quảng cáo thật"
     reply = f"Bám giá OKX: {status}.\nVị trí mua: {prefs['buy_rank']} · vị trí bán: {prefs['sell_rank']}.\n{cost_summary(db)}"
     if action == "trangthai":
+        from .nickname_target import summary
         for slot in db.scalars(select(OKXSlot).order_by(OKXSlot.side,OKXSlot.slot_number)):
-            reply += f"\n{slot.side} slot {slot.slot_number}: Auto {'bật' if slot.auto_enabled else 'tắt'} · ID {slot.adv_id or 'chưa chọn'} · giá {slot.current_price}đ"
+            mode = summary(db,"OKX",slot.side,slot.slot_number) or f"vị trí {selected_rank(db,slot.side)}"
+            reply += f"\n{slot.side} slot {slot.slot_number}: Auto {'bật' if slot.auto_enabled else 'tắt'} · ID {slot.adv_id or 'chưa chọn'} · giá {slot.current_price}đ · {mode}"
         return reply
     if action == "vitri": reply = "Đã lưu vị trí. Bot sẽ áp dụng ở lần quét kế tiếp khi bám giá được bật.\n"+reply
     rank = selected_rank(db, side)

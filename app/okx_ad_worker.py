@@ -20,6 +20,7 @@ from .okx_ads import read_ad, number
 from .okx_cost import read_last_buy_cost, read_pricing_cost, cost_summary, cost_revision, save_cost
 from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
+from .nickname_target import target as nickname_target
 from .okx_release import request, failure_reason
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, price_limits, limits_match
 from . import okx_buy_budget as buy_budget
@@ -58,7 +59,8 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
     text = (f"OKX · {merchant} · cảnh báo giá {kind}\nMã quảng cáo: {slot.adv_id}\n"
             f"Chiều: {slot.side}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\nLý do: {reason}")
     if plan:
-        text += f"\nGiá vị trí {plan.get('target_rank', 10)}: {plan.get('proposed_price')}đ/USDT"
+        reference = (f"{plan['target_nickname']} {plan['price_offset']:+d}đ" if plan.get('target_nickname') else f"vị trí {plan.get('target_rank', 10)}")
+        text += f"\nGiá theo {reference}: {plan.get('proposed_price')}đ/USDT"
         if plan.get("cost_source"):
             text += '\nNguồn giá vốn: '+('nhập thủ công' if plan['cost_source'].get('mode')=='MANUAL' else 'lệnh mua OKX '+plan['cost_source']['order_id'])
         if plan.get("minimum_sell_price"):
@@ -181,7 +183,9 @@ async def process_ad_pricing(db, client):
                     await notice(db, attempt, slot, "COST_UNVERIFIED", "Chưa xác minh giá vốn nhập thủ công: " + cost_error)
                     continue
             rank = selected_rank(db, slot.side)
-            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None, target_rank=rank)
+            follow = nickname_target(db, 'OKX', slot.side, slot.slot_number)
+            kwargs = {'target_nickname':follow[0], 'price_offset':follow[1]} if follow else {}
+            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None, target_rank=rank, **kwargs)
             if slot.side == "SELL":
                 plan["cost_source"] = cost
             if plan["action"] == "BLOCKED":
@@ -240,7 +244,7 @@ async def process_ad_pricing(db, client):
                 attempt.state = 'IDLE'
                 db.commit()
                 continue
-            if selected_rank(db, slot.side) != rank:
+            if selected_rank(db, slot.side) != rank or nickname_target(db,'OKX',slot.side,slot.slot_number) != follow:
                 attempt.state = "IDLE"
                 db.commit()
                 continue
@@ -263,7 +267,8 @@ async def process_ad_pricing(db, client):
                 db.refresh(slot)
                 if (buy_budget.fingerprint(fresh_ad) != buy['fingerprint'] or not slot.auto_enabled
                         or slot.adv_id != attempt.old_ad_id or not pricing_active(db)
-                        or selected_rank(db, slot.side) != rank):
+                        or selected_rank(db, slot.side) != rank
+                        or nickname_target(db,'OKX',slot.side,slot.slot_number) != follow):
                     attempt.state = 'IDLE'
                     db.commit()
                     continue

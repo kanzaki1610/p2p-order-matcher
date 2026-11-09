@@ -10,7 +10,10 @@ MIN_SPREAD = Decimal("10")
 SOURCE_MAX_AGE = 30
 
 
-def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK):
+def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0):
+    from .nickname_target import validate_target
+    if target_nickname is not None:
+        target_nickname, price_offset = validate_target(target_nickname, str(price_offset))
     if type(target_rank) is not int or not 1 <= target_rank <= 50:
         raise ValueError("Vị trí phải là số nguyên từ 1 đến 50")
     side = side.upper()
@@ -53,13 +56,25 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
         return {**base, "reason": "Có dòng giá thiếu/sai dữ liệu; không tự bỏ dòng làm thay đổi thứ hạng."}
     # Use the displayed table order, so rank 10 follows the user's source.
     # Only remove our own ads; no silent condition/amount filtering or re-sorting.
-    if len(competitors) < target_rank:
+    if target_nickname is not None:
+        matches = [x for x in competitors if x['nickname'].strip().casefold() == target_nickname.casefold()]
+        if not matches:
+            return {**base, "reason": f"Không tìm thấy biệt danh {target_nickname} trong bảng giá cùng sàn/chiều; không chuyển sang bám vị trí."}
+        if len({x['price'] for x in matches}) != 1:
+            return {**base, "reason": f"Biệt danh {target_nickname} có nhiều quảng cáo khác giá; chưa chọn được giá duy nhất."}
+        chosen = matches[0]
+        base.update(target_nickname=target_nickname, price_offset=price_offset)
+    elif len(competitors) < target_rank:
         return {**base, "reason": f"Chưa có đủ {target_rank} quảng cáo đối thủ sau khi loại quảng cáo của mình."}
-    chosen = competitors[target_rank - 1]
-    price = chosen["price"]
+    else:
+        chosen = competitors[target_rank - 1]
+    price = chosen["price"] + Decimal(price_offset)
+    if price <= 0:
+        return {**base, "reason": "Giá sau chênh lệch phải lớn hơn 0."}
     base.update(source_age_seconds=round(age, 2), own_ads_excluded=excluded,
-                competitor={"nickname": chosen["nickname"], "price": str(price)},
+                competitor={"nickname": chosen["nickname"], "price": str(chosen["price"])},
                 proposed_price=str(price))
+    reference = (f"{target_nickname} {price_offset:+d}đ" if target_nickname is not None else f"vị trí {target_rank}")
     if side == "SELL":
         if cost_basis is None:
             return {**base, "reason": "Chưa có giá vốn thực tế; không suy đoán giá vốn hoặc tự sửa/ẩn quảng cáo."}
@@ -69,14 +84,14 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
                     spread_vnd=str(price - cost))
         if price < floor:
             return {**base, "action": "HIDE_AD", "reason":
-                f"Giá bán vị trí {target_rank} là {price:,.0f}đ, thấp hơn giá vốn {cost:,.0f}đ +10đ = {floor:,.0f}đ. "
+                f"Giá bán theo {reference} là {price:,.0f}đ, thấp hơn giá vốn {cost:,.0f}đ +10đ = {floor:,.0f}đ. "
                 "Đề xuất tạm ẩn quảng cáo và báo kênh cảnh báo giá; chưa gửi yêu cầu ẩn thật."}
     return {**base, "action": "UPDATE_PRICE", "reason":
-        f"Đề xuất bám cùng giá đối thủ vị trí {target_rank} sau khi loại quảng cáo của mình; không cộng/trừ thêm 1đ. "
+        f"Đề xuất bám giá theo {reference} sau khi loại quảng cáo của mình. "
         "Chênh giá 10đ là trước phí nếu có. Chưa gửi yêu cầu sửa thật."}
 
 
-async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK):
+async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0):
     side = side.upper()
     if side not in {"BUY", "SELL"}:
         raise ValueError("Chiều quảng cáo phải là BUY hoặc SELL")
@@ -84,7 +99,7 @@ async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK)
     response.raise_for_status()
     from .config import settings
     own_nickname = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
-    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank)
+    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset)
 
 
 async def send_preview_alert(plan):

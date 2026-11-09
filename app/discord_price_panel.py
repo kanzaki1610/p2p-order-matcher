@@ -63,13 +63,16 @@ def button(label,code,style=2):
 def panel():
     rows=[]
     for side,label in [('BUY','Mua'),('SELL','Bán')]:
-        rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
+        rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side),button('Bám biệt danh '+label,'follow:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
     rows.append({'type':1,'components':[button('Nhập giá vốn','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
     rows.append({'type':1,'components':[button('Kiểm tra/khôi phục Mua','recover:BUY'),button('Kiểm tra/khôi phục Bán','recover:SELL')]})
     return {'content':'**Điều khiển giá OKX**\nChỉ operator được sử dụng. Đặt giá thủ công cần xác nhận và tắt Auto của slot. Tạm dừng không ẩn quảng cáo trên sàn. Auto mua giữ ngân sách VND còn lại, không mua bù lại số tiền đã dùng.','components':rows,'allowed_mentions':{'parse':[]}}
 
 def modal(action,side):
+    if action == "follow":
+        from .nickname_target import modal as follow_modal
+        return follow_modal("price", side)
     if action == 'limits' and side == 'BUY':
         return {'type':4,'data':{'content':'Auto mua không cần nhập Min/Max: giữ Min trên OKX, tự trừ tiền đã mua khỏi ngân sách VND và tính lại lượng USDT theo giá mới.','flags':64}}
     if action == 'limits':
@@ -180,6 +183,9 @@ async def execute_panel(payload,db,owner):
     if action=='form':
         action,side=code[2:4]
         values={x['custom_id']:x.get('value','') for row in payload['data'].get('components',[]) for x in row.get('components',[])}
+        if action=='follow':
+            from .nickname_target import save
+            return save(db,'OKX',side,values,owner)
         value=values.get('value','')
         if action=='limits':
             if side=='BUY':

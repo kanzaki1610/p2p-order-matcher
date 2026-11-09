@@ -28,7 +28,7 @@ def panel():
     rows = []
     for side, label in [('BUY', 'Mua'), ('SELL', 'Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),
-            button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side)]})
+            button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side),button('Bám biệt danh '+label,'follow:'+side)]})
     rows.append({'type':1,'components':[button('Trạng thái','status'),button('Quảng cáo mua','list:BUY'),
         button('Quảng cáo bán','list:SELL'),button('Tạm dừng bám giá','pause',4),button('Tiếp tục bám giá','resume',3)]})
     rows.append({'type':1,'components':[button('Nhập giá vốn MEXC','cost:SELL',1),button('Min bán · Max tự động','limits:SELL')]})
@@ -40,6 +40,9 @@ def panel():
 
 
 def modal(action, side):
+    if action == "follow":
+        from .nickname_target import modal as follow_modal
+        return follow_modal("mprice", side)
     if side not in {'BUY','SELL'} or action not in {'config','cost','price','rank','ad','limits'}:
         raise ValueError('Nút MEXC không hợp lệ.')
     if action == 'limits' and side == 'BUY':
@@ -72,6 +75,9 @@ async def execute_panel(payload, db, owner):
         action, side = parts[2:]
         if side not in {'BUY','SELL'}: raise ValueError('Chiều không hợp lệ.')
         values={x['custom_id']:x.get('value','').strip() for row in payload['data'].get('components',[]) for x in row.get('components',[])}
+        if action=='follow':
+            from .nickname_target import save
+            return save(db,'MEXC',side,values,owner)
         if action=='price':
             if values.get('slot') not in {'1','2'}:raise ValueError('Chọn slot 1 hoặc 2.')
             terms={key:str(input_number(values[key],money=key!='quantity')) for key in ('quantity','minimum','maximum') if values.get(key)}
@@ -101,6 +107,8 @@ async def execute_panel(payload, db, owner):
                 if not re.fullmatch(r'[0-9]{1,2}',values.get('rank','')) or not 1<=int(values['rank'])<=50:raise ValueError('Vị trí phải từ 1 đến 50.')
                 nickname=values.get('nickname') or slot.nickname or settings.mexc_merchant_nicknames.split(',')[0].strip()
                 if not nickname:raise ValueError('Nhập biệt danh MEXC để loại quảng cáo của chính bạn.')
+                from .nickname_target import clear
+                clear(db,'MEXC',side,values['slot'])
                 slot.rank=int(values['rank']);slot.nickname=nickname;slot.revision=uuid.uuid4().hex
                 db.add(OKXAuditLog(action='MEXC_PRICE_RANK',actor=actor,detail=f'{key} rank={slot.rank}'))
                 db.commit()
@@ -208,7 +216,9 @@ async def execute_panel(payload, db, owner):
         slots=db.scalars(select(MexcPriceSlot)).all()
         if not slots:text+='\nChưa chọn quảng cáo cho slot nào; chưa có slot bám giá.'
         for slot in slots:
-            text+=f'\n{slot.key}: {slot.ad} · vị trí {slot.rank} · Auto {slot.enabled} · {slot.state}'
+            from .nickname_target import summary
+            mode=summary(db,'MEXC',slot.key.split(':')[0],slot.key.split(':')[1]) or f'vị trí {slot.rank}'
+            text+=f'\n{slot.key}: {slot.ad} · {mode} · Auto {slot.enabled} · {slot.state}'
             if slot.state!='IDLE':text+='\nĐANG DỪNG vì kết quả yêu cầu cũ chưa rõ; không gửi đổi giá tiếp.'
             elif not slot.enabled:text+='\nAuto slot đang tắt.'
             if slot.state!='IDLE' and slot.wanted_price is not None:

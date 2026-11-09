@@ -182,11 +182,11 @@ async def handle_verified_payload(payload, background_tasks):
             return {'type':4,'data':{'content':'Dùng /gia bang rồi bấm các nút điều khiển MEXC.','flags':64}}
         if mexc_control and payload.get('type') == 3:
             parts = custom.split(':')
-            if len(parts)==3 and parts[1] in {'config','cost','price','rank','ad','limits'}:
+            if len(parts)==3 and parts[1] in {'config','cost','price','rank','ad','limits','follow'}:
                 return mexc_price_panel.modal(parts[1],parts[2])
         if pricing and payload.get('type') == 3:
             parts = data['custom_id'].split(':')
-            if len(parts)==3 and parts[1] in {'price','rank','ad','cost','limits'} and parts[2] in {'BUY','SELL'}:
+            if len(parts)==3 and parts[1] in {'price','rank','ad','cost','limits','follow'} and parts[2] in {'BUY','SELL'}:
                 return modal(parts[1],parts[2])
         text = '/gia' if pricing and payload.get('type') in {3,5} else command_text(data)
         if not payload.get("id") or not payload.get("token"):
