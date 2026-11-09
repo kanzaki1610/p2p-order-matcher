@@ -184,7 +184,9 @@ async def process_pricing(db, api, source):
             if claim.rowcount != 1:
                 db.rollback(); continue
             db.refresh(slot)
-            record_pending(db, slot, row, body, status=wanted_status, cause=cause,
+            # SHOW/HIDE only sends visibility, not the prepared repricing body.
+            # Recording its unused quantity/Max made successful SHOWs stay locked.
+            record_pending(db, slot, row, body if action=='PRICE' else {}, status=wanted_status, cause=cause,
                 expected_extra=expected_extra if action=='PRICE' else None)
             db.commit()
             db.refresh(slot)

@@ -67,16 +67,32 @@ def eligible(slot, pending):
         expected = json.loads(pending.expected_json)
         if slot.action in {'SHOW','HIDE'}:
             wanted = 'OPEN' if slot.action == 'SHOW' else 'CLOSE'
-            # Visibility calls have no quantity delta or price/terms payload.
-            # Keep the entire original intent in the confirmation/audit record.
-            if (body != {} or pending.cause not in {'PRICE','FLOOR','BUDGET'}
+            expected_quantity = before['body']['initQuantity']
+            if body:
+                # Legacy SHOW stored an unused repricing body. The exchange
+                # received only the absolute visibility operation. Recognize
+                # that exact form, never a relative quantity request.
+                numeric={'price','minSingleTransAmount','maxSingleTransAmount'}
+                preserved=set(before['body'])-numeric-{'initQuantity'}
+                if (slot.action!='SHOW' or pending.cause!='PRICE'
+                        or set(body)!=set(before['body'])|{'advStatus'}
+                        or body['advStatus']!=before['status']
+                        or any(body[k]!=before['body'][k] for k in preserved)
+                        or any(Decimal(body[k])!=Decimal(before['body'][k]) for k in numeric)
+                        or Decimal(before['frozen'])!=0
+                        or Decimal(body['initQuantity'])!=Decimal(before['available']
+                            if slot.key.startswith('SELL:') else before['body']['initQuantity'])):
+                    raise ValueError()
+                expected_quantity=body['initQuantity']
+            if (pending.cause not in {'PRICE','FLOOR','BUDGET'}
                     or before['body']['advNo'] != slot.ad
                     or before['body']['side'] != slot.key.split(':')[0]
                     or before['status'] != ('CLOSE' if slot.action == 'SHOW' else 'OPEN')
                     or expected['advStatus'] != wanted or slot.wanted_status != wanted
                     or Decimal(slot.wanted_price) != Decimal(expected['price'])
+                    or Decimal(expected['quantity']) != Decimal(expected_quantity)
                     or any(Decimal(expected[k]) != Decimal(before['body'][source]) for k,source in (
-                        ('price','price'), ('quantity','initQuantity'),
+                        ('price','price'),
                         ('minSingleTransAmount','minSingleTransAmount'),
                         ('maxSingleTransAmount','maxSingleTransAmount')))):
                 raise ValueError()
