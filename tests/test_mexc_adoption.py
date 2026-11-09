@@ -149,3 +149,107 @@ def test_closed_ad_adopted_without_reopening(db, scenario):
     _, nonce = preview(db)
     asyncio.run(adoption.confirm(db, 'owner', nonce))
     assert row['advStatus'] == 'CLOSE' and not slot.paused_by_floor and not slot.enabled
+
+
+@pytest.fixture(params=['SHOW','HIDE'])
+def visibility_scenario(db,scenario,request):
+    slot,row,read=scenario
+    action=request.param
+    slot.action=action;slot.state='CONFIRMING'
+    slot.wanted_status='OPEN' if action=='SHOW' else 'CLOSE'
+    old=dict(row,advStatus='CLOSE' if action=='SHOW' else 'OPEN')
+    slot.wanted_price=Decimal(old['price'])
+    record_pending(db,slot,old,{},status=slot.wanted_status,cause='PRICE')
+    db.commit()
+    row.update(price='26090',quantity='58218.6009',availableQuantity='20000',maxSingleTransAmount='499999999',advStatus='OPEN')
+    return slot,row,read
+
+
+def test_visibility_lock_can_be_explicitly_adopted_without_replaying(db,visibility_scenario):
+    slot,row,read=visibility_scenario
+    previous=adoption.record(slot,db.get(MexcPendingPrice,slot.key))
+    result,nonce=preview(db)
+    assert 'Khác cấu hình cũ' in result['content'] and '26,090' in result['content']
+    assert 'Hiển thị' in result['content']
+    assert slot.state=='CONFIRMING' and not slot.enabled
+    asyncio.run(adoption.confirm(db,'owner',nonce))
+    assert slot.state=='IDLE' and not slot.enabled
+    assert not slot.paused_by_floor
+    assert db.get(MexcPendingPrice,slot.key) is None
+    detail=json.loads(db.scalar(select(OKXAuditLog).where(OKXAuditLog.action=='MEXC_SLOT_ADOPTED')).detail)
+    assert detail['previous']['pending']==previous['pending']
+    assert detail['exchange_write'] is False and detail['old_result']=='UNRESOLVED'
+    assert row['advStatus']=='OPEN' and read.await_count==4
+
+
+@pytest.mark.parametrize('change',['body','status','quantity','side','attempt','young','frozen','wanted_price'])
+def test_visibility_adoption_rejects_bad_or_changed_intents(db,visibility_scenario,change):
+    slot,row,_=visibility_scenario
+    pending=db.get(MexcPendingPrice,slot.key)
+    expected=json.loads(pending.expected_json)
+    if change=='body':pending.body_json='{"supplyQuantity":"1"}'
+    if change=='status':expected['advStatus']='WRONG'
+    if change=='quantity':expected['quantity']='1'
+    if change=='side':
+        before=json.loads(pending.before_json);before['body']['side']='BUY';pending.before_json=json.dumps(before)
+    if change=='attempt':pending.attempt='other'
+    if change=='young':slot.last_action=Decimal(str(time.time()))
+    if change=='frozen':row['frozenQuantity']='1'
+    if change=='wanted_price':slot.wanted_price=Decimal('1')
+    pending.expected_json=json.dumps(expected);db.commit()
+    with pytest.raises(ValueError):preview(db)
+    assert slot.state=='CONFIRMING' and db.get(MexcPendingPrice,slot.key) is not None
+
+
+def test_check_recovery_directly_offers_owner_confirmation_for_visibility(db,visibility_scenario,monkeypatch):
+    slot,row,_=visibility_scenario
+    monkeypatch.setattr(panel,'recover',AsyncMock(return_value='Chưa khớp cấu hình cũ.'))
+    result=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:checkslot:SELL:1'}},db,'owner'))
+    assert 'Đã đọc hai lần' in result['content']
+    assert result['components'][0]['components'][0]['custom_id'].startswith('mprice:adoptconfirm:')
+    assert slot.state=='CONFIRMING' and not slot.enabled
+
+
+def test_recovery_explains_why_adoption_is_blocked_and_has_retry(db,visibility_scenario,monkeypatch):
+    slot,row,_=visibility_scenario
+    row['frozenQuantity']='1'
+    monkeypatch.setattr(panel,'recover',AsyncMock(return_value='Chưa khớp cấu hình cũ.'))
+    result=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:checkslot:SELL:1'}},db,'owner'))
+    assert 'giữ USDT' in result['content'] and 'Chưa thể nhận cấu hình' in result['content']
+    assert result['components'][0]['components'][0]['label']=='Kiểm tra lại'
+    assert slot.state=='CONFIRMING'
+
+
+def test_idle_sell_can_be_read_and_adopted_without_a_lock(db,scenario):
+    slot,row,_=scenario
+    db.delete(db.get(MexcPendingPrice,slot.key));slot.state='IDLE';db.commit()
+    _,nonce=preview(db)
+    asyncio.run(adoption.confirm(db,'owner',nonce))
+    assert not slot.enabled and slot.state=='IDLE'
+
+
+def test_diff_uses_numeric_equivalence_and_concise_field_names():
+    from app.mexc_price_recovery import difference_summary
+    row=dict(price=26090.0,quantity='58218.6009',minSingleTransAmount='50000000.0',maxSingleTransAmount=499999999,advStatus='OPEN')
+    expected=dict(price='25969',quantity='6936.4101',minSingleTransAmount='50000000',maxSingleTransAmount='180131632',advStatus='OPEN')
+    text=difference_summary(row,expected)
+    assert 'Giá: hồ sơ cũ 25,969 → hiện tại 26,090' in text
+    assert 'Tổng USDT' in text and 'Max:' in text
+    assert 'Min:' not in text and 'Hiển thị:' not in text
+
+
+def test_confirm_shows_explicit_operator_auto_button_but_does_not_enable(db,visibility_scenario):
+    slot,row,_=visibility_scenario
+    _,nonce=preview(db)
+    response=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:adoptconfirm:'+nonce}},db,'owner'))
+    assert response['components'][0]['components'][0]['custom_id']=='mprice:setauto:SELL:1:1'
+    assert slot.state=='IDLE' and not slot.enabled
+
+
+def test_closed_ad_confirmation_explains_exchange_step_without_enable_button(db,scenario):
+    slot,row,_=scenario;row['advStatus']='CLOSE'
+    _,nonce=preview(db)
+    response=asyncio.run(panel.execute_panel({'type':3,'data':{'custom_id':'mprice:adoptconfirm:'+nonce}},db,'owner'))
+    assert 'mở quảng cáo trên MEXC trước' in response['content']
+    assert not any('setauto' in b['custom_id'] for r in response['components'] for b in r['components'])
+    assert not slot.enabled
