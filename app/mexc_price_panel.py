@@ -25,6 +25,9 @@ def button(label, action, style=2):
 
 
 def panel():
+    from .primary_controls import panel as web_panel
+    replacement=web_panel("mprice","MEXC")
+    if replacement is not None:return replacement
     rows = []
     for side, label in [('BUY', 'Mua'), ('SELL', 'Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),
@@ -68,6 +71,9 @@ async def execute_panel(payload, db, owner):
     parts = str(payload.get('data',{}).get('custom_id','')).split(':')
     if not parts or parts[0] != 'mprice': raise ValueError('Nút MEXC không hợp lệ.')
     action = parts[1] if len(parts)>1 else ''
+    if action=='stopall':
+        from .primary_controls import stop_all
+        return {'content':stop_all(db,'discord:'+owner),'components':[]}
     actor = 'discord:'+owner
     from .models import OKXAuditLog
     if payload['type']==5:

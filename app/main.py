@@ -18,6 +18,7 @@ from .mexc_pricing import pricing_loop as mexc_pricing_loop
 from .buy_payment_qr import buy_payment_qr_loop, enabled as buy_qr_enabled
 from .database import Base, engine, ensure_runtime_schema, get_db
 from .dashboard import router as dashboard_router
+from .web_control import router as web_control_router
 from .matching import match_transaction
 from .models import BankTransaction, P2POrder
 from .schemas import BankTransactionIn, MatchResult, OrderCreate, OrderOut, SePayWebhookIn, SePayWebhookOut
@@ -31,6 +32,7 @@ Base.metadata.create_all(bind=engine)
 ensure_runtime_schema()
 app = FastAPI(title="P2P Multi-Exchange Matcher", version="1.5.3")
 app.include_router(dashboard_router)
+app.include_router(web_control_router)
 app.include_router(discord_router)
 bitget_task: asyncio.Task | None = None
 mexc_task: asyncio.Task | None = None

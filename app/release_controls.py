@@ -34,6 +34,11 @@ def release_enabled(db, *, lock=False):
 
 
 def panel():
+    from .primary_controls import panel as web_panel
+    replacement=web_panel("release","Auto mở khóa và bám giá")
+    if replacement is not None:
+        replacement["components"][0]["components"][2]["custom_id"]="release:status"
+        return replacement
     return {"content": (
         "ĐIỀU KHIỂN AUTO MỞ KHÓA · OKX + MEXC\n"
         "🔴 Tắt Auto: chặn yêu cầu mở khóa USDT mới; vẫn nhận tiền và đối chiếu.\n"
@@ -69,6 +74,12 @@ def resolve_account(payload):
 
 def apply_control(db, payload):
     custom = payload.get("data", {}).get("custom_id")
+    from .primary_controls import enabled as web_enabled, status as web_status
+    if custom=="release:status" and web_enabled():
+        return web_status(db)
+    if custom=="release:stopall":
+        from .primary_controls import stop_all
+        return stop_all(db,"discord:"+str(payload["member"]["user"]["id"]))
     if custom not in {"release:off", "release:on", "release:status"}:
         raise ValueError("Nút điều khiển không hợp lệ.")
     interaction = str(payload.get("id", ""))

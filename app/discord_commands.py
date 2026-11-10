@@ -141,7 +141,7 @@ async def discord_interaction(request: Request, background_tasks: BackgroundTask
     if str(payload.get('data', {}).get('custom_id', '')).startswith('release:'):
         if (payload.get('type') != 3 or not release_controls.resolve_account(payload)
                 or not str(payload.get('id', '')).isdigit() or not payload.get('token')
-                or payload.get('data', {}).get('custom_id') not in {'release:off', 'release:on', 'release:status'}):
+                or payload.get('data', {}).get('custom_id') not in {'release:off', 'release:on', 'release:status', 'release:stopall'}):
             return {'type': 4, 'data': {'content': 'Bạn không có quyền dùng nút Auto trong server/kênh này.', 'flags': 64}}
         background_tasks.add_task(run_release_control, payload)
         return {'type': 5, 'data': {'flags': 64}}

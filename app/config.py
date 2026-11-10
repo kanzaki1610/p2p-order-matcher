@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    primary_web_control_enabled: bool = False
     multi_account_enabled: bool = False
     database_schema: str = ""
     database_url: str = "sqlite:///./p2p_matcher.db"

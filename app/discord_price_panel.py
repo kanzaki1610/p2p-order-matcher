@@ -61,6 +61,9 @@ def button(label,code,style=2):
     return {'type':2,'style':style,'label':label,'custom_id':'price:'+code}
 
 def panel():
+    from .primary_controls import panel as web_panel
+    replacement=web_panel("price","OKX")
+    if replacement is not None:return replacement
     rows=[]
     for side,label in [('BUY','Mua'),('SELL','Bán')]:
         rows.append({'type':1,'components':[button('Đặt giá '+label,'price:'+side,1),button('Vị trí '+label,'rank:'+side),button('Chọn quảng cáo '+label,'ad:'+side),button('Auto '+label,'auto:'+side),button('Bám biệt danh '+label,'follow:'+side)]})
@@ -180,6 +183,9 @@ async def manual_confirm(db,owner,draft_id):
 async def execute_panel(payload,db,owner):
     code=payload['data']['custom_id'].split(':')
     action=code[1]
+    if action=='stopall':
+        from .primary_controls import stop_all
+        return {'content':stop_all(db,'discord:'+owner),'components':[]}
     if action=='form':
         action,side=code[2:4]
         values={x['custom_id']:x.get('value','') for row in payload['data'].get('components',[]) for x in row.get('components',[])}

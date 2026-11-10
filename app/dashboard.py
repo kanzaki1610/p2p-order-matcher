@@ -480,7 +480,8 @@ def compute_arbitrage_state(db: Session) -> dict:
 
 @router.get("/dashboard", include_in_schema=False)
 def dashboard_page():
-    return FileResponse(DASHBOARD_FILE)
+    from .primary_controls import enabled
+    return FileResponse(Path(__file__).with_name("control.html") if enabled() else DASHBOARD_FILE)
 
 
 @router.get("/dashboard/api/state")
