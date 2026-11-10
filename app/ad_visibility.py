@@ -52,9 +52,14 @@ def lamp(exchange,row):
         available=quantity(row.get('availableQuantity'))
         active=row.get('advStatus') in {'OPEN','CLOSE'}
         visible=row.get('advStatus')=='OPEN'
-    on=visible and available>0
-    reason='Đang hiển thị' if on else 'Hết USDT còn giao dịch' if available==0 else 'Đang ẩn / ngừng nhận lệnh'
-    return {'on':on,'available':str(available),'reason':reason,'can_show':active and available>0}
+    price=quantity(row.get('unitPrice' if exchange=='OKX' else 'price'))
+    minimum=quantity(row.get('minOrderSize' if exchange=='OKX' else 'minSingleTransAmount'))
+    if price<=0 or minimum<=0:raise ValueError('Chưa xác minh giá hoặc Min của quảng cáo.')
+    enough=available>0 and available*price>=minimum
+    on=visible and enough
+    reason=('Đang hiển thị' if on else 'Hết USDT còn giao dịch' if available==0 else
+            'USDT còn lại không đủ Min giao dịch' if not enough else 'Đang ẩn / ngừng nhận lệnh')
+    return {'on':on,'available':str(available),'reason':reason,'can_show':active and enough}
 
 
 def stop_unavailable(db,exchange,slot,row):
@@ -166,7 +171,7 @@ async def set_visibility(db,token,visible):
         row=await read_owned(api,exchange,code,side)
         state=lamp(exchange,row)
         if fingerprint(exchange,row)!=claims['snapshot']:raise ValueError('Quảng cáo đã đổi giá, số dư hoặc trạng thái. Đọc lại danh sách trước khi xác nhận.')
-        if visible and not state['can_show']:raise ValueError('Quảng cáo đã hết USDT hoặc không còn được phép mở. Không tự bổ sung số lượng.')
+        if visible and not state['can_show']:raise ValueError('Quảng cáo hết USDT, không đủ Min hoặc không còn được phép mở. Không tự bổ sung số lượng.')
         guard=lock_guard(db,exchange,code)
         if guard.state!='IDLE':raise ValueError('Yêu cầu hiện/ẩn cũ chưa rõ kết quả. Chỉ kiểm tra lại, không gửi lại.')
         if guard.revision!=claims['revision']:raise ValueError('Bản xác nhận đã dùng hoặc quảng cáo vừa được thao tác. Đọc lại danh sách.')
