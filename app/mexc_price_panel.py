@@ -93,6 +93,9 @@ async def execute_panel(payload, db, owner):
             if not re.fullmatch(r'[0-9]{1,12}',raw) or int(raw)<=0: raise ValueError('Nhập giá vốn nguyên dương, không dấu phân cách.')
             config=cost_settings(db);config.cost=Decimal(raw);config.revision=uuid.uuid4().hex
             db.add(OKXAuditLog(action='MEXC_PRICE_COST',actor=actor,detail='Giá vốn MEXC='+raw));db.commit()
+            from .cost_protection import enforced
+            if not enforced(db,'MEXC'):
+                return {'content':f'Đã lưu giá vốn MEXC {int(raw):,}đ để dùng lại; công tắc áp dụng vẫn tắt. Không thay giá vốn OKX.','components':[]}
             return {'content':f'Đã lưu giá vốn MEXC {int(raw):,}đ · bán tối thiểu {int(raw)+10:,}đ/USDT. Không thay giá vốn OKX.','components':[]}
         if action in {'rank','ad','limits'}:
             if values.get('slot') not in {'1','2'}: raise ValueError('Chọn slot 1 hoặc 2.')
@@ -163,7 +166,8 @@ async def execute_panel(payload, db, owner):
             if not settings.mexc_ad_pricing_enabled: raise ValueError('MEXC_AD_PRICING_ENABLED đang tắt trên Render.')
             if not valid_webhook(settings.discord_webhook_mexc_pricing):raise ValueError('Chưa cấu hình kênh cảnh báo giá MEXC; chưa bật Auto. Đặt giá thủ công vẫn dùng được.')
             if slot.state!='IDLE': raise ValueError('Kết quả yêu cầu cũ chưa rõ; kiểm tra MEXC trước.')
-            if parts[2]=='SELL' and cost_settings(db).cost is None: raise ValueError('Nhập giá vốn MEXC trước khi bật Auto bán.')
+            from .cost_protection import enforced
+            if parts[2]=='SELL' and enforced(db,'MEXC') and cost_settings(db).cost is None: raise ValueError('Nhập giá vốn MEXC trước khi bật Auto bán.')
             async with MexcP2PClient() as api: row=await read_ad(api,slot.ad,parts[2])
             if row['advStatus']!='OPEN': raise ValueError('Quảng cáo chưa OPEN; bạn cần mở trên MEXC trước.')
             update_body(row,number(row['price']))
@@ -233,7 +237,8 @@ async def execute_panel(payload, db, owner):
         text='MEXC · '+('Tính năng được bật trên Render' if settings.mexc_ad_pricing_enabled else 'Render đang tắt')+'\n'
         if not settings.discord_webhook_mexc_pricing:text+='Auto còn chờ cấu hình kênh cảnh báo. Đặt giá thủ công vẫn dùng được.\n'
         text+=('Bám giá chung: BẬT\n' if active(db) else 'Bám giá chung: TẠM DỪNG\n')
-        text+='Giá vốn riêng: '+(f'{config.cost:,.0f}đ · sàn bán {config.cost+10:,.0f}đ' if config.cost else 'chưa nhập')
+        from .cost_protection import enforced
+        text+='Giá vốn riêng: '+('đang tắt áp dụng; giữ giá đã nhập' if not enforced(db,'MEXC') else f'{config.cost:,.0f}đ · sàn bán {config.cost+10:,.0f}đ' if config.cost else 'chưa nhập')
         slots=db.scalars(select(MexcPriceSlot)).all()
         if not slots:text+='\nChưa chọn quảng cáo cho slot nào; chưa có slot bám giá.'
         for slot in slots:

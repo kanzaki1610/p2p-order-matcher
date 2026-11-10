@@ -112,7 +112,7 @@ async def manual_preview(db,owner,side,slot_number,price,terms=None):
         if ad['side']!=side.lower() or ad.get('type')!='limit' or ad.get('status')!='new' or type(ad.get('isHidden')) is not bool: raise ValueError('Quảng cáo sai chiều hoặc không còn hoạt động với giá cố định.')
         if side=='SELL':
             cost=await read_pricing_cost(db,client,reader=read_last_buy_cost)
-            if price<number(cost['unit_price'])+10: raise ValueError('Giá bán phải đạt giá vốn đang chọn +10đ.')
+            if cost.get('mode')!='DISABLED' and price<number(cost['unit_price'])+10: raise ValueError('Giá bán phải đạt giá vốn đang chọn +10đ.')
     snapshot=ad_snapshot(ad)
     lower=terms.get('minOrderLimit') or snapshot['minOrderLimit']
     upper=terms.get('maxOrderLimit') or snapshot['maxOrderLimit']
@@ -144,7 +144,7 @@ async def manual_confirm(db,owner,draft_id):
         if stored and ad_snapshot(ad)!=json.loads(stored.snapshot_json): raise ValueError('Giá/số lượng/hạn mức đã thay đổi từ lúc xem trước; hãy tạo xác nhận mới.')
         if slot.side=='SELL':
             cost=await read_pricing_cost(db,client,reader=read_last_buy_cost)
-            if draft.price<number(cost['unit_price'])+10: raise ValueError('Giá vốn mới không cho phép giá bán này.')
+            if cost.get('mode')!='DISABLED' and draft.price<number(cost['unit_price'])+10: raise ValueError('Giá vốn mới không cho phép giá bán này.')
         attempt=db.get(OKXAdPriceAttempt,slot.id)
         if attempt is None:
             attempt=OKXAdPriceAttempt(slot_id=slot.id,state='IDLE');db.add(attempt);db.commit()

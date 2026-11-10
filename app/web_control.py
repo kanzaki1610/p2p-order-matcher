@@ -29,6 +29,7 @@ from .nickname_target import target, plan_options
 from .okx_rank import read_rank_plan, plan_rank_price
 from .diagnostics import error_detail
 from . import ad_visibility
+from . import cost_protection
 
 OWNER='web:primary'
 logger=logging.getLogger('uvicorn.error.web_control')
@@ -81,7 +82,7 @@ async def visibility_check(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SE
 
 class Action(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    action: Literal['ad','rank','follow','cost','limits','manual','manual_confirm','manual_cancel',
+    action: Literal['ad','rank','follow','cost','cost_switch','limits','manual','manual_confirm','manual_cancel',
         'recover','adopt_preview','adopt_confirm','adopt_cancel','auto','pause','resume','stop_all','release']
     exchange: Literal['OKX','MEXC']='OKX'
     side: Literal['BUY','SELL']='BUY'
@@ -125,7 +126,7 @@ def snapshot(db):
         ready=settings.okx_ad_pricing_enabled if exchange=='OKX' else settings.mexc_ad_pricing_enabled
         switch=switches[exchange]
         block={'enabled_on_server':ready,'pricing_enabled':switch.enabled if switch else True,
-            'cost':str(value) if value is not None else None,'scan_seconds':max(5,settings.okx_ad_pricing_seconds if exchange=='OKX' else settings.mexc_ad_pricing_seconds),
+            'cost':str(value) if value is not None else None,'cost_enabled':cost_protection.enforced(db,exchange),'scan_seconds':max(5,settings.okx_ad_pricing_seconds if exchange=='OKX' else settings.mexc_ad_pricing_seconds),
             'write_seconds':max(30,settings.okx_ad_min_update_seconds if exchange=='OKX' else settings.mexc_ad_min_update_seconds),'slots':[]}
         for side in ['BUY','SELL']:
             for n in [1,2]:
@@ -177,7 +178,7 @@ def translate(result, exchange, side, slot):
 async def dispatch(db, data):
     action,exchange,side,n=data.action,data.exchange,data.side,data.slot
     enabling=action=='resume' or action in {'auto','release'} and data.enabled is True
-    if (enabling or action=='manual_confirm') and not data.acknowledge:
+    if (enabling or action in {'manual_confirm','cost_switch'}) and not data.acknowledge:
         raise ValueError('Bạn cần xác nhận thao tác này trước khi cho phép thay đổi thật.')
     if enabling:
         from .release_controls import switch_row
@@ -186,9 +187,10 @@ async def dispatch(db, data):
             raise ValueError('Công tắc dừng vừa thay đổi. Làm mới trạng thái rồi xác nhận lại; không dùng yêu cầu bật cũ.')
     if action in {'manual_confirm','manual_cancel','adopt_confirm','adopt_cancel'} and not data.draft_id:
         raise ValueError('Thiếu bản xem trước cần xác nhận.')
-    if action in {'auto','release'} and data.enabled is None:
+    if action in {'auto','release','cost_switch'} and data.enabled is None:
         raise ValueError('Chọn bật hoặc tắt.')
     if action=='stop_all':return {'message':primary_controls.stop_all(db,OWNER),'choices':[]}
+    if action=='cost_switch':return {'message':cost_protection.set_enabled(db,exchange,data.enabled,OWNER),'choices':[]}
     if action=='release':
         primary_controls.set_release(db,data.enabled,OWNER);db.commit()
         return {'message':'Auto mở khóa '+('bật' if data.enabled else 'tắt')+' cho tài khoản của bạn. Yêu cầu đã gửi trước đó có thể vẫn hoàn tất.','choices':[]}
@@ -266,7 +268,7 @@ async def live(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],n:int,d
                 basis=cost.unit_price if cost and cost.enabled else None
                 prefs=db.get(OKXPricePreferences,1)
                 rank=getattr(prefs,side.lower()+'_rank') if prefs else 10
-                async def plan():return await read_rank_plan(client,side,basis if side=='SELL' else None,target_rank=rank,**plan_options(follow))
+                async def plan():return await read_rank_plan(client,side,basis if side=='SELL' else None,target_rank=rank,**plan_options(follow),**({'enforce_cost':False} if not cost_protection.enforced(db,'OKX') else {}))
             else:
                 from .mexc import MexcP2PClient
                 from .mexc_ads import read_ad
@@ -275,7 +277,7 @@ async def live(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],n:int,d
                     'quantity':amount(row.get('quantity')),'available':amount(row.get('availableQuantity')),
                     'frozen':amount(row.get('frozenQuantity')),'minimum':amount(row.get('minSingleTransAmount')),'maximum':amount(row.get('maxSingleTransAmount'))}
                 cost=db.get(MexcPriceSettings,1)
-                async def plan():return await rank_plan(client,slot,cost.cost if cost and side=='SELL' else None,follow=follow)
+                async def plan():return await rank_plan(client,slot,cost.cost if cost and side=='SELL' else None,follow=follow,**({'enforce_cost':False} if not cost_protection.enforced(db,'MEXC') else {}))
             try:proposal=await plan()
             except Exception as error:proposal={'action':'BLOCKED','reason':safe_error(error),'proposed_price':None}
         return {'exchange':exchange,'side':side,'slot':n,'read_at':time.time(),'ad':ad,

@@ -61,7 +61,7 @@ def instruction(exchange, code, amount, payment, holder, counterparty, deadline=
 def okx_instruction(row, code, counterparty=None):
     if not isinstance(row, dict) or str(row.get('orderId')) != code:
         raise ValueError('Chi tiết OKX không khớp mã lệnh.')
-    if str(row.get('side')).upper() != 'BUY' or row.get('cryptoCurrency') != 'USDT' or row.get('fiatCurrency') != 'VND':
+    if str(row.get('side')).upper() != 'BUY' or str(row.get('cryptoCurrency')).upper() != 'USDT' or str(row.get('fiatCurrency')).upper() != 'VND':
         raise ValueError('Không phải lệnh Mua USDT/VND của tài khoản OKX này.')
     if row.get('orderStatus') in {'cancelled', 'completed'} or row.get('paymentStatus') in {'paid', 'confirmed', 'unreceived'}:
         raise InactiveOrder('Lệnh đã hủy, hoàn tất hoặc đã báo thanh toán; QR đã được bỏ.')
@@ -80,7 +80,7 @@ def okx_instruction(row, code, counterparty=None):
             str(party.get('userId')) != str(original['userId'])):
         raise ValueError('Người nhận OKX không khớp đối tác của lệnh.')
     p = party.get('takerPaymentMethod')
-    if not isinstance(p, dict) or p.get('type') != 'BANK' or p.get('currency') != 'VND' or p.get('isDisabled') not in {False, 'false'}:
+    if not isinstance(p, dict) or str(p.get('type')).upper() != 'BANK' or str(p.get('currency')).upper() != 'VND' or p.get('isDisabled') not in {False, 'false'}:
         raise ValueError('Chưa có phương thức ngân hàng VND hợp lệ của người bán OKX.')
     return instruction('OKX', code, row.get('fiatAmount'), p,
         p.get('accountName'), party.get('realName'), absolute_time(row.get('expiryTimeInSeconds')))

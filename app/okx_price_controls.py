@@ -204,9 +204,9 @@ async def execute_price_command(data, db, user_id):
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
             cost = await read_pricing_cost(db,client,reader=read_last_buy_cost) if side == "SELL" else None
-            plan = await read_rank_plan(client, side, cost["unit_price"] if cost else None, target_rank=rank)
+            plan = await read_rank_plan(client, side, cost["unit_price"] if cost else None, target_rank=rank,**({'enforce_cost':False} if cost and cost.get('mode')=='DISABLED' else {}))
         reply += f"\n{side} · vị trí {rank} · giá tham chiếu: {plan.get('proposed_price') or 'chưa có'}đ/USDT."
-        if cost: reply += f"\nGiá vốn {cost['unit_price']}đ · bán tối thiểu {plan.get('minimum_sell_price') or 'chưa xác minh'}đ."
+        if cost: reply += '\nĐang tắt áp dụng giá vốn +10đ.' if cost.get('mode')=='DISABLED' else f"\nGiá vốn {cost['unit_price']}đ · bán tối thiểu {plan.get('minimum_sell_price') or 'chưa xác minh'}đ."
         reply += "\n" + {"UPDATE_PRICE":"Nguồn giá hợp lệ để bám theo khi tính năng được bật.","HIDE_AD":"Giá bán dưới mức tối thiểu; bot sẽ giữ/tạm ẩn khi bám giá được bật.","BLOCKED":"Chưa đủ dữ liệu; chưa sửa/ẩn theo nguồn này."}[plan["action"]]
     except Exception as error:
         reply += "\nVị trí vẫn đã lưu; chưa xác minh được giá tham chiếu: " + error_detail(error)

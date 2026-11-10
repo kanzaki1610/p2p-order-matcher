@@ -175,7 +175,7 @@ async def read_payment(client, mexc, record):
         except InactiveOrder:
             raise
         except ValueError:
-            if (row.get('side') != 'buy' or row.get('orderStatus') != 'new'
+            if (str(row.get('side')).lower() != 'buy' or row.get('orderStatus') != 'new'
                     or row.get('paymentStatus') != 'unpaid' or row.get('isFrozen') is not False):
                 raise
         party = await request(client,'GET','/api/v5/p2p/order/counterparty-user-info?' +
@@ -204,8 +204,8 @@ async def discover(db, client, mexc):
             for page in range(1,11):
                 rows = await read_orders(client,page)
                 candidates += [('OKX',str(x.get('orderId')),absolute_time(x.get('createdTimestamp')))
-                    for x in rows if x.get('side')=='buy' and x.get('cryptoCurrency')=='USDT'
-                    and x.get('fiatCurrency')=='VND' and x.get('orderStatus')=='new']
+                    for x in rows if str(x.get('side')).lower()=='buy' and str(x.get('cryptoCurrency')).upper()=='USDT'
+                    and str(x.get('fiatCurrency')).upper()=='VND' and x.get('orderStatus')=='new']
                 if len(rows)<100:break
         except Exception:
             logger.warning('BUY QR OKX discovery incomplete')

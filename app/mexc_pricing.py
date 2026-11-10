@@ -68,7 +68,7 @@ async def alert(db, slot, reason, suffix=''):
         sender=lambda event, body: send_discord_message(event, body))
 
 
-async def rank_plan(client, slot, cost, follow=None):
+async def rank_plan(client, slot, cost, follow=None, enforce_cost=True):
     side = slot.key.split(':')[0]
     response = await client.get('https://autop2p.biz/', params={'api':'panel','panel':'mexc_'+side.lower()})
     response.raise_for_status()
@@ -80,7 +80,7 @@ async def rank_plan(client, slot, cost, follow=None):
     normalized = {**data, 'exchange':'okx', 'side':side.lower(), 'panel':'okx_'+side.lower()}
     if data.get('cache') == 'new': normalized['cache'] = 'fresh'
     kwargs = plan_options(follow)
-    return plan_rank_price(normalized, side, cost, own_nickname=slot.nickname, target_rank=slot.rank, **kwargs)
+    return plan_rank_price(normalized, side, cost, own_nickname=slot.nickname, target_rank=slot.rank,enforce_cost=enforce_cost, **kwargs)
 
 
 async def confirm(db, api, slot):
@@ -147,10 +147,13 @@ async def process_pricing(db, api, source):
                 continue  # Never reopen manually closed or low-stock advertisements.
             config = cost_settings(db)
             cost, revision, slot_revision = config.cost, config.revision, slot.revision
-            if side == 'SELL' and cost is None:
+            from .cost_protection import enforced
+            protect=enforced(db,'MEXC')
+            if side == 'SELL' and cost is None and protect:
                 raise ValueError('Chưa nhập giá vốn MEXC riêng; chưa chỉnh hoặc ẩn quảng cáo bán.')
             follow = nickname_target(db,'MEXC',side,slot.key.split(':')[1])
             kwargs = {'follow':follow} if follow else {}
+            if not protect:kwargs['enforce_cost']=False
             plan = await rank_plan(source, slot, cost if side=='SELL' else None, **kwargs)
             if plan['action']=='BLOCKED': raise ValueError(plan['reason'])
             current, proposed = number(row['price']), number(plan['proposed_price'])

@@ -132,11 +132,16 @@ async def sync_orders(db, client):
             state = str(row.get("orderStatus")) + ":" + str(row.get("paymentStatus"))
             if receipt.notified_state == state:
                 continue
-            text = (f"LỆNH OKX P2P\nMã lệnh: {order.order_code}\nChiều: {order.side}\n"
+            perspective=('BẠN MUA USDT · ĐỐI TÁC BÁN USDT' if order.side=='BUY' else 'BẠN BÁN USDT · ĐỐI TÁC MUA USDT' if order.side=='SELL' else order.side)
+            text = (f"LỆNH OKX P2P · {perspective}\nMã lệnh: {order.order_code}\nChiều: {order.side}\n"
                     f"Số tiền: {order.fiat_amount:,.0f} VND\nUSDT: {order.crypto_amount}\n"
                     f"Khách: {order.counterparty_name}\nNgân hàng nhận: {order.expected_bank or 'Chưa xác minh'}\n"
                     f"Trạng thái OKX: {state}\nThời gian VN: {format_vietnam_time(order.created_at)}\n"
                     "Chưa thực hiện mở khóa USDT")
+            if order.side=='BUY':
+                from .buy_payment_qr import enabled as qr_enabled
+                if qr_enabled() and settings.discord_buy_payment_channel_id:
+                    text+='\nQR chuyển khoản: <#'+settings.discord_buy_payment_channel_id+'> · chỉ khi đang chờ bạn thanh toán.'
             if await notify_event("ORDER_CREATED", text):
                 receipt.notified_state = state
                 db.commit()

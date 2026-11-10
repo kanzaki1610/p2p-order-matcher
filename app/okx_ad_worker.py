@@ -62,7 +62,7 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
         reference = (f"{plan['target_nickname']} {plan['price_offset']:+d}đ" if plan.get('target_nickname') else f"vị trí {plan.get('target_rank', 10)}")
         text += f"\nGiá theo {reference}: {plan.get('proposed_price')}đ/USDT"
         if plan.get("cost_source"):
-            text += '\nNguồn giá vốn: '+('nhập thủ công' if plan['cost_source'].get('mode')=='MANUAL' else 'lệnh mua OKX '+plan['cost_source']['order_id'])
+            text += '\nNguồn giá vốn: '+('đang tắt áp dụng' if plan['cost_source'].get('mode')=='DISABLED' else 'nhập thủ công' if plan['cost_source'].get('mode')=='MANUAL' else 'lệnh mua OKX '+plan['cost_source']['order_id'])
         if plan.get("minimum_sell_price"):
             text += f"\nGiá vốn: {plan['cost_basis']}đ · giá bán tối thiểu: {plan['minimum_sell_price']}đ"
     if await send_discord_message("PRICING_ALERT", text):
@@ -188,7 +188,8 @@ async def process_ad_pricing(db, client):
             rank = selected_rank(db, slot.side)
             follow = nickname_target(db, 'OKX', slot.side, slot.slot_number)
             kwargs = plan_options(follow)
-            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" else None, target_rank=rank, **kwargs)
+            if cost and cost.get('mode')=='DISABLED':kwargs['enforce_cost']=False
+            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" and cost['unit_price'] is not None else None, target_rank=rank, **kwargs)
             if slot.side == "SELL":
                 plan["cost_source"] = cost
             if plan["action"] == "BLOCKED":

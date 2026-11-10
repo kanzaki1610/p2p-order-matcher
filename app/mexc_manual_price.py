@@ -62,7 +62,8 @@ def manual_body(row, price, terms):
 
 def validate_floor(db,side,price):
     config=cost_settings(db)
-    if side=='SELL' and (config.cost is None or price<config.cost+10):
+    from .cost_protection import enforced
+    if side=='SELL' and enforced(db,'MEXC') and (config.cost is None or price<config.cost+10):
         raise ValueError('Nhập giá vốn MEXC trước; giá bán phải đạt giá vốn MEXC +10đ.')
     return config.revision
 

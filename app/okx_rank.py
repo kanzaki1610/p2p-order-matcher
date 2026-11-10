@@ -10,7 +10,7 @@ MIN_SPREAD = Decimal("10")
 SOURCE_MAX_AGE = 30
 
 
-def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0):
+def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True):
     from .nickname_target import validate_target, validate_bound
     if target_nickname is not None:
         target_nickname, price_offset = validate_target(target_nickname, str(price_offset))
@@ -82,7 +82,9 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
     reference = (f"{target_nickname} {price_offset:+d}đ" if target_nickname is not None else f"vị trí {target_rank}")
     if target_nickname is not None and price_bound:
         reference += f"; {'sàn bán' if side == 'SELL' else 'trần mua'} {price_bound:,}đ"
-    if side == "SELL":
+    if type(enforce_cost) is not bool:raise ValueError('Công tắc giá vốn không hợp lệ.')
+    base['cost_protection_enabled']=enforce_cost
+    if side == "SELL" and enforce_cost:
         if cost_basis is None:
             return {**base, "reason": "Chưa có giá vốn thực tế; không suy đoán giá vốn hoặc tự sửa/ẩn quảng cáo."}
         cost = number(cost_basis)
@@ -95,10 +97,10 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
                 "Đề xuất tạm ẩn quảng cáo và báo kênh cảnh báo giá; chưa gửi yêu cầu ẩn thật."}
     return {**base, "action": "UPDATE_PRICE", "reason":
         f"Đề xuất bám giá theo {reference} sau khi loại quảng cáo của mình. "
-        "Chênh giá 10đ là trước phí nếu có. Chưa gửi yêu cầu sửa thật."}
+        +("Chênh giá 10đ là trước phí nếu có. " if enforce_cost else "Đang tắt áp dụng giá vốn +10đ. ")+"Chưa gửi yêu cầu sửa thật."}
 
 
-async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0):
+async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True):
     side = side.upper()
     if side not in {"BUY", "SELL"}:
         raise ValueError("Chiều quảng cáo phải là BUY hoặc SELL")
@@ -106,7 +108,7 @@ async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK,
     response.raise_for_status()
     from .config import settings
     own_nickname = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
-    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound)
+    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound,enforce_cost=enforce_cost)
 
 
 async def send_preview_alert(plan):

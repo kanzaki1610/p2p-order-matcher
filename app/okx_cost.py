@@ -97,6 +97,8 @@ def cost_revision(db):
 def cost_summary(db):
     from .models import OKXManualCost
     row = db.get(OKXManualCost, 1, populate_existing=True)
+    from .cost_protection import enforced
+    if not enforced(db,'OKX'):return 'Đang tắt áp dụng giá vốn OKX +10đ; giữ giá vốn đã nhập để dùng lại.'
     if row and row.enabled:
         price = number(row.unit_price)
         return f'Giá vốn thủ công: {price:,.0f}đ/USDT · bán tối thiểu {price+10:,.0f}đ.'
@@ -134,6 +136,9 @@ async def read_pricing_cost(db, client, *, reader=None):
     from .models import OKXManualCost
     row = db.get(OKXManualCost, 1, populate_existing=True)
     revision = row.revision if row else None
+    from .cost_protection import enforced
+    if not enforced(db,'OKX'):
+        return {'unit_price':None,'mode':'DISABLED','order_id':'không áp dụng','settings_revision':revision}
     if row and row.enabled:
         price = number(row.unit_price)
         return {'unit_price':str(price), 'mode':'MANUAL', 'order_id':'thủ công', 'settings_revision':revision}
