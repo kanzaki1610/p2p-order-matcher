@@ -54,16 +54,15 @@ def vn_time(value=None):
 def message_body(info):
     stamp = vn_time()
     fields = [('Lệnh', info.code), ('Ngân hàng', info.bank), ('Số tài khoản', info.account),
-              ('Người nhận', info.holder), ('Số tiền', f'{int(info.amount):,} VND'),
-              ('Nội dung gợi ý · mã lệnh', info.note)]
+              ('Người nhận', info.holder), ('Số tiền', f'{int(info.amount):,} VND')]
     if info.deadline:
         fields.append(('Hạn thanh toán VN', vn_time(info.deadline)))
     return {'content': f'{info.exchange} · MUA USDT · CHỜ BẠN THANH TOÁN',
         'allowed_mentions': {'parse': []},
         'embeds': [{'title': 'QR chuyển khoản cho người bán USDT',
-            'description': 'Mở lệnh trên sàn và đối chiếu người nhận, số tiền, nội dung yêu cầu trước khi quét. '
+            'description': 'Mở lệnh trên sàn và đối chiếu người nhận, số tiền trước khi quét. '
                 'Bạn tự xác nhận trong ứng dụng ngân hàng; bot không chuyển tiền hoặc báo đã thanh toán.',
-            'fields': [{'name': k, 'value': str(v), 'inline': k not in {'Người nhận','Nội dung gợi ý · mã lệnh'}} for k,v in fields],
+            'fields': [{'name': k, 'value': str(v), 'inline': k != 'Người nhận'} for k,v in fields],
             'image': {'url': 'attachment://payment.png'},
             'footer': {'text': 'Đọc API lúc ' + stamp + ' VN · Không dùng QR cũ khi lệnh thay đổi.'}}],
         'attachments': [{'id': 0, 'filename': 'payment.png'}]}
@@ -247,7 +246,7 @@ async def process(db, client, mexc, delivery, record):
         new=fingerprint(asdict(info))
         if new==record.fingerprint and record.message and not record.delivery_unknown:
             return
-        image=png_bytes(payload(info.bank_bin,info.account,info.amount,info.note))
+        image=png_bytes(payload(info.bank_bin,info.account,info.amount))
         # Re-read after rendering, before posting a new or changed payable QR.
         if await read_payment(client,mexc,record)!=info:
             raise ValueError('Lệnh/tài khoản nhận tiền vừa thay đổi; chưa tạo QR, chờ kiểm tra lại.')

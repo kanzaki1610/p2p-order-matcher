@@ -51,11 +51,11 @@ def instruction(exchange, code, amount, payment, holder, counterparty, deadline=
     holder, counterparty = clean_name(holder), clean_name(counterparty)
     if '*' in holder or not same_name(holder, counterparty):
         raise ValueError('Tên chủ tài khoản không khớp người bán xác minh trên sàn; kiểm tra thủ công, chưa tạo QR.')
-    note = code if exchange == 'OKX' else code.removeprefix('d')
-    if not re.fullmatch(r'\d{5,40}', note):
+    reference = code if exchange == 'OKX' else code.removeprefix('d')
+    if not re.fullmatch(r'\d{5,40}', reference):
         raise ValueError('Mã lệnh không hợp lệ; chưa tạo nội dung QR.')
     return PaymentInstruction(exchange, code, integer_amount(amount), bank['short_name'],
-                              bank['bin'], account, holder, note, deadline)
+                              bank['bin'], account, holder, '', deadline)
 
 
 def okx_instruction(row, code, counterparty=None):
