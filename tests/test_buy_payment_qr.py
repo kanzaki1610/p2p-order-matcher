@@ -84,6 +84,39 @@ def test_local_qr_round_trip_and_no_remote_image_url():
     assert not body.get('components')
 
 
+@pytest.mark.parametrize('exchange',['OKX','MEXC'])
+def test_payment_qr_omits_memo_template_but_keeps_bank_account_and_amount(exchange):
+    item=info() if exchange=='OKX' else data.mexc_instruction(mexc(),'d123456789','SELL')
+    assert item.note==''
+    text=vietqr.payload(item.bank_bin,item.account,item.amount)
+    fields={};offset=0
+    while offset<len(text):
+        tag=text[offset:offset+2];size=int(text[offset+2:offset+4]);offset+=4
+        fields[tag]=text[offset:offset+size];offset+=size
+    assert '62' not in fields
+    assert fields['54']==item.amount and item.account in fields['38'] and item.bank_bin in fields['38']
+    assert item.code not in text
+    body=worker.message_body(item)
+    assert not any('Nội dung' in x['name'] for x in body['embeds'][0]['fields'])
+    assert any(x['name']=='Lệnh' and x['value']==item.code for x in body['embeds'][0]['fields'])
+
+
+def test_existing_unpaid_qr_with_old_order_memo_is_updated_in_same_message(db,monkeypatch):
+    from dataclasses import replace
+    row=record(db);row.message='555'
+    row.fingerprint=worker.fingerprint(asdict(replace(info(),note=info().code)))
+    db.commit()
+    send=SimpleNamespace(send=AsyncMock(return_value=True))
+    monkeypatch.setattr(worker,'read_payment',AsyncMock(return_value=info()))
+    asyncio.run(worker.process(db,None,None,send,row))
+    assert send.send.await_count==1 and row.message=='555'
+    assert row.fingerprint==worker.fingerprint(asdict(info()))
+    zxingcpp=pytest.importorskip('zxingcpp')
+    from PIL import Image
+    decoded=zxingcpp.read_barcode(Image.open(BytesIO(send.send.call_args.args[3]))).text
+    assert info().code not in decoded
+
+
 @pytest.mark.parametrize('bank',['MB','MBBank','970422','Ngân hàng TMCP Quân đội'])
 def test_exact_bank_aliases(bank):assert vietqr.resolve_bank(bank)['bin']=='970422'
 
@@ -130,7 +163,7 @@ def test_okx_extra_counterparty_must_match(change):
 
 def test_mexc_receiving_account_and_selected_method():
     row=mexc();item=data.mexc_instruction(row,'d123456789','SELL')
-    assert item.account=='00123456789' and item.note=='123456789'
+    assert item.account=='00123456789' and item.note==''
     row['confirmPaymentInfo']=dict(row['paymentInfo'][0])
     assert data.mexc_instruction(row,'d123456789','SELL')==item
     row['confirmPaymentInfo']['account']='9999999'
