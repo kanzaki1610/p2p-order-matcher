@@ -21,6 +21,8 @@ def ox(hidden=False,available='100'):
 @pytest.mark.parametrize('exchange,row,on,can_show',[
     ('OKX',ox(),True,True),('OKX',ox(True),False,True),('OKX',ox(available='0'),False,False),
     ('OKX',dict(ox(),status='cancelled'),False,False),('MEXC',ad(),True,True),
+    ('OKX',ox(available='0.01'),False,False),
+    ('MEXC',dict(ad(),availableQuantity='0.01'),False,False),
     ('MEXC',ad(status='CLOSE'),False,True),('MEXC',ad(status='LOW_STOCK'),False,False),
     ('MEXC',dict(ad(),availableQuantity='0'),False,False)])
 def test_lamps_depend_on_exchange_visibility_and_remaining_stock(exchange,row,on,can_show):
