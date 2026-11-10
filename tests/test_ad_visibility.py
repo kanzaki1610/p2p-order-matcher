@@ -146,7 +146,7 @@ def test_hidden_auto_stop_does_not_change_secondary_account(client,monkeypatch):
 def test_list_lights_hidden_empty_and_unknown_and_never_exposes_bank_data(client,exchange_io,monkeypatch):
     rows=[ad(),dict(ad(status='CLOSE'),advNo='a222'),dict(ad(),advNo='a333',availableQuantity='0'),dict(ad(),advNo='a444',availableQuantity=None)]
     rows[0]['paymentInfo']=[{'accountNo':'PRIVATE-ACCOUNT'}]
-    monkeypatch.setattr(vis,'owned_list',AsyncMock(return_value=rows))
+    monkeypatch.setattr(vis,'owned_list',AsyncMock(return_value=(rows,False)))
     r=client.get('/dashboard/api/control/advertisements/MEXC/SELL')
     assert r.status_code==200
     cards={x['ad_id']:x for x in r.json()['rows']}
@@ -160,11 +160,57 @@ def test_list_lights_hidden_empty_and_unknown_and_never_exposes_bank_data(client
 
 def test_okx_list_does_not_assume_active_list_means_visible(client,exchange_io,monkeypatch):
     raw=ox();raw.pop('isHidden')
-    monkeypatch.setattr(vis,'owned_list',AsyncMock(return_value=[raw]))
+    monkeypatch.setattr(vis,'owned_list',AsyncMock(return_value=([raw],False)))
     read=AsyncMock(return_value=ox(True));monkeypatch.setattr(vis,'read_owned',read)
     r=client.get('/dashboard/api/control/advertisements/OKX/BUY')
     assert r.status_code==200 and r.json()['rows'][0]['on'] is False
     read.assert_awaited_once()
+
+
+def test_mexc_pagination_is_one_request_per_page_and_reports_more(client,exchange_io):
+    api=type('API',(),{'request':AsyncMock(return_value=[dict(ad(),advNo='a'+str(i)) for i in range(10)])})()
+    rows,more=asyncio.run(vis.owned_list(api,'MEXC','SELL',3))
+    assert len(rows)==10 and more
+    api.request.assert_awaited_once_with('/api/v3/fiat/merchant/ads/pagination',params={'page':3,'limit':10,'fiatUnit':'VND'})
+
+
+def test_ad_page_is_bounded_and_newest_hidden_ad_is_first(client,exchange_io,monkeypatch):
+    rows=[dict(ad(status='CLOSE'),advNo='a100'),dict(ad(status='CLOSE'),advNo='a300')]
+    read=AsyncMock(return_value=(rows,True));monkeypatch.setattr(vis,'owned_list',read)
+    result=client.get('/dashboard/api/control/advertisements/MEXC/SELL?page=2').json()
+    assert result['page']==2 and result['has_more'] and result['rows'][0]['ad_id']=='a300'
+    assert read.call_args.args[-1]==2
+    assert client.get('/dashboard/api/control/advertisements/MEXC/SELL?page=0').status_code==422
+
+
+def test_old_visibility_check_cannot_clear_a_newer_operation(client,exchange_io,monkeypatch):
+    with client.factory() as db:
+        db.add(vis.AdVisibilityGuard(key='OKX:123',revision='old',state='UNKNOWN',wanted=False,before='{"price":"26000"}'));db.commit()
+    async def read(*args):
+        with client.factory() as db:
+            guard=db.get(vis.AdVisibilityGuard,'OKX:123');guard.revision='new';guard.wanted=True;db.commit()
+        return ox(False)
+    monkeypatch.setattr(vis,'read_owned',read)
+    assert client.post('/dashboard/api/control/visibility-check/OKX/BUY/123').status_code==400
+    with client.factory() as db:assert db.get(vis.AdVisibilityGuard,'OKX:123').state=='UNKNOWN'
+    exchange_io.assert_not_awaited()
+
+
+def test_delayed_post_readback_cannot_clear_a_newer_visibility_operation(client,exchange_io,monkeypatch):
+    calls=0
+    async def read(*args):
+        nonlocal calls
+        calls+=1
+        if calls==3:
+            with client.factory() as db:
+                guard=db.get(vis.AdVisibilityGuard,'OKX:123');guard.revision='new';guard.state='UNKNOWN';db.commit()
+            return ox(True)
+        return ox(False)
+    monkeypatch.setattr(vis,'read_owned',read)
+    result=send(client,token(client,'OKX',ox(False)),False)
+    assert result.status_code==200 and 'thao tác mới' in result.json()['message']
+    with client.factory() as db:assert db.get(vis.AdVisibilityGuard,'OKX:123').state=='UNKNOWN'
+    assert exchange_io.await_count==1
 
 
 @pytest.mark.parametrize('exchange',['OKX','MEXC'])
