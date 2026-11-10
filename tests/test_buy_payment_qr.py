@@ -51,6 +51,26 @@ def mexc():
 def info():return data.okx_instruction(okx(),'261109123456789')
 
 
+def test_okx_real_lowercase_currency_codes_keep_valid_payment_instruction():
+    row=okx();row.update(cryptoCurrency='usdt',fiatCurrency='vnd')
+    row['counterpartyDetail']['takerPaymentMethod'].update(type='bank',currency='vnd')
+    result=data.okx_instruction(row,row['orderId'])
+    assert result.exchange=='OKX' and result.account=='00123456789'
+    row['paymentStatus']='paid'
+    with pytest.raises(data.InactiveOrder):data.okx_instruction(row,row['orderId'])
+
+
+def test_discover_accepts_lowercase_okx_symbols_without_guessing_other_currencies(db,monkeypatch):
+    from app import okx_sync
+    monkeypatch.setattr(worker.settings,'okx_p2p_enabled',True)
+    monkeypatch.setattr(worker.settings,'mexc_p2p_enabled',False)
+    row=dict(okx(),cryptoCurrency='usdt',fiatCurrency='vnd',createdTimestamp=str(int(time.time()*1000)))
+    monkeypatch.setattr(okx_sync,'read_orders',AsyncMock(return_value=[row,dict(row,orderId='261109999999999',cryptoCurrency='btc')]))
+    asyncio.run(worker.discover(db,None,None))
+    assert db.get(worker.BuyPaymentQR,'OKX:'+row['orderId']) is not None
+    assert db.get(worker.BuyPaymentQR,'OKX:261109999999999') is None
+
+
 def test_local_qr_round_trip_and_no_remote_image_url():
     item=info()
     text=vietqr.payload(item.bank_bin,item.account,item.amount,item.note)
