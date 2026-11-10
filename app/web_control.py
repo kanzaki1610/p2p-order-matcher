@@ -9,7 +9,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy import select
@@ -57,8 +57,8 @@ class VisibilityChange(BaseModel):
 
 @router.get('/advertisements/{exchange}/{side}')
 @isolated_io
-async def advertisements(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],db=Depends(get_db)):
-    try:return await ad_visibility.advertisements(db,exchange,side)
+async def advertisements(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],page:int=Query(1,ge=1,le=100),db=Depends(get_db)):
+    try:return await ad_visibility.advertisements(db,exchange,side,page)
     except Exception as error:raise HTTPException(400,safe_error(error)) from None
 
 

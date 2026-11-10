@@ -183,6 +183,7 @@ async def set_visibility(db,token,visible):
         already=(row['isHidden'] is (not visible) and row['status']=='new') if exchange=='OKX' else row['advStatus']==('OPEN' if visible else 'CLOSE')
         guard.state='IDLE' if already else 'UNKNOWN'
         db.add(OKXAuditLog(action='AD_VISIBILITY_INTENT',actor='web:primary',detail=exchange+' '+code+' visible='+str(visible)))
+        operation_revision=guard.revision
         db.commit()  # Durable before POST; workers/manual writers see the guard and Auto is off.
         if already:return 'Quảng cáo đã ở trạng thái yêu cầu. Auto bám giá của quảng cáo vẫn tắt.'
         try:
@@ -194,6 +195,9 @@ async def set_visibility(db,token,visible):
                 from .mexc_ads import write_visibility
                 await write_visibility(api,code,visible)
             final=await read_owned(api,exchange,code,side)
+            guard=lock_guard(db,exchange,code)
+            if guard.revision!=operation_revision:
+                return 'Hồ sơ hiện/ẩn đã có thao tác mới. Đọc lại danh sách; không ghi đè kết quả mới.'
             return finish_check(db,guard,exchange,final)
         except Exception:
             db.rollback()
@@ -215,23 +219,21 @@ def finish_check(db,guard,exchange,row):
 
 async def check_visibility(db,exchange,code,side):
     # Read-only at the exchange, including after a timeout; never resubmit.
+    initial=db.get(AdVisibilityGuard,exchange+':'+code,populate_existing=True)
+    revision=initial.revision if initial else '0'
     async with api_for(exchange) as api:row=await read_owned(api,exchange,code,side)
     guard=lock_guard(db,exchange,code)
+    if guard.revision!=revision:raise ValueError('Yêu cầu hiện/ẩn vừa thay đổi. Kiểm tra lại; không dùng kết quả đọc cũ.')
     if guard.state=='IDLE':return 'Trạng thái sàn: '+lamp(exchange,row)['reason']+'. Không gửi yêu cầu sửa.'
     return finish_check(db,guard,exchange,row)
 
 
-async def owned_list(api,exchange,side):
+async def owned_list(api,exchange,side,page=1):
     if exchange=='MEXC':
         from .mexc_ads import ADS_PATH
-        rows=[]
-        for page in range(1,11):
-            batch=await api.request(ADS_PATH,params={'page':page,'limit':10,'fiatUnit':'VND'})
-            if not isinstance(batch,list) or any(not isinstance(r,dict) for r in batch):raise ValueError('Danh sách quảng cáo MEXC chưa đúng cấu trúc.')
-            rows.extend(batch)
-            if len(batch)<10:break
-            await asyncio.sleep(.3)
-        return [r for r in rows if r.get('side')==side and r.get('coinName')=='USDT' and r.get('fiatUnit')=='VND']
+        batch=await api.request(ADS_PATH,params={'page':page,'limit':10,'fiatUnit':'VND'})
+        if not isinstance(batch,list) or any(not isinstance(r,dict) for r in batch):raise ValueError('Danh sách quảng cáo MEXC chưa đúng cấu trúc.')
+        return ([r for r in batch if r.get('side')==side and r.get('coinName')=='USDT' and r.get('fiatUnit')=='VND'],len(batch)==10)
     from .okx_sync import sign
     from .okx_release import OKXRequestError,safe_code
     path='/api/v5/p2p/ad/active-list?'+urlencode({'side':side.lower(),'cryptoCurrency':'USDT','fiatCurrency':'VND'})
@@ -245,15 +247,15 @@ async def owned_list(api,exchange,side):
         raise OKXRequestError(f'OKX HTTP {response.status_code}; mã API: '+safe_code(payload.get('code') if isinstance(payload,dict) else None)+'.')
     rows=payload.get('data')
     if not isinstance(rows,list) or any(not isinstance(r,dict) for r in rows):raise ValueError('Danh sách quảng cáo OKX chưa đúng cấu trúc.')
-    return [r for r in rows if r.get('side')==side.lower()]
+    return [r for r in rows if r.get('side')==side.lower()],False
 
 
-async def advertisements(db,exchange,side):
+async def advertisements(db,exchange,side,page=1):
     from .mexc_pricing import MexcPriceSlot
     from .web_control import safe_error
     result=[]
     async with api_for(exchange) as api:
-        rows=await owned_list(api,exchange,side)
+        rows,has_more=await owned_list(api,exchange,side,page)
         seen=set()
         for row in rows[:100]:
             code=str(row.get('adId' if exchange=='OKX' else 'advNo',''))
@@ -280,5 +282,5 @@ async def advertisements(db,exchange,side):
                     'auto':(s.auto_enabled if exchange=='OKX' else s.enabled) and state['on']} for s in slots]
             except Exception as error:card['reason']=safe_error(error)
             result.append(card)
-    result.sort(key=lambda r:(r['on'] is not True,r['available']=='0',r['ad_id']))
-    return {'read_at':time.time(),'rows':result,'limited':len(rows)>=100}
+    result.sort(key=lambda r:(r['on'] is not True,r['available']=='0',-int(r['ad_id'].lstrip('a'))))
+    return {'read_at':time.time(),'rows':result,'limited':len(rows)>=100,'page':page,'has_more':has_more and page<100}
