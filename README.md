@@ -209,5 +209,6 @@ release is not expired just because its original payment countdown ended.
 
 Example: a cancelled 5,000-USDT order does not block a current 6,000-USDT order
 for the same buyer. Bank, identity, funding and release preflight checks still
-apply. Explicit references to cancelled/expired/completed orders remain manual
-review. Already allocated or consumed bank credits are not reassigned.
+apply. Cancelled-order credits are retained as IGNORED_CANCELLED without manual-review
+notifications, release or reassignment. Explicit references to expired/completed
+orders still require manual review. Already allocated or consumed bank credits are not reassigned.
