@@ -53,7 +53,7 @@ def test_cancelled_reference_is_not_reassigned(db):
     old=make_order(db, 'OLD-5000', 130000000);old.status='CANCELLED';db.commit()
     current=make_order(db, 'NEW-6000', 156000000)
     tx=transfer(db, 'NGUYEN VAN A OLD-5000')
-    assert match_transaction(db, tx)[0] == 'REVIEW_REQUIRED'
+    assert match_transaction(db, tx)[0] == 'IGNORED_CANCELLED'
     assert current.status == 'WAITING_PAYMENT'
     assert db.get(PaymentAllocation, tx.id) is None
 
@@ -145,6 +145,29 @@ def test_allocated_partial_credit_is_not_reused_after_cancel(db):
     assert match_transaction(db,tx)[0]=='PARTIAL_PAYMENT'
     old.status='CANCELLED';db.commit()
     current=make_order(db,'NEW-6000',156000000)
-    assert match_transaction(db,tx)[0]=='REVIEW_REQUIRED'
+    assert match_transaction(db,tx)[0]=='IGNORED_CANCELLED'
+    assert current.status=='WAITING_PAYMENT'
+    assert db.get(PaymentAllocation,tx.id).order_id==old.id
+
+
+def test_cancelled_reference_notification_is_silent(db,monkeypatch):
+    from app import notifications
+    old=make_order(db,'OLD-5000',130000000);old.status='CANCELLED';db.commit()
+    tx=transfer(db,'NGUYEN VAN A OLD-5000')
+    result=match_transaction(db,tx)
+    sender=AsyncMock(return_value=True)
+    monkeypatch.setattr(notifications,'notify_event',sender)
+    asyncio.run(notifications.notify_match(*[result[0],result[1],tx,result[2],result[3]]))
+    assert tx.status=='IGNORED_CANCELLED'
+    sender.assert_not_awaited()
+    assert db.get(PaymentAllocation,tx.id) is None
+
+
+def test_previous_auto_match_cancelled_is_ignored_without_reusing_credit(db):
+    old=make_order(db,'OLD-5000',156000000);tx=transfer(db)
+    assert match_transaction(db,tx)[0]=='AUTO_MATCHED'
+    old.status='CANCELLED';db.commit()
+    current=make_order(db,'NEW-6000',156000000)
+    assert match_transaction(db,tx)[0]=='IGNORED_CANCELLED'
     assert current.status=='WAITING_PAYMENT'
     assert db.get(PaymentAllocation,tx.id).order_id==old.id

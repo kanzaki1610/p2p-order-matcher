@@ -89,7 +89,7 @@ def test_unsafe_detail_never_posts(setup,field,value):
         assert request.method=='GET'
         return httpx.Response(200,json={'code':0,'data':row})
     run(db,handler)
-    assert db.get(MexcReleaseAttempt,order.id).state=='REVIEW_REQUIRED'
+    assert db.get(MexcReleaseAttempt,order.id).state==('CANCELLED' if field=='state' else 'REVIEW_REQUIRED')
 
 
 @pytest.mark.parametrize('failure',['timeout','500','bad_json','missing_code'])
@@ -346,7 +346,7 @@ def test_legacy_bank_review_never_bypasses_invalid_preflight(setup, field, value
 
     run(db, handler)
     run(db, handler)
-    assert db.get(MexcReleaseAttempt, order.id).state == 'REVIEW_REQUIRED'
+    assert db.get(MexcReleaseAttempt, order.id).state == ('CANCELLED' if field=='state' else 'REVIEW_REQUIRED')
 
 
 def test_waiting_for_bank_still_rejects_bank_mismatch(setup):
@@ -441,3 +441,30 @@ def test_sacombank_preflight_matches_only_sacombank(setup,bank):
     assert preflight_reason(order,tx,receipt,row) is None
     row['confirmPaymentInfo']={'bankName':'SCB'}
     assert preflight_reason(order,tx,receipt,row)==WRONG_BANK_REASON
+
+
+@pytest.mark.parametrize('state',['CANCEL','CANCELLED','INVALID','REFUSE','TIMEOUT'])
+def test_cancelled_preflight_is_silent_and_does_not_post(setup,monkeypatch,state):
+    db,order,tx,row=setup
+    sender=AsyncMock(return_value=True)
+    monkeypatch.setattr('app.mexc_release.notify_event',sender)
+    row['state']=state
+    def handler(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':0,'data':row})
+    run(db,handler);run(db,lambda request:pytest.fail('Cancelled order must not be polled again'))
+    assert order.status=='CANCELLED'
+    assert db.get(MexcReleaseAttempt,order.id).state=='CANCELLED'
+    sender.assert_not_awaited()
+
+
+def test_existing_unknown_attempt_on_cancelled_order_stays_locked_and_silent(setup,monkeypatch):
+    from app.mexc_release import notify_attempt
+    db,order,tx,row=setup
+    attempt=MexcReleaseAttempt(order_id=order.id,transaction_id=tx.id,state='UNKNOWN')
+    db.add(attempt);order.status='CANCELLED';db.commit()
+    sender=AsyncMock(return_value=True);monkeypatch.setattr('app.mexc_release.notify_event',sender)
+    asyncio.run(notify_attempt(db,attempt,order,tx))
+    run(db,lambda request:pytest.fail('Cancelled order must not retry or poll'))
+    assert attempt.state=='UNKNOWN'
+    sender.assert_not_awaited()

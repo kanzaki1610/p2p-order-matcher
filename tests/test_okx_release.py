@@ -106,7 +106,7 @@ def test_unsafe_exchange_state_never_posts(setup, field, value):
         assert request.method == "GET"
         return httpx.Response(200, json={"code": "0", "data": [row]})
     run(db, handler)
-    expected = "WAITING_BUYER_PAYMENT" if field == "paymentStatus" and value == "unpaid" else "REVIEW_REQUIRED"
+    expected = "CANCELLED" if field == "orderStatus" and value == "cancelled" else "WAITING_BUYER_PAYMENT" if field == "paymentStatus" and value == "unpaid" else "REVIEW_REQUIRED"
     assert db.get(OKXReleaseAttempt, order.id).state == expected
     assert order.status != "RELEASED"
 
@@ -220,7 +220,7 @@ def test_waiting_revalidates_every_condition_before_post(setup, field, value):
     run(db, handler)
     row[field] = value
     run(db, handler)
-    assert db.get(OKXReleaseAttempt, order.id).state == "REVIEW_REQUIRED"
+    assert db.get(OKXReleaseAttempt, order.id).state == ("CANCELLED" if field == "orderStatus" else "REVIEW_REQUIRED")
 
 
 def test_disabled_auto_does_not_poll_waiting_or_reset_old_review(setup, monkeypatch):
@@ -351,3 +351,29 @@ def test_market_price_guard_prevents_release_and_source_wait_can_resume(setup,mo
         return httpx.Response(200,json={'code':'0','data':[row]})
     run(db,handler)
     assert calls.count('POST')==(1 if kind=='SOURCE_UNAVAILABLE' else 0)
+
+
+def test_cancelled_preflight_sends_no_review_and_never_posts(setup, monkeypatch):
+    db,order,row=setup
+    sender=AsyncMock(return_value=True)
+    monkeypatch.setattr('app.okx_release.notify_event',sender)
+    row['orderStatus']='cancelled'
+    def handler(request):
+        assert request.method=='GET'
+        return httpx.Response(200,json={'code':'0','data':[row]})
+    run(db,handler);run(db,lambda request:pytest.fail('Cancelled order must not be polled again'))
+    assert order.status=='CANCELLED'
+    assert db.get(OKXReleaseAttempt,order.id).state=='CANCELLED'
+    sender.assert_not_awaited()
+
+
+def test_existing_unknown_attempt_on_cancelled_order_stays_locked_and_silent(setup,monkeypatch):
+    db,order,row=setup
+    match=db.query(PaymentMatch).one()
+    attempt=OKXReleaseAttempt(order_id=order.id,transaction_id=match.transaction_id,state='UNKNOWN')
+    db.add(attempt);order.status='CANCELLED';db.commit()
+    sender=AsyncMock(return_value=True);monkeypatch.setattr('app.okx_release.notify_event',sender)
+    asyncio.run(notify_attempt(db,attempt,order,'old diagnostic'))
+    run(db,lambda request:pytest.fail('Cancelled order must not retry or poll'))
+    assert attempt.state=='UNKNOWN'
+    sender.assert_not_awaited()

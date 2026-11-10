@@ -110,6 +110,7 @@ def test_terminal_reference_cannot_be_reused_for_future_same_name_order(db,statu
     old=add_order(db,'261014215124613');old.status=status;db.commit()
     new=add_order(db,'261014219999999')
     decision,_,_,reasons=match_transaction(db,tx(db))
-    assert decision=='REVIEW_REQUIRED'
+    assert decision==('IGNORED_CANCELLED' if status=='CANCELLED' else 'REVIEW_REQUIRED')
     assert new.status=='WAITING_PAYMENT'
-    assert 'Không chuyển khoản tiền này sang lệnh mới' in reasons[0]
+    if status!='CANCELLED':
+        assert 'Không chuyển khoản tiền này sang lệnh mới' in reasons[0]
