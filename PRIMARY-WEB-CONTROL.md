@@ -9,6 +9,19 @@ API điều khiển web; không tự bật Auto mở khóa hoặc Auto bám giá
 
 ## Web
 
+### Bật/tắt áp dụng giá vốn
+
+Mỗi sàn có công tắc **Áp dụng giá vốn +10đ** riêng, mặc định BẬT. Tắt công tắc
+chỉ bỏ kiểm tra giá vốn +10đ khi bám giá và đặt giá thủ công; không xóa giá đã nhập,
+không đọc lệnh mua gần nhất, không bật Auto và không mở quảng cáo. Trần/sàn bám
+biệt danh, số dư, ngân sách, Min/Max và trạng thái sàn vẫn được kiểm tra.
+
+Bật lại cần giá vốn hợp lệ đã lưu. Thay đổi yêu cầu xác nhận trên web và đổi
+revision giá vốn để worker/draft đang chuẩn bị không gửi theo cấu hình cũ. Bảng
+`pricing_cost_switches` được create_all tạo; không có env/secret mới. Kayhap không
+dùng công tắc của tài khoản chính. Khi tắt, không có cam kết bảo vệ giá bán theo
+giá mua; người vận hành tự quyết định giá và giới hạn phù hợp.
+
 ### Công tắc quảng cáo
 
 Mục **Quảng cáo trên sàn** liệt kê quảng cáo USDT/VND của sàn và chiều đang chọn,

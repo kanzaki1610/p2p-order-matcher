@@ -87,3 +87,10 @@ Nguồn: [SePay VietQR](https://developer.sepay.vn/vi/tien-ich-khac/tao-qr-code)
 [MEXC order detail](https://www.mexc.com/api-docs/p2p/account-order-info/get-order-detail),
 tài liệu OKX P2P “API Specs - External (1).pdf” do chủ tài khoản cung cấp,
 [Discord messages](https://docs.discord.com/developers/resources/message).
+# Chuẩn hóa mã tiền tệ OKX
+
+API thực tế có thể trả `usdt`/`vnd` và tên enum phương thức ngân hàng khác hoa/thường.
+Bộ phát hiện và kiểm tra chỉ dẫn QR chuẩn hóa đúng các mã này, vẫn yêu cầu đúng
+USDT/VND, tài khoản nhận đã xác minh và lệnh Mua chưa thanh toán. Không dựng lại QR
+cho lệnh đã báo thanh toán, hoàn tất, hủy hoặc quá hạn. Thông báo lệnh ở p2p-orders
+ghi rõ chiều theo tài khoản: bạn mua USDT / đối tác bán USDT, kèm dẫn tới kênh QR.
