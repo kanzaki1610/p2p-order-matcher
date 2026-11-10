@@ -196,3 +196,18 @@ Tuyệt đối không tự động hóa đăng nhập Internet Banking, đọc O
 ```bash
 PYTHONPATH=. pytest -q
 ```
+
+
+### Active orders during bank reconciliation
+
+Cancelled, rejected, completed and unpaid expired orders are excluded from new
+payment matching and same-buyer ambiguity checks. OKX refreshes missing pending
+orders through authenticated detail reads; MEXC does the same before rechecking
+unmatched/review transfers on every sync. A missing list entry or a failed detail
+request alone is never interpreted as cancellation. A paid order waiting for
+release is not expired just because its original payment countdown ended.
+
+Example: a cancelled 5,000-USDT order does not block a current 6,000-USDT order
+for the same buyer. Bank, identity, funding and release preflight checks still
+apply. Explicit references to cancelled/expired/completed orders remain manual
+review. Already allocated or consumed bank credits are not reassigned.
