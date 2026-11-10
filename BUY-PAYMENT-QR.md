@@ -25,8 +25,10 @@ History. Quản trị viên Discord vẫn có quyền quản trị theo cơ ch�
 
 1. Có người bán vào quảng cáo Mua của bạn: bot đọc thông tin lệnh từ sàn.
 2. Kênh riêng hiển thị sàn, mã lệnh, ngân hàng, số tài khoản giữ nguyên số 0
-   đầu, tên người nhận, số tiền, mã lệnh gợi ý làm nội dung và ảnh QR PNG.
-3. Mở lệnh trên sàn, đối chiếu thông tin và nội dung người bán yêu cầu, sau đó
+   đầu, tên người nhận, số tiền và ảnh QR PNG. Mã lệnh chỉ để nhận diện thông báo;
+   QR không điền nội dung chuyển khoản (không có tag VietQR 62/08), để ứng dụng
+   ngân hàng dùng cách xử lý mặc định. Không gửi cả trường nội dung rỗng vào QR.
+3. Mở lệnh trên sàn, đối chiếu thông tin người nhận và số tiền, sau đó
    tự quét trong ứng dụng ngân hàng. Tên hiển thị trên bot không thay thế bước
    xác minh người thụ hưởng trong ứng dụng ngân hàng.
 4. Sau khi thanh toán thực tế, tự thao tác trên sàn. Bot không bấm thay bạn.
