@@ -223,7 +223,7 @@ def test_sync_mexc_creates_waiting_order_for_sepay_matching(monkeypatch):
     assert order.status == "WAITING_PAYMENT"
 
 
-def test_sync_mexc_imports_done_order_for_late_sepay_reconciliation(monkeypatch):
+def test_sync_mexc_imports_done_order_as_terminal(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     monkeypatch.setattr(settings, "mexc_p2p_enabled", True)
@@ -235,7 +235,7 @@ def test_sync_mexc_imports_done_order_for_late_sepay_reconciliation(monkeypatch)
         order = db.scalar(select(P2POrder))
 
     assert result["orders_received"] == 1
-    assert order.status == "WAITING_PAYMENT"
+    assert order.status == "CONFIRMED"
 
 
 def test_one_timed_out_order_does_not_abort_the_whole_sync(monkeypatch):
