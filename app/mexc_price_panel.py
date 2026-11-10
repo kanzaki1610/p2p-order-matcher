@@ -210,13 +210,13 @@ async def execute_panel(payload, db, owner):
     if action=='adoptconfirm' and len(parts)==3:
         message=await adoption_confirm(db,owner,parts[2])
         draft=db.get(MexcAdoptionDraft,parts[2],populate_existing=True)
-        side,number=draft.slot.split(':')
+        side,slot_number=draft.slot.split(':')
         source=json.loads(draft.source)
         if source['status']!='OPEN':
             return {'content':message+'\nQuảng cáo đang '+source['status']+' trên MEXC. Bạn cần mở quảng cáo trên MEXC trước; nhận cấu hình không tự mở quảng cáo.',
                     'components':[{'type':1,'components':[button('Trạng thái','status')]}]}
         return {'content':message+'\nNếu các thông số đúng, bạn có thể tự bấm Bật Auto bên dưới.',
-                'components':[{'type':1,'components':[button('Bật Auto '+side+' slot '+number,f'setauto:{side}:{number}:1',3),button('Trạng thái','status')]}]}
+                'components':[{'type':1,'components':[button('Bật Auto '+side+' slot '+slot_number,f'setauto:{side}:{slot_number}:1',3),button('Trạng thái','status')]}]}
     if action=='adoptcancel' and len(parts)==3:
         changed=db.execute(update(MexcAdoptionDraft).where(MexcAdoptionDraft.id==parts[2],
             MexcAdoptionDraft.owner==owner,MexcAdoptionDraft.used.is_(False)).values(used=True))
