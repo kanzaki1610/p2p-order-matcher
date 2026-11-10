@@ -78,6 +78,11 @@ def upsert(db, row):
                          crypto_amount=Decimal(str(row["cryptoAmount"])), counterparty_name=name,
                          created_at=created, status="WAITING_PAYMENT" if state == "new" else "REVIEW_REQUIRED")
         db.add(order)
+    # Only an absolute exchange deadline is accepted; a paid order remains pending release.
+    from .buy_payment_data import absolute_time
+    deadline = absolute_time(row.get('expiryTimeInSeconds'))
+    order.expires_at = (datetime.fromtimestamp(deadline, timezone.utc)
+                        if deadline and str(row.get('paymentStatus')).lower() not in {'paid', 'unreceived'} else None)
     # Explicit authenticated terminal states remove stale matching candidates.
     if state == 'cancelled' and order.status not in {'RELEASED', 'CONFIRMED'}:
         order.status = 'CANCELLED'
@@ -106,7 +111,7 @@ async def refresh_inactive_orders(db, client, seen):
             return float(json.loads(pair[1].raw_order or '{}').get('_checked_at', 0))
         except (ValueError, TypeError, AttributeError):
             return 0
-    for order, receipt in sorted(candidates, key=checked)[:200]:
+    for order, receipt in sorted((pair for pair in candidates if pair[0].order_code not in seen), key=checked)[:200]:
         if order.order_code in seen:
             continue
         try:

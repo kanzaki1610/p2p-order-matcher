@@ -1,10 +1,10 @@
 import re
 import unicodedata
 from collections import Counter
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from decimal import Decimal
 from types import SimpleNamespace
@@ -228,7 +228,15 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     allocated=db.get(PaymentAllocation,tx.id) if tx.id is not None else None
     if allocated:
         assigned=db.get(P2POrder,allocated.order_id)
-        if assigned.status=='WAITING_PAYMENT': return reserve_payment(db,assigned,tx)
+        if assigned.status in {'CANCELLED','CONFIRMED','RELEASED','REJECTED'}:
+            tx.status='REVIEW_REQUIRED'; db.commit()
+            return 'REVIEW_REQUIRED',assigned,0,['Khoản chuyển đã gắn với lệnh đã hủy hoặc kết thúc; cần kiểm tra tiền đã nhận, không chuyển sang lệnh mới.']
+        if assigned.status=='WAITING_PAYMENT':
+            deadline = assigned.expires_at
+            if deadline is not None and (deadline.astimezone(timezone.utc) if deadline.tzinfo else deadline.replace(tzinfo=timezone.utc)) <= datetime.now(timezone.utc):
+                tx.status='REVIEW_REQUIRED'; db.commit()
+                return 'REVIEW_REQUIRED',assigned,0,['Lệnh đã hết thời hạn thanh toán; khoản tiền đã gắn với lệnh này cần kiểm tra, không dùng lại cho lệnh khác.']
+            return reserve_payment(db,assigned,tx)
         return tx.status,assigned,100 if tx.status=='AUTO_MATCHED' else 0,['Khoản chuyển đã gắn với lệnh này; không dùng cho lệnh khác.']
     occurred = tx.occurred_at
     if occurred.tzinfo is not None:
@@ -238,6 +246,7 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     candidates = db.scalars(
         select(P2POrder).where(
             P2POrder.status == "WAITING_PAYMENT",
+            or_(P2POrder.expires_at.is_(None), P2POrder.expires_at > datetime.now(timezone.utc)),
             P2POrder.side == 'SELL',
             P2POrder.created_at >= window_start,
             P2POrder.created_at <= window_end,
@@ -245,7 +254,8 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     ).all()
 
     terminal = db.scalars(select(P2POrder).where(
-        P2POrder.status.in_(['CANCELLED','CONFIRMED','RELEASED','REJECTED']),
+        or_(P2POrder.status.in_(['CANCELLED','CONFIRMED','RELEASED','REJECTED']),
+            (P2POrder.status == 'WAITING_PAYMENT') & (P2POrder.expires_at <= datetime.now(timezone.utc))),
         P2POrder.side == 'SELL', P2POrder.created_at >= window_start,
         P2POrder.created_at <= window_end)).all()
     referenced_terminal = [order for order in terminal
@@ -253,7 +263,7 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
     if referenced_terminal:
         tx.status='REVIEW_REQUIRED';db.commit()
         codes=', '.join(order.order_code+' ('+order.status+')' for order in referenced_terminal[:5])
-        return 'REVIEW_REQUIRED',None,0,[f'Không auto: nội dung tham chiếu lệnh đã hủy hoặc hoàn tất: {codes}. Không chuyển khoản tiền này sang lệnh mới cùng họ tên.']
+        return 'REVIEW_REQUIRED',None,0,[f'Không auto: nội dung tham chiếu lệnh đã hủy, hết hạn hoặc hoàn tất: {codes}. Không chuyển khoản tiền này sang lệnh mới cùng họ tên.']
 
     identified=[order for order in candidates if payment_identity(order,tx)]
     coded=[order for order in identified if memo_contains_order_code(tx.description,order.order_code)]

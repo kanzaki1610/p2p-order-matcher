@@ -22,7 +22,6 @@ from .mexc_release import MexcOrderReceipt, process_mexc_releases
 logger = logging.getLogger("uvicorn.error.mexc_sync")
 
 OPEN_STATES = {"NOT_PAID", "PAID", "WAIT_PROCESS", "PROCESSING"}
-RECONCILABLE_STATES = OPEN_STATES | {"DONE"}
 CANCELLED_STATES = {"CANCEL", "CANCELLED", "INVALID", "REFUSE", "TIMEOUT"}
 QUERY_STATES = "NOT_PAID,PAID,WAIT_PROCESS,PROCESSING,DONE"
 
@@ -156,9 +155,9 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
             counterparty_name=counterparty,
             expected_bank=_bank_name(detail),
             payment_note=_last_five(order_code),
-            status="WAITING_PAYMENT" if api_state in RECONCILABLE_STATES else "CANCELLED",
+            status=("WAITING_PAYMENT" if api_state in OPEN_STATES else "CONFIRMED" if api_state == "DONE" else "CANCELLED"),
             created_at=_milliseconds(detail.get("createTime")) or datetime.now(timezone.utc),
-            expires_at=_milliseconds(detail.get("payTimeLimit")),
+            expires_at=_milliseconds(detail.get("payTimeLimit")) if api_state == "NOT_PAID" else None,
         )
         db.add(order)
     elif order.status == "WAITING_PAYMENT":
@@ -168,9 +167,11 @@ def _upsert_order(db: Session, detail: dict[str, Any]) -> tuple[P2POrder, bool]:
         order.counterparty_name = counterparty
         order.expected_bank = _bank_name(detail) or order.expected_bank
         order.payment_note = _last_five(order_code) or order.payment_note
-        order.expires_at = _milliseconds(detail.get("payTimeLimit")) or order.expires_at
-        if order.status == "WAITING_PAYMENT" and api_state in CANCELLED_STATES:
-            order.status = "CANCELLED"
+        order.expires_at = (_milliseconds(detail.get("payTimeLimit")) or order.expires_at) if api_state == "NOT_PAID" else None
+    if api_state in CANCELLED_STATES and order.status not in {"RELEASED", "CONFIRMED"}:
+        order.status = "CANCELLED"
+    elif api_state == "DONE" and order.status == "WAITING_PAYMENT":
+        order.status = "CONFIRMED"
     return order, created
 
 
@@ -282,20 +283,39 @@ async def sync_mexc_orders(db: Session, client: MexcP2PClient | None = None) -> 
                         order.order_code,
                     )
 
-        if created and order.status == "WAITING_PAYMENT":
-            unmatched_transactions = db.scalars(
-                select(BankTransaction).where(
-                    BankTransaction.status.in_(['UNMATCHED','PARTIAL_PAYMENT','REVIEW_REQUIRED']),
-                    BankTransaction.occurred_at >= start,
-                    BankTransaction.occurred_at <= now + timedelta(minutes=15),
-                )
-            ).all()
-            for tx in unmatched_transactions:
-                previous=tx.status
-                decision, matched_order, score, reasons = match_transaction(db, tx)
-                if matched_order is not None and decision!=previous:
-                    reconciled_count += 1
-                    await notify_match(decision, matched_order, tx, score, reasons)
+    # Cancelled orders may disappear from the pending list. Absence is not proof:
+    # read authenticated detail before removing a local candidate.
+    from .mexc_release import consistent
+    seen = {str(item.get("advOrderNo") or "") for item in summaries}
+    stale = db.execute(select(P2POrder, MexcOrderReceipt).join(
+        MexcOrderReceipt, MexcOrderReceipt.order_code == P2POrder.order_code).where(
+        P2POrder.status.in_(["WAITING_PAYMENT", "PAYMENT_DETECTED"]),
+        P2POrder.created_at >= start).order_by(P2POrder.created_at.desc())).all()
+    for order, receipt in [pair for pair in stale if pair[0].order_code not in seen][:200]:
+        try:
+            detail = await _get_order_detail_with_retry(client, order.order_code, max_attempts=1)
+            if consistent(order, receipt, detail):
+                _upsert_order(db, {**detail, "side": order.side})
+                updated_count += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            detail_failed_count += 1
+            logger.warning("MEXC inactive order check failed | error=%s", type(exc).__name__)
+    db.commit()
+
+    # Re-evaluate earlier ambiguous transfers after all terminal states are saved.
+    transactions = db.scalars(select(BankTransaction).where(
+        BankTransaction.status.in_(["UNMATCHED", "PARTIAL_PAYMENT", "REVIEW_REQUIRED"]),
+        BankTransaction.direction == "CREDIT", BankTransaction.occurred_at >= start,
+        BankTransaction.occurred_at <= now + timedelta(minutes=15)
+    ).order_by(BankTransaction.occurred_at).limit(200)).all()
+    for tx in transactions:
+        previous = tx.status
+        decision, matched_order, score, reasons = match_transaction(db, tx)
+        if matched_order is not None and decision != previous:
+            reconciled_count += 1
+            await notify_match(decision, matched_order, tx, score, reasons)
 
     if summaries:
         db.add(
