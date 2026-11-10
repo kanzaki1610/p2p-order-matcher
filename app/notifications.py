@@ -83,6 +83,8 @@ async def notify_event(event: str, text: str) -> bool:
 
 
 async def notify_match(decision, order, tx, score, reasons):
+    if decision == "IGNORED_CANCELLED":
+        return
     from .matching import funding_parts, memo_contains_order_code, memo_contains_name, same_name, okx_short_reference
     db=object_session(tx) or (object_session(order) if order else None)
     owned=db is None
@@ -90,6 +92,8 @@ async def notify_match(decision, order, tx, score, reasons):
     try:
         if order and order.id is not None:
             order=db.get(P2POrder,order.id);db.refresh(order)
+            if order.status == 'CANCELLED':
+                return
             if decision in {'UNMATCHED','REVIEW_REQUIRED','PARTIAL_PAYMENT'} and order.status in {'RELEASED','CONFIRMED','CANCELLED','REJECTED'}:
                 return
         parts=funding_parts(db,order) if order and order.id is not None else []

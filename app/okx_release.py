@@ -141,6 +141,8 @@ def preflight_reason(order, tx, row):
 
 
 async def notify_attempt(db, attempt, order, reason=None):
+    if order.status == "CANCELLED" or attempt.state == "CANCELLED":
+        return
     if reason:
         save_diagnostic(db, attempt, reason)
     if attempt.state == attempt.notified_state or attempt.state == "READY":
@@ -173,6 +175,8 @@ async def process_releases(db, client):
         return
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
         order, tx = db.get(P2POrder, match.order_id), db.get(BankTransaction, match.transaction_id)
+        if order.status == "CANCELLED":
+            continue
         tx=payment_for_order(db,order,tx)
         from .mexc_release import MexcOrderReceipt, MexcReleaseAttempt
         if db.get(MexcOrderReceipt, order.order_code) is not None or db.scalar(
@@ -205,6 +209,12 @@ async def process_releases(db, client):
             db.refresh(attempt)
             try:
                 row = await detail(client, order.order_code)
+                if consistent(order, row) and row.get("orderStatus") == "cancelled":
+                    order.status = "CANCELLED"
+                    attempt.state = "CANCELLED"
+                    save_diagnostic(db, attempt, "Lệnh đã hủy; bỏ qua, không gửi yêu cầu mở khóa.")
+                    db.commit()
+                    continue
                 # Waiting is allowed only when unpaid is the sole blocking condition.
                 if row.get("paymentStatus") == "unpaid" and preflight_reason(
                     order, tx, dict(row, paymentStatus="paid")

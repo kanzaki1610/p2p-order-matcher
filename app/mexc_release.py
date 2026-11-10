@@ -80,6 +80,8 @@ def preflight_reason(order, tx, receipt, row, *, allow_missing_bank=False):
 
 
 async def notify_attempt(db, attempt, order, tx):
+    if order.status == "CANCELLED" or attempt.state == "CANCELLED":
+        return
     from .discord_notifications import review_event
     tx=payment_for_order(db,order,tx)
     if attempt.state == attempt.notified_state or attempt.state == "READY":
@@ -104,6 +106,8 @@ async def process_mexc_releases(db, client):
     from .okx_release import OKXReleaseAttempt
     for match in db.scalars(select(PaymentMatch).where(PaymentMatch.decision == "AUTO_MATCHED")).all():
         order, tx = db.get(P2POrder, match.order_id), db.get(BankTransaction, match.transaction_id)
+        if order.status == "CANCELLED":
+            continue
         tx=payment_for_order(db,order,tx)
         receipt = db.get(MexcOrderReceipt, order.order_code)
         if receipt is None or db.get(OKXOrderReceipt, order.order_code) is not None:
@@ -150,6 +154,12 @@ async def process_mexc_releases(db, client):
                     await notify_attempt(db, attempt, order, tx)
                     continue
                 row = await client.get_order_detail(order.order_code)
+                from .mexc_sync import CANCELLED_STATES
+                if consistent(order, receipt, row) and str(row.get("state")).upper() in CANCELLED_STATES:
+                    order.status = "CANCELLED"
+                    attempt.state, attempt.reason = "CANCELLED", "Lệnh đã hủy; bỏ qua, không gửi yêu cầu mở khóa."
+                    db.commit()
+                    continue
                 if satisfies_payment_rules(order, tx) and consistent(order, receipt, row) and row.get("state") == "DONE":
                     # Completed manually/on exchange; do not issue a release POST.
                     attempt.state = "RELEASED"

@@ -216,19 +216,31 @@ def evaluate(order: P2POrder, tx: BankTransaction) -> tuple[int, list[str]]:
     return min(score, 89), reasons
 
 
+def ignore_cancelled_payment(db, order, tx):
+    # Retain the bank credit and any existing allocations for audit. Do not notify,
+    # release or reassign money merely because its referenced order was cancelled.
+    tx.status = 'IGNORED_CANCELLED'
+    db.commit()
+    return 'IGNORED_CANCELLED', order, 0, ['Bỏ qua lệnh đã hủy; không đối chiếu hoặc gửi kiểm tra thủ công.']
+
+
 def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder | None, int, list[str]]:
     previous = db.scalar(select(PaymentMatch).where(
         PaymentMatch.transaction_id == tx.id,
         PaymentMatch.decision == "AUTO_MATCHED",
     )) if tx.id is not None else None
     if previous is not None:
+        if previous.order.status == 'CANCELLED':
+            return ignore_cancelled_payment(db, previous.order, tx)
         return previous.decision, previous.order, previous.score, [
             f"Giao dịch {tx.transaction_id} đã dùng cho lệnh {previous.order.order_code}; "
             "không được dùng một lần chuyển tiền để mở khóa thêm lệnh khác."]
     allocated=db.get(PaymentAllocation,tx.id) if tx.id is not None else None
     if allocated:
         assigned=db.get(P2POrder,allocated.order_id)
-        if assigned.status in {'CANCELLED','CONFIRMED','RELEASED','REJECTED'}:
+        if assigned.status == 'CANCELLED':
+            return ignore_cancelled_payment(db, assigned, tx)
+        if assigned.status in {'CONFIRMED','RELEASED','REJECTED'}:
             tx.status='REVIEW_REQUIRED'; db.commit()
             return 'REVIEW_REQUIRED',assigned,0,['Khoản chuyển đã gắn với lệnh đã hủy hoặc kết thúc; cần kiểm tra tiền đã nhận, không chuyển sang lệnh mới.']
         if assigned.status=='WAITING_PAYMENT':
@@ -260,6 +272,8 @@ def match_transaction(db: Session, tx: BankTransaction) -> tuple[str, P2POrder |
         P2POrder.created_at <= window_end)).all()
     referenced_terminal = [order for order in terminal
         if memo_contains_order_code(tx.description, order.order_code) or okx_short_reference(order,tx)]
+    if referenced_terminal and all(order.status == 'CANCELLED' for order in referenced_terminal):
+        return ignore_cancelled_payment(db, referenced_terminal[0], tx)
     if referenced_terminal:
         tx.status='REVIEW_REQUIRED';db.commit()
         codes=', '.join(order.order_code+' ('+order.status+')' for order in referenced_terminal[:5])
