@@ -13,9 +13,11 @@ API điều khiển web; không tự bật Auto mở khóa hoặc Auto bám giá
 
 Mục **Quảng cáo trên sàn** liệt kê quảng cáo USDT/VND của sàn và chiều đang chọn,
 kể cả quảng cáo ẩn để có thể bật lại. Đèn xanh chỉ khi API xác minh đang hiện và
-còn USDT khả dụng. Hết USDT / CLOSE / LOW_STOCK / ẩn: đèn tối. Thiếu dữ liệu hoặc
+còn USDT khả dụng đủ Min giao dịch. Hết USDT / dưới Min / CLOSE / LOW_STOCK / ẩn: đèn tối. Thiếu dữ liệu hoặc
 lỗi API: viền vàng, không cho gạt. Danh sách đọc lại mỗi 30 giây khi đang mở trang;
 worker kiểm tra quảng cáo của slot trong chu kỳ bám giá 5 giây hiện có.
+MEXC phân trang 10 bản ghi của sàn/lần, không quét toàn bộ lịch sử mỗi chu kỳ;
+dùng Trang trước/Trang tiếp để xem quảng cáo cũ. Mỗi trang lọc đúng chiều Mua/Bán.
 
 Gạt công tắc mở xác nhận hiện/ẩn thật, giữ nguyên giá, Min/Max và số USDT. Sau xác
 nhận, chỉ đổi đèn khi đọc lại được sàn. Không tự bổ sung USDT hay mở lại quảng cáo
