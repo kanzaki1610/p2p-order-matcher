@@ -9,6 +9,26 @@ API điều khiển web; không tự bật Auto mở khóa hoặc Auto bám giá
 
 ## Web
 
+### Công tắc quảng cáo
+
+Mục **Quảng cáo trên sàn** liệt kê quảng cáo USDT/VND của sàn và chiều đang chọn,
+kể cả quảng cáo ẩn để có thể bật lại. Đèn xanh chỉ khi API xác minh đang hiện và
+còn USDT khả dụng. Hết USDT / CLOSE / LOW_STOCK / ẩn: đèn tối. Thiếu dữ liệu hoặc
+lỗi API: viền vàng, không cho gạt. Danh sách đọc lại mỗi 30 giây khi đang mở trang;
+worker kiểm tra quảng cáo của slot trong chu kỳ bám giá 5 giây hiện có.
+
+Gạt công tắc mở xác nhận hiện/ẩn thật, giữ nguyên giá, Min/Max và số USDT. Sau xác
+nhận, chỉ đổi đèn khi đọc lại được sàn. Không tự bổ sung USDT hay mở lại quảng cáo
+đã hết số dư. Thao tác hiện/ẩn luôn tắt Auto của các slot gắn với quảng cáo; bật
+quảng cáo không bật Auto. Quảng cáo ẩn/hết USDT được worker tắt Auto bám giá, kể cả
+quảng cáo trước đó do bot ẩn vì giá vốn. Chủ tài khoản tự bật lại khi cần.
+
+`ad_visibility_guards` là bảng mới do create_all tạo, không sửa dữ liệu cũ. Xác
+nhận có chữ ký, hết hạn 120 giây, gắn ID/chiều/snapshot/revision để chặn dùng lại.
+Mọi writer dùng cùng khóa guard và hồ sơ slot. Ghi UNKNOWN trước POST duy nhất;
+timeout/chưa khớp chỉ cho **Kiểm tra hiển thị**, không tự gửi lại. Nút kiểm tra chỉ
+GET sàn và cập nhật hồ sơ xác minh. Không đụng kayhap; không cần secret/env mới.
+
 - Tổng quan: công tắc mở khóa, công tắc bám giá OKX/MEXC, từng slot và trạng thái khóa.
 - OKX/MEXC riêng, Mua/Bán riêng, slot 1/2; chọn quảng cáo thuộc đúng tài khoản.
 - Bám vị trí hoặc biệt danh, chênh giá có dấu, sàn Bán/trần Mua, giá vốn thủ công riêng.
