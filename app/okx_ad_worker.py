@@ -169,6 +169,9 @@ async def process_ad_pricing(db, client):
                 await notice(db, attempt, slot, "BLOCKED", "ID quảng cáo thiếu/sai hoặc được gán cho nhiều slot; chưa chỉnh giá.")
                 continue
             row = await read_ad(client, slot.adv_id)
+            from .ad_visibility import stop_unavailable, assert_clear
+            if stop_unavailable(db,'OKX',slot,row):
+                continue
             if (row.get("side") != slot.side.lower() or row.get("type") != "limit"
                     or row.get("status") != "new" or type(row.get("isHidden")) is not bool):
                 await notice(db, attempt, slot, "BLOCKED", "Quảng cáo sai chiều, không còn hoạt động, không phải giá cố định hoặc thiếu trạng thái hiển thị.")
@@ -229,6 +232,7 @@ async def process_ad_pricing(db, client):
             wanted_hidden = True if is_hide else (False if resume else hidden)
             config = db.get(OKXAutoLimits, slot.id)
             config_revision = (config.ad_id, config.minimum, config.maximum) if config else None
+            assert_clear(db,'OKX',slot.adv_id,lock=True)
             claim = db.execute(update(OKXAdPriceAttempt).where(
                 OKXAdPriceAttempt.slot_id == slot.id, OKXAdPriceAttempt.state == "IDLE").values(
                     state="SUBMITTING", old_ad_id=slot.adv_id, result_ad_id=None, action=plan["action"],

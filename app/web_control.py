@@ -28,6 +28,7 @@ from .mexc_price_state import MexcAutoLimits
 from .nickname_target import target, plan_options
 from .okx_rank import read_rank_plan, plan_rank_price
 from .diagnostics import error_detail
+from . import ad_visibility
 
 OWNER='web:primary'
 logger=logging.getLogger('uvicorn.error.web_control')
@@ -45,6 +46,37 @@ class PrivateJSONResponse(JSONResponse):
 
 
 router=APIRouter(prefix='/dashboard/api/control',dependencies=[Depends(verify_primary)],default_response_class=PrivateJSONResponse)
+
+
+class VisibilityChange(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    token: str=Field(min_length=100,max_length=1400)
+    visible: StrictBool
+    acknowledge: StrictBool=False
+
+
+@router.get('/advertisements/{exchange}/{side}')
+@isolated_io
+async def advertisements(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],db=Depends(get_db)):
+    try:return await ad_visibility.advertisements(db,exchange,side)
+    except Exception as error:raise HTTPException(400,safe_error(error)) from None
+
+
+@router.post('/visibility')
+@isolated_io
+async def visibility(data:VisibilityChange,db=Depends(get_db)):
+    if not data.acknowledge:raise HTTPException(400,'Xác nhận hiện/ẩn quảng cáo thật trước khi gửi sàn.')
+    try:return {'message':await ad_visibility.set_visibility(db,data.token,data.visible)}
+    except Exception as error:
+        db.rollback();raise HTTPException(400,safe_error(error)) from None
+
+
+@router.post('/visibility-check/{exchange}/{side}/{code}')
+@isolated_io
+async def visibility_check(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],code:str,db=Depends(get_db)):
+    try:return {'message':await ad_visibility.check_visibility(db,exchange,code,side)}
+    except Exception as error:
+        db.rollback();raise HTTPException(400,safe_error(error)) from None
 
 
 class Action(BaseModel):

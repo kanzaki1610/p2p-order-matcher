@@ -114,6 +114,8 @@ async def confirm(db,owner,draft_id):
         if snapshot(await read_ad(api,draft.ad,side))!=json.loads(draft.snapshot):
             raise ValueError('Quảng cáo vừa có thay đổi; tạo xác nhận mới, chưa gửi MEXC.')
         attempt=uuid.uuid4().hex
+        from .ad_visibility import assert_clear
+        assert_clear(db,'MEXC',draft.ad,lock=True)
         taken=db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==draft.slot,
             MexcPriceSlot.ad==draft.ad,MexcPriceSlot.state=='IDLE').values(state='UNKNOWN',action='MANUAL',
                 attempt_id=attempt,enabled=False,paused_by_floor=False,wanted_price=draft.price,

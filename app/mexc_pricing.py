@@ -140,6 +140,9 @@ async def process_pricing(db, api, source):
                 raise ValueError('Một quảng cáo đang được gán cho nhiều slot; chưa sửa giá.')
             side = slot.key.split(':')[0]
             row = await read_ad(api, slot.ad, side)
+            from .ad_visibility import stop_unavailable, assert_clear
+            if stop_unavailable(db,'MEXC',slot,row):
+                continue
             if row['advStatus'] != 'OPEN' and not (row['advStatus']=='CLOSE' and slot.paused_by_floor):
                 continue  # Never reopen manually closed or low-stock advertisements.
             config = cost_settings(db)
@@ -177,6 +180,7 @@ async def process_pricing(db, api, source):
                 if latest and time.time() - float(latest) < max(30, settings.mexc_ad_min_update_seconds): continue
             if time.time()-float(slot.last_action) < max(5, settings.mexc_ad_pricing_seconds): continue
             attempt = uuid.uuid4().hex
+            assert_clear(db,'MEXC',slot.ad,lock=True)
             claim = db.execute(update(MexcPriceSlot).where(MexcPriceSlot.key==slot.key,
                 MexcPriceSlot.state=='IDLE', MexcPriceSlot.enabled.is_(True), MexcPriceSlot.revision==slot_revision).values(
                     state='SUBMITTING', action=action, wanted_price=price, wanted_status=wanted_status,

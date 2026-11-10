@@ -149,6 +149,8 @@ async def manual_confirm(db,owner,draft_id):
         if attempt is None:
             attempt=OKXAdPriceAttempt(slot_id=slot.id,state='IDLE');db.add(attempt);db.commit()
         # One attempt per slot shared with the auto worker; never reset UNKNOWN.
+        from .ad_visibility import assert_clear
+        assert_clear(db,'OKX',draft.ad_id,lock=True)
         taken=db.execute(update(OKXAdPriceAttempt).where(OKXAdPriceAttempt.slot_id==slot.id,OKXAdPriceAttempt.state=='IDLE').values(state='SUBMITTING',action='MANUAL_PRICE',old_ad_id=draft.ad_id,result_ad_id=None,price=draft.price,hidden=draft.hidden,last_action_at=now,paused_by_floor=False))
         used=db.execute(update(ManualPriceDraft).where(ManualPriceDraft.id==draft.id,ManualPriceDraft.used.is_(False)).values(used=True))
         if taken.rowcount!=1 or used.rowcount!=1: db.rollback();raise ValueError('Slot đang xử lý hoặc xác nhận đã dùng; không gửi lại.')
