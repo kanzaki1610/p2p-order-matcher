@@ -440,3 +440,51 @@ def test_mexc_expired_wait_process_never_creates_payable_notice(db,monkeypatch):
     asyncio.run(worker.process(db,None,api,delivery,row))
     assert row.terminal
     ad.assert_not_awaited();sender.assert_not_awaited();delivery.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize('label',[
+    'Ngân Hàng TMCP Quốc Tế Việt Nam VIB',
+    'NGAN HANG TMCP QUOC TE VIET NAM (VIB)',
+    'VIB - Ngân hàng TMCP Quốc tế Việt Nam',
+])
+def test_exact_vib_legal_name_with_same_bank_abbreviation(label):
+    bank=vietqr.resolve_bank(label,'BANK')
+    assert bank['short_name']=='VIB' and bank['bin']=='970441'
+
+
+@pytest.mark.parametrize('label',[
+    'Ngân Hàng TMCP Quốc Tế Việt Nam VIB ACB',
+    'NGUYEN VAN A VIB',
+    'CHUYEN TU VIB SANG ACB',
+])
+def test_bank_name_matching_does_not_use_substrings(label):
+    with pytest.raises(ValueError):vietqr.resolve_bank(label,'BANK')
+
+
+def test_extended_vib_name_still_conflicts_with_another_known_bank():
+    with pytest.raises(ValueError):
+        vietqr.resolve_bank('Ngân Hàng TMCP Quốc Tế Việt Nam VIB','ACB')
+
+
+def test_okx_dedicated_vib_beneficiary_uses_verified_bin_and_empty_memo(db,monkeypatch):
+    from app import okx_release
+    row=okx();party=copy.deepcopy(row['counterpartyDetail'])
+    row['counterpartyDetail']['takerPaymentMethod']=None
+    party['takerPaymentMethod'].update(bankName='Ngân Hàng TMCP Quốc Tế Việt Nam VIB',bankCode='BANK')
+    monkeypatch.setattr(okx_release,'detail',AsyncMock(return_value=row))
+    source=AsyncMock(return_value=party);monkeypatch.setattr(okx_release,'request',source)
+    info=asyncio.run(worker.read_payment(None,None,record(db)))
+    assert info.bank=='VIB' and info.bank_bin=='970441' and info.note==''
+    encoded=vietqr.payload(info.bank_bin,info.account,info.amount)
+    assert '970441' in encoded and info.code not in encoded
+    assert source.call_args.args[1]=='GET'
+
+
+def test_completed_okx_order_does_not_restore_qr_after_bank_alias_fix(db,monkeypatch):
+    from app import okx_release
+    row=okx();row.update(orderStatus='completed',paymentStatus='confirmed')
+    row['counterpartyDetail']['takerPaymentMethod'].update(bankName='Ngân Hàng TMCP Quốc Tế Việt Nam VIB',bankCode='BANK')
+    monkeypatch.setattr(okx_release,'detail',AsyncMock(return_value=row))
+    source=AsyncMock();monkeypatch.setattr(okx_release,'request',source)
+    with pytest.raises(data.InactiveOrder):asyncio.run(worker.read_payment(None,None,record(db)))
+    source.assert_not_awaited()
