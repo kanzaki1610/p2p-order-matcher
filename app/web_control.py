@@ -94,13 +94,24 @@ class Action(BaseModel):
     draft_id: str=Field(default='',max_length=32,pattern=r'^(?:[0-9a-f]{32})?$')
 
 
+def okx_ad_error(message, ad_id=''):
+    """Presentation only: preserve the durable attempt and trading safeguards."""
+    if not message or not re.search(r'mã API:\s*55651(?:[.\s]|$)', message):
+        return message
+    label = ' ' + str(ad_id) if re.fullmatch(r'[0-9]{1,30}', str(ad_id)) else ''
+    return (f'Quảng cáo OKX{label} không còn khả dụng (55651). '
+            'Bấm Chọn từ quảng cáo của tôi, chọn ID hiện tại rồi Lưu ID quảng cáo. '
+            'Nếu slot còn khóa, kiểm tra/khôi phục trước; không gửi lại yêu cầu cũ. '
+            'Auto không tự bật.')
+
+
 def safe_error(error):
     from .mexc import MexcAPIError
     from .okx_release import OKXRequestError, failure_reason
     if type(error) is ValueError or isinstance(error,MexcAPIError):
         return str(error)[:700]
     if isinstance(error,OKXRequestError):
-        return failure_reason(error)
+        return okx_ad_error(failure_reason(error))
     return error_detail(error)
 
 
@@ -137,7 +148,7 @@ def snapshot(db):
                 rank=(getattr(prefs,side.lower()+'_rank') if prefs else 10) if exchange=='OKX' else slot.rank if slot else 10
                 block['slots'].append({'side':side,'slot':n,'ad_id':(slot.adv_id if exchange=='OKX' else slot.ad) if slot else '',
                     'auto':(slot.auto_enabled if exchange=='OKX' else slot.enabled) if slot else False,
-                    'state':attempt.state if attempt else 'IDLE','reason':attempt.reason if attempt else None,
+                    'state':attempt.state if attempt else 'IDLE','reason':(okx_ad_error(attempt.reason, slot.adv_id) if exchange=='OKX' else attempt.reason) if attempt else None,
                     'last_action':stamp(attempt.last_action_at if exchange=='OKX' else attempt.last_action) if attempt else None,
                     'rank':rank,'mode':'nickname' if follow else 'rank','nickname':follow[0] if follow else '',
                     'offset':follow[1] if follow else 0,'bound':follow[3] if follow else 0,
