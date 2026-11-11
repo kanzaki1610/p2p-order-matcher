@@ -92,18 +92,28 @@ def mexc_instruction(row, code, expected_side):
     if row.get('coinName') != 'USDT' or row.get('fiatUnit') != 'VND' or row.get('side') != expected_side:
         raise ValueError('Không phải lệnh Mua USDT/VND đã xác minh từ danh sách maker MEXC.')
     state = row.get('state')
-    if state in {'DONE', 'CANCEL', 'CANCELLED', 'INVALID', 'REFUSE', 'TIMEOUT', 'PAID', 'PROCESSING', 'WAIT_PROCESS'}:
+    if state in {'DONE', 'CANCEL', 'CANCELLED', 'INVALID', 'REFUSE', 'TIMEOUT', 'PAID', 'PROCESSING'}:
         raise InactiveOrder('Lệnh đã hủy, hoàn tất hoặc đã báo thanh toán; QR đã được bỏ.')
-    if state != 'NOT_PAID' or row.get('complained') is not False:
+    # Taker SELL on our verified BUY advertisement waits for the merchant
+    # to pay in WAIT_PROCESS. PROCESSING already follows payment.
+    payable = {'NOT_PAID', 'WAIT_PROCESS'} if expected_side == 'SELL' else {'NOT_PAID'}
+    if state not in payable or row.get('complained') is not False:
         raise ValueError('Trạng thái MEXC chưa xác minh là chờ thanh toán, không tranh chấp.')
     p = row.get('confirmPaymentInfo')
     payments = row.get('paymentInfo')
-    if not isinstance(payments, list):
-        raise ValueError('Thiếu danh sách tài khoản người nhận MEXC.')
+    if payments is not None and not isinstance(payments, list):
+        raise ValueError('Danh sách tài khoản người nhận MEXC sai định dạng.')
+    payments = payments or []
     if isinstance(p, dict) and p:
-        selected = [x for x in payments if isinstance(x, dict) and x.get('id') == p.get('id')]
-        if len(selected) != 1 or any(selected[0].get(k) != p.get(k) for k in ('bankName','account','payee','payMethod')):
-            raise ValueError('Tài khoản được chọn MEXC không khớp danh sách của lệnh.')
+        if not str(p.get('id') or '').isdigit() or int(p['id']) <= 0:
+            raise ValueError('Tài khoản người nhận MEXC chưa có ID xác minh.')
+        # Some authenticated maker-BUY details contain only the selected account
+        # and an empty paymentInfo list. Validate its bank/account/holder below;
+        # when a list is supplied, it must still agree with that exact selection.
+        if payments:
+            selected = [x for x in payments if isinstance(x, dict) and x.get('id') == p.get('id')]
+            if len(selected) != 1 or any(selected[0].get(k) != p.get(k) for k in ('bankName','account','payee','payMethod')):
+                raise ValueError('Tài khoản được chọn MEXC không khớp danh sách của lệnh.')
     elif len(payments) == 1:
         p = payments[0]
     else:
@@ -113,5 +123,9 @@ def mexc_instruction(row, code, expected_side):
     deadline = absolute_time(row.get('payTimeLimit'))
     if deadline is None:
         raise ValueError('Thiếu thời hạn thanh toán MEXC; chưa tạo QR.')
+    try:
+        resolve_bank(p.get('bankName'), p.get('bankCode'))
+    except ValueError:
+        raise ValueError('MEXC chưa cung cấp tên/mã ngân hàng nhận hợp lệ; chưa tạo QR. Kiểm tra ngân hàng người bán trong chi tiết lệnh trên sàn.') from None
     party = row.get('userInfo') or {}
     return instruction('MEXC', code, row.get('amount'), p, p.get('payee'), party.get('realName'), deadline)

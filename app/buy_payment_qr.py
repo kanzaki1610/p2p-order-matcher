@@ -180,19 +180,45 @@ async def read_payment(client, mexc, record):
         party = await request(client,'GET','/api/v5/p2p/order/counterparty-user-info?' +
                               urlencode({'orderId':record.code}))
         return okx_instruction(row,record.code,party)
-    row = await mexc.request('/api/v3/fiat/order/detail',params={'advOrderNo':record.code})
-    # Verify that this is our BUY advertisement, not a payment method belonging
-    # to ourselves on a SELL advertisement. Read before exposing any bank data.
-    if not isinstance(row,dict) or mexc_code(row)!=record.code:
+    row = await read_mexc_buy_order(mexc, record)
+    return mexc_instruction(row, record.code, mexc_side())
+
+
+async def read_mexc_buy_order(mexc, record):
+    row = await mexc.request('/api/v3/fiat/order/detail', params={'advOrderNo': record.code})
+    # Require both the exact order and our authenticated BUY advertisement.
+    if not isinstance(row, dict) or mexc_code(row) != record.code:
         raise ValueError('Chi tiết MEXC không khớp mã lệnh.')
-    if row.get('state') in {'DONE','CANCEL','CANCELLED','INVALID','REFUSE','TIMEOUT','PAID','PROCESSING','WAIT_PROCESS'}:
+    if row.get('side') != mexc_side() or row.get('coinName') != 'USDT' or row.get('fiatUnit') != 'VND':
+        raise ValueError('Lệnh MEXC sai chiều hoặc không phải USDT/VND.')
+    if row.get('state') in {'DONE','CANCEL','CANCELLED','INVALID','REFUSE','TIMEOUT','PAID','PROCESSING'}:
         raise InactiveOrder('Lệnh đã hủy, hoàn tất hoặc đã báo thanh toán; QR đã được bỏ.')
-    ads = [str(row.get(k) or '') for k in ('advNo','advOrderNo') if re.fullmatch(r'a\d{5,30}',str(row.get(k) or ''))]
-    if len(ads)!=1:
+    payable = {'NOT_PAID', 'WAIT_PROCESS'} if mexc_side() == 'SELL' else {'NOT_PAID'}
+    if row.get('state') not in payable or row.get('complained') is not False:
+        raise ValueError('Chưa xác minh MEXC đang chờ bạn thanh toán, không tranh chấp.')
+    deadline = absolute_time(row.get('payTimeLimit'))
+    if deadline is not None and deadline <= time.time():
+        raise InactiveOrder('Lệnh đã hết thời hạn thanh toán; không dùng QR cũ.')
+    ads = {str(row.get(k) or '') for k in ('advNo','advOrderNo')
+           if re.fullmatch(r'a\d{5,30}', str(row.get(k) or ''))}
+    if len(ads) != 1:
         raise ValueError('Chưa xác minh quảng cáo Mua MEXC của lệnh.')
     from .mexc_ads import read_ad
-    await read_ad(mexc,ads[0],'BUY')
-    return mexc_instruction(row,record.code,mexc_side())
+    await read_ad(mexc, next(iter(ads)), 'BUY')
+    return row
+
+
+async def notify_mexc_buy_order(db, record, row):
+    # An order notice does not depend on a complete beneficiary/QR. No account
+    # numbers are sent to the general order channel; they stay in private QR.
+    from .notifications import notify_once
+    from .vietqr import integer_amount
+    amount = integer_amount(row.get('amount'))
+    text = (f'MEXC · BẠN MUA USDT · CHỜ BẠN THANH TOÁN\nMã lệnh: {record.code}'
+            f'\nSố tiền: {int(amount):,} VND'
+            f'\nQR / thông tin người nhận: <#{record.channel}>'
+            f'\nThời gian VN: {vn_time()}')
+    await notify_once(db, 'mexc-buy-order:' + record.code, 'ORDER_CREATED', text, record.code)
 
 
 async def discover(db, client, mexc):
@@ -212,12 +238,12 @@ async def discover(db, client, mexc):
         try:
             from .mexc_sync import _items
             params={'startTime':int((time.time()-86400)*1000),'endTime':int(time.time()*1000),
-                    'side':mexc_side(),'orderDealState':'NOT_PAID','limit':100}
+                    'side':mexc_side(),'orderDealState':'NOT_PAID,WAIT_PROCESS','limit':100}
             seen=set()
             for _ in range(10):
                 rows = _items(await mexc.request('/api/v3/fiat/merchant/order/paginationV2',params=params))
                 candidates += [('MEXC',mexc_code(x),absolute_time(x.get('createTime'))) for x in rows
-                    if x.get('side')==mexc_side() and x.get('state')=='NOT_PAID'
+                    if x.get('side')==mexc_side() and x.get('state') in ({'NOT_PAID','WAIT_PROCESS'} if mexc_side()=='SELL' else {'NOT_PAID'})
                     and x.get('coinName')=='USDT' and x.get('fiatUnit')=='VND']
                 if len(rows)<100:break
                 last=rows[-1];cursor=(str(last.get('createTime')),mexc_code(last))
@@ -242,7 +268,15 @@ async def process(db, client, mexc, delivery, record):
     try:
         if float(record.created) < time.time()-86400:
             raise InactiveOrder('Lệnh quá 24 giờ; mở sàn kiểm tra, không dùng QR cũ.')
-        info=await read_payment(client,mexc,record)
+        if record.exchange == 'MEXC':
+            row = await read_mexc_buy_order(mexc, record)
+            try:
+                await notify_mexc_buy_order(db, record, row)
+            except Exception:
+                logger.warning('MEXC BUY order notice delivery incomplete')
+            info = mexc_instruction(row, record.code, mexc_side())
+        else:
+            info=await read_payment(client,mexc,record)
         new=fingerprint(asdict(info))
         if new==record.fingerprint and record.message and not record.delivery_unknown:
             return
