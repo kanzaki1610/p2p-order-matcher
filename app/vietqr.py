@@ -20,13 +20,23 @@ ALIASES = {'MB': 'MBBANK', 'KLB': 'KIENLONGBANK', 'STB': 'SACOMBANK', 'CTG': 'VI
            'LPBANK': 'LIENVIETPOSTBANK'}
 
 
+def bank_keys(bank):
+    legal = folded(bank['name'])
+    labels = {folded(bank['short_name']), folded(bank['code'])}
+    # Exchanges can append/prepend the same bank's abbreviation to its full
+    # legal name. Accept only these exact registered combinations, never a
+    # substring, fuzzy name or a different bank's label.
+    return ({legal, bank['bin']} | labels
+            | {legal + label for label in labels}
+            | {label + legal for label in labels})
+
+
 def resolve_bank(*values):
     matches = set()
     for value in values:
         key = folded(value or '')
         key = ALIASES.get(key, key)
-        found = {b['bin'] for b in BANKS if key and key in {
-            folded(b['name']), folded(b['short_name']), folded(b['code']), b['bin']}}
+        found = {b['bin'] for b in BANKS if key and key in bank_keys(b)}
         if len(found) > 1:
             raise ValueError('Tên ngân hàng không xác định duy nhất; chưa tạo QR.')
         matches |= found
