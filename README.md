@@ -237,3 +237,14 @@ slot ID. A failed live
 read clears previously displayed price/quantity values so they are not mistaken
 for a new verified response. No slot ID, Auto switch, pending request or unknown
 write lock is changed by displaying this guidance.
+
+
+### Exact bank names returned by exchanges
+
+VietQR bank recognition accepts a registered legal name combined with that same
+bank's registered code or short name, in either order (for example the OKX label
+"Ngân Hàng TMCP Quốc Tế Việt Nam VIB"). This is exact normalized matching, not
+substring/fuzzy matching. VIB uses the existing verified BIN 970441. Conflicting
+recognized banks still block QR; the holder, account, order state and repeated
+pre-send checks are unchanged. Completed/paid order QRs are not restored by this
+mapping correction. Public bank reference: https://api.vietqr.io/v2/banks
