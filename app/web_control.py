@@ -146,9 +146,15 @@ def snapshot(db):
                 follow=target(db,exchange,side,n)
                 limits=db.get(OKXAutoLimits,slot.id) if slot and exchange=='OKX' else db.get(MexcAutoLimits,f'{side}:{n}') if slot else None
                 rank=(getattr(prefs,side.lower()+'_rank') if prefs else 10) if exchange=='OKX' else slot.rank if slot else 10
+                reason=attempt.reason if attempt else None
+                if exchange=='OKX' and attempt:
+                    diagnostic_ad=attempt.result_ad_id or attempt.old_ad_id
+                    if attempt.state=='IDLE' and diagnostic_ad and diagnostic_ad!=slot.adv_id:
+                        reason=None  # An old completed attempt is not an error on a newly selected ad.
+                    else:reason=okx_ad_error(reason,slot.adv_id)
                 block['slots'].append({'side':side,'slot':n,'ad_id':(slot.adv_id if exchange=='OKX' else slot.ad) if slot else '',
                     'auto':(slot.auto_enabled if exchange=='OKX' else slot.enabled) if slot else False,
-                    'state':attempt.state if attempt else 'IDLE','reason':(okx_ad_error(attempt.reason, slot.adv_id) if exchange=='OKX' else attempt.reason) if attempt else None,
+                    'state':attempt.state if attempt else 'IDLE','reason':reason,
                     'last_action':stamp(attempt.last_action_at if exchange=='OKX' else attempt.last_action) if attempt else None,
                     'rank':rank,'mode':'nickname' if follow else 'rank','nickname':follow[0] if follow else '',
                     'offset':follow[1] if follow else 0,'bound':follow[3] if follow else 0,
