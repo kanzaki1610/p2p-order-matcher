@@ -71,6 +71,9 @@ async def execute_panel(payload, db, owner):
     parts = str(payload.get('data',{}).get('custom_id','')).split(':')
     if not parts or parts[0] != 'mprice': raise ValueError('Nút MEXC không hợp lệ.')
     action = parts[1] if len(parts)>1 else ''
+    if action=='offer':
+        from .nickname_offers import interact
+        return await interact(payload, db, owner, 'MEXC')
     if action=='stopall':
         from .primary_controls import stop_all
         return {'content':stop_all(db,'discord:'+owner),'components':[]}
@@ -83,7 +86,9 @@ async def execute_panel(payload, db, owner):
         values={x['custom_id']:x.get('value','').strip() for row in payload['data'].get('components',[]) for x in row.get('components',[])}
         if action=='follow':
             from .nickname_target import save
-            return save(db,'MEXC',side,values,owner)
+            result = save(db,'MEXC',side,values,owner)
+            from .nickname_offers import open_picker
+            return await open_picker(db, 'MEXC', side, values['slot'], owner, result['content'])
         if action=='price':
             if values.get('slot') not in {'1','2'}:raise ValueError('Chọn slot 1 hoặc 2.')
             terms={key:str(input_number(values[key],money=key!='quantity')) for key in ('quantity','minimum','maximum') if values.get(key)}

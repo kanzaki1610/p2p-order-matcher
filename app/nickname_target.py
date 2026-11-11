@@ -6,6 +6,7 @@ from sqlalchemy import String, Integer, Numeric, select, delete
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+from .nickname_offers import OfferSelection, OfferPicker
 
 
 class NicknameTarget(Base):
@@ -36,7 +37,8 @@ def validate_bound(value=''):
 
 def plan_options(follow):
     return {'target_nickname': follow[0], 'price_offset': follow[1],
-            'price_bound': follow[3] if len(follow) > 3 else 0} if follow else {}
+            'price_bound': follow[3] if len(follow) > 3 else 0,
+            'target_offer': follow[4] if len(follow) > 4 else None} if follow else {}
 
 
 def validate_target(nickname, offset=''):
@@ -60,13 +62,18 @@ def target(db, exchange, side, slot):
     if row is None:
         return None
     bound = db.get(NicknamePriceBound, row.key, populate_existing=True)
-    return row.nickname, row.offset, row.revision, int(bound.price) if bound else 0
+    from .nickname_offers import OfferSelection
+    chosen = db.get(OfferSelection, row.key, populate_existing=True)
+    value = (row.nickname, row.offset, row.revision, int(bound.price) if bound else 0)
+    return value + (chosen.fingerprint,) if chosen else value
 
 
 def clear(db, exchange, side, slot=None):
     for n in ([slot] if slot is not None else [1, 2]):
         db.execute(delete(NicknameTarget).where(NicknameTarget.key == key(exchange, side, n)))
         db.execute(delete(NicknamePriceBound).where(NicknamePriceBound.key == key(exchange, side, n)))
+        from .nickname_offers import OfferSelection
+        db.execute(delete(OfferSelection).where(OfferSelection.key == key(exchange, side, n)))
 
 
 def modal(prefix, side):
@@ -84,7 +91,7 @@ def modal(prefix, side):
             'max_length': 100 if k == 'target' else 16 if k == 'bound' else 10}]} for k, label, hint, required in fields]}}
 
 
-def save(db, exchange, side, values, owner):
+def save(db, exchange, side, values, owner, commit=True):
     from .models import OKXSlot, OKXAuditLog
     from .config import settings
     from .mexc_pricing import MexcPriceSlot
@@ -104,13 +111,18 @@ def save(db, exchange, side, values, owner):
         raise ValueError('Chọn quảng cáo cho slot trước khi bám biệt danh.')
     if nick.casefold() in {x.strip().casefold() for x in own.split(',') if x.strip()}:
         raise ValueError('Không bám theo quảng cáo của chính tài khoản này.')
+    previous = db.get(NicknameTarget, code)
+    if previous is None or previous.nickname.casefold() != nick.casefold():
+        from .nickname_offers import OfferSelection
+        db.execute(delete(OfferSelection).where(OfferSelection.key == code))
     db.merge(NicknameTarget(key=code, nickname=nick, offset=offset, revision=uuid.uuid4().hex))
     db.merge(NicknamePriceBound(key=code, price=bound))
     if exchange == 'MEXC':
         slot.revision = uuid.uuid4().hex
     db.add(OKXAuditLog(action='PRICING_NICKNAME_TARGET', actor='discord:' + owner,
                       detail=f'{code} nickname={nick}; offset={offset:+d}; bound={bound}'))
-    db.commit()
+    if commit:
+        db.commit()
     guard = (f'Giá {"sàn bán" if side == "SELL" else "trần mua"}: {bound:,}đ/USDT; giữ tại mức này khi giá đối thủ cộng chênh lệch vượt giới hạn. '
              if bound else 'Không đặt giới hạn sàn/trần riêng cho biệt danh. ')
     return {'content': f'Đã lưu {exchange} {side} slot {n}: bám {nick}, chênh {offset:+d}đ/USDT. ' + guard +

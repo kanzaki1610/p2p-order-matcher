@@ -155,7 +155,10 @@ async def process_pricing(db, api, source):
             kwargs = {'follow':follow} if follow else {}
             if not protect:kwargs['enforce_cost']=False
             plan = await rank_plan(source, slot, cost if side=='SELL' else None, **kwargs)
-            if plan['action']=='BLOCKED': raise ValueError(plan['reason'])
+            if plan['action']=='BLOCKED':
+                from .nickname_offers import publish_ambiguity
+                await publish_ambiguity(db, 'MEXC', side, slot.key.split(':')[1], follow, plan)
+                raise ValueError(plan['reason'])
             current, proposed = number(row['price']), number(plan['proposed_price'])
             action = 'HIDE' if plan['action']=='HIDE_AD' else 'PRICE'
             if action=='HIDE' and row['advStatus']=='CLOSE': continue

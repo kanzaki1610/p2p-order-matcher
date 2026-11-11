@@ -185,6 +185,9 @@ async def manual_confirm(db,owner,draft_id):
 async def execute_panel(payload,db,owner):
     code=payload['data']['custom_id'].split(':')
     action=code[1]
+    if action=='offer':
+        from .nickname_offers import interact
+        return await interact(payload, db, owner, 'OKX')
     if action=='stopall':
         from .primary_controls import stop_all
         return {'content':stop_all(db,'discord:'+owner),'components':[]}
@@ -193,7 +196,9 @@ async def execute_panel(payload,db,owner):
         values={x['custom_id']:x.get('value','') for row in payload['data'].get('components',[]) for x in row.get('components',[])}
         if action=='follow':
             from .nickname_target import save
-            return save(db,'OKX',side,values,owner)
+            result = save(db,'OKX',side,values,owner)
+            from .nickname_offers import open_picker
+            return await open_picker(db, 'OKX', side, values['slot'], owner, result['content'])
         value=values.get('value','')
         if action=='limits':
             if side=='BUY':

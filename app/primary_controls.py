@@ -50,4 +50,6 @@ def panel(prefix, exchange):
         'allowed_mentions':{'parse':[]},'components':[{'type':1,'components':[
             {'type':2,'style':5,'label':'Mở dashboard','url':(settings.public_base_url or 'https://p2p-order-matcher.onrender.com').rstrip('/')+'/dashboard'},
             {'type':2,'style':4,'label':'Dừng toàn bộ Auto','custom_id':prefix+':stopall'},
-            {'type':2,'style':2,'label':'Trạng thái','custom_id':prefix+':status'}]}]}
+            {'type':2,'style':2,'label':'Trạng thái','custom_id':prefix+':status'}]},
+            {'type':1,'components':[{'type':2,'style':2,'label':'Bám biệt danh Mua','custom_id':prefix+':follow:BUY'},
+                {'type':2,'style':2,'label':'Bám biệt danh Bán','custom_id':prefix+':follow:SELL'}]}]}

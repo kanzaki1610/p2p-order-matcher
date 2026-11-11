@@ -10,7 +10,7 @@ MIN_SPREAD = Decimal("10")
 SOURCE_MAX_AGE = 30
 
 
-def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True):
+def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True, target_offer=None):
     from .nickname_target import validate_target, validate_bound
     if target_nickname is not None:
         target_nickname, price_offset = validate_target(target_nickname, str(price_offset))
@@ -52,7 +52,7 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
             if row["nick"].strip().casefold() == own_nickname.strip().casefold():
                 excluded += 1
                 continue
-            competitors.append({"nickname": row["nick"], "price": price})
+            competitors.append({"nickname": row["nick"], "price": price, "row": row})
     except ValueError:
         return {**base, "reason": "Có dòng giá thiếu/sai dữ liệu; không tự bỏ dòng làm thay đổi thứ hạng."}
     # Use the displayed table order, so rank 10 follows the user's source.
@@ -61,8 +61,13 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
         matches = [x for x in competitors if x['nickname'].strip().casefold() == target_nickname.casefold()]
         if not matches:
             return {**base, "reason": f"Không tìm thấy biệt danh {target_nickname} trong bảng giá cùng sàn/chiều; không chuyển sang bám vị trí."}
+        if target_offer is not None:
+            from .nickname_offers import fingerprint
+            matches = [x for x in matches if fingerprint(x['row']) == target_offer]
+            if len(matches) != 1:
+                return {**base, 'reason': 'Quảng cáo biệt danh đã chọn thay đổi, biến mất hoặc bị trùng; chọn lại dòng quảng cáo. Không chuyển sang dòng khác.'}
         if len({x['price'] for x in matches}) != 1:
-            return {**base, "reason": f"Biệt danh {target_nickname} có nhiều quảng cáo khác giá; chưa chọn được giá duy nhất."}
+            return {**base, "nickname_offer_choices": [x["row"] for x in matches], "reason": f"Biệt danh {target_nickname} có nhiều quảng cáo khác giá; chọn dòng trong kênh bám giá (Bám biệt danh)."}
         chosen = matches[0]
         base.update(target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound)
     elif len(competitors) < target_rank:
@@ -100,7 +105,7 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
         +("Chênh giá 10đ là trước phí nếu có. " if enforce_cost else "Đang tắt áp dụng giá vốn +10đ. ")+"Chưa gửi yêu cầu sửa thật."}
 
 
-async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True):
+async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True, target_offer=None):
     side = side.upper()
     if side not in {"BUY", "SELL"}:
         raise ValueError("Chiều quảng cáo phải là BUY hoặc SELL")
@@ -108,7 +113,7 @@ async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK,
     response.raise_for_status()
     from .config import settings
     own_nickname = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
-    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound,enforce_cost=enforce_cost)
+    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound,enforce_cost=enforce_cost,target_offer=target_offer)
 
 
 async def send_preview_alert(plan):

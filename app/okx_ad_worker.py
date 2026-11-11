@@ -193,6 +193,8 @@ async def process_ad_pricing(db, client):
             if slot.side == "SELL":
                 plan["cost_source"] = cost
             if plan["action"] == "BLOCKED":
+                from .nickname_offers import publish_ambiguity
+                await publish_ambiguity(db, "OKX", slot.side, slot.slot_number, follow, plan)
                 await notice(db, attempt, slot, "BLOCKED", plan["reason"], plan)
                 continue
             current = number(row.get("unitPrice"))
