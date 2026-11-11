@@ -283,3 +283,65 @@ def test_web_adoption_draft_cannot_be_confirmed_as_discord_owner(client,monkeypa
     done=send(client,'adopt_confirm',exchange='MEXC',side='SELL',draft_id=choice['draft_id'])
     assert done.status_code==200 and done.json()['choices'][0]['action']=='auto'
     with client.factory() as db:assert not db.get(MexcPriceSlot,'SELL:1').enabled
+
+
+@pytest.mark.parametrize('prefix',['OKX HTTP 400; mã API: 55651.','OKX từ chối yêu cầu; mã API: 55651.'])
+def test_unavailable_ad_has_actionable_hint_without_echoing_server_text(prefix):
+    from app.okx_release import OKXRequestError
+    result=web.safe_error(OKXRequestError(prefix))
+    assert 'không còn khả dụng (55651)' in result
+    assert 'Chọn từ quảng cáo của tôi' in result and 'Lưu ID quảng cáo' in result
+    assert 'Auto không tự bật' in result and 'không gửi lại yêu cầu cũ' in result
+    assert web.safe_error(OKXRequestError('OKX HTTP 400; mã API: 55723.'))=='OKX HTTP 400; mã API: 55723.'
+
+
+def test_unavailable_stored_reason_changes_presentation_only(client):
+    c=client;factory=client.factory
+    from app.okx_ad_worker import OKXAdPriceAttempt
+    with factory() as db:
+        slot=db.scalar(select(OKXSlot).where(OKXSlot.side=='BUY',OKXSlot.slot_number==1))
+        original=slot.adv_id
+        attempt=OKXAdPriceAttempt(slot_id=slot.id,state='UNKNOWN',old_ad_id=original,
+            reason='OKX HTTP 400; mã API: 55651.')
+        db.add(attempt);db.commit()
+    result=c.get('/dashboard/api/control/state').json()
+    row=next(x for x in result['exchanges']['OKX']['slots'] if x['side']=='BUY' and x['slot']==1)
+    assert row['state']=='UNKNOWN' and row['ad_id']==original
+    assert 'không còn khả dụng (55651)' in row['reason']
+    with factory() as db:
+        stored=db.get(OKXAdPriceAttempt,attempt.slot_id)
+        assert stored.state=='UNKNOWN' and stored.reason=='OKX HTTP 400; mã API: 55651.'
+        assert db.get(OKXSlot,attempt.slot_id).adv_id==original
+
+
+def test_unavailable_live_read_is_explained_and_never_changes_slot(client,monkeypatch):
+    c=client;factory=client.factory
+    from app import okx_ads
+    from app.okx_release import OKXRequestError
+    reader=AsyncMock(side_effect=OKXRequestError('OKX HTTP 400; mã API: 55651.'))
+    monkeypatch.setattr(okx_ads,'read_ad',reader)
+    with factory() as db:
+        slot=db.scalar(select(OKXSlot).where(OKXSlot.side=='BUY',OKXSlot.slot_number==1))
+        original=slot.adv_id;auto=slot.auto_enabled
+    response=c.get('/dashboard/api/control/live/OKX/BUY/1')
+    assert response.status_code==400
+    assert 'Chọn từ quảng cáo của tôi' in response.json()['detail']
+    assert 'Auto không tự bật' in response.json()['detail']
+    with factory() as db:
+        slot=db.scalar(select(OKXSlot).where(OKXSlot.side=='BUY',OKXSlot.slot_number==1))
+        assert slot.adv_id==original and slot.auto_enabled==auto
+
+
+def test_completed_old_ad_diagnostic_is_not_attached_to_new_selected_id(client):
+    from app.okx_ad_worker import OKXAdPriceAttempt
+    with client.factory() as db:
+        slot=db.scalar(select(OKXSlot).where(OKXSlot.side=='BUY',OKXSlot.slot_number==1))
+        db.add(OKXAdPriceAttempt(slot_id=slot.id,state='IDLE',old_ad_id='111',result_ad_id='222',
+            reason='OKX HTTP 400; mã API: 55651.'))
+        db.commit()
+    result=client.get('/dashboard/api/control/state').json()
+    row=next(x for x in result['exchanges']['OKX']['slots'] if x['side']=='BUY' and x['slot']==1)
+    assert row['ad_id']=='123' and row['reason'] is None and row['state']=='IDLE'
+    with client.factory() as db:
+        stored=db.get(OKXAdPriceAttempt,slot.id)
+        assert stored.reason=='OKX HTTP 400; mã API: 55651.' and stored.result_ad_id=='222'
