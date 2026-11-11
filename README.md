@@ -212,3 +212,16 @@ for the same buyer. Bank, identity, funding and release preflight checks still
 apply. Cancelled-order credits are retained as IGNORED_CANCELLED without manual-review
 notifications, release or reassignment. Explicit references to expired/completed
 orders still require manual review. Already allocated or consumed bank credits are not reassigned.
+
+
+### MEXC BUY payment notifications
+
+The primary QR reader polls both NOT_PAID and WAIT_PROCESS. On an authenticated
+owned BUY advertisement, taker-side SELL / WAIT_PROCESS is waiting for the
+merchant to pay; PAID, PROCESSING and terminal states never produce a payable QR.
+A separate deduplicated ORDER_CREATED notice links to the private QR channel even
+if beneficiary data is incomplete. Selected confirmPaymentInfo may be the only
+account returned by MEXC; its ID, bank, account number and holder/KYC must validate.
+If a paymentInfo list is present, the selected account must agree with it.
+The worker reads the order and owned BUY advertisement again before sending QR.
+There are no exchange writes, automatic transfers or paid confirmations.
