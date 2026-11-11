@@ -111,6 +111,11 @@ def test_signed_pricing_only_owner_channel_replay_and_other_commands_disabled(mo
     assert post(payload).json()['type']==5
     assert post(payload).json()['type']==5
     assert runner.await_count==1
+    offer=dict(payload,type=3,id='103',data={'custom_id':'price:offer:page:example:0'})
+    assert post(dict(offer,member={'user':{'id':'other'},'roles':[]})).json()['type']==4
+    assert post(offer).json()['type']==6
+    assert post(offer).json()['type']==6
+    assert runner.await_count==2
     monkeypatch.setattr(settings,'database_schema','kayhap')
     assert post(dict(payload,id='102')).json()['type']==4
     engine.dispose()
