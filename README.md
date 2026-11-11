@@ -225,3 +225,15 @@ account returned by MEXC; its ID, bank, account number and holder/KYC must valid
 If a paymentInfo list is present, the selected account must agree with it.
 The worker reads the order and owned BUY advertisement again before sending QR.
 There are no exchange writes, automatic transfers or paid confirmations.
+
+
+### OKX advertisement no longer available (55651)
+
+P2P Control translates OKX ad-read error 55651 into instructions to select a
+current owned advertisement and save its ID. The snapshot also explains stored
+55651 diagnostics, while preserving their original database values. Diagnostics
+from completed attempts on a different old ad are not attached to a newly selected
+slot ID. A failed live
+read clears previously displayed price/quantity values so they are not mistaken
+for a new verified response. No slot ID, Auto switch, pending request or unknown
+write lock is changed by displaying this guidance.
