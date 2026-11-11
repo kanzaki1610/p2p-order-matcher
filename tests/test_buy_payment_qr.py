@@ -181,7 +181,7 @@ def test_mexc_wrong_side_or_incomplete_blocks(change):
     with pytest.raises(ValueError):data.mexc_instruction({**mexc(),**change},'d123456789','SELL')
 
 
-@pytest.mark.parametrize('state',['CANCEL','CANCELLED','DONE','PAID','PROCESSING','WAIT_PROCESS','TIMEOUT'])
+@pytest.mark.parametrize('state',['CANCEL','CANCELLED','DONE','PAID','PROCESSING','TIMEOUT'])
 def test_mexc_terminal(state):
     with pytest.raises(data.InactiveOrder):data.mexc_instruction({**mexc(),'state':state},'d123456789','SELL')
 
@@ -315,3 +315,128 @@ def test_private_channel_binding(db,public,outsider,wrong_guild):
     if public or outsider or wrong_guild:
         with pytest.raises(ValueError):asyncio.run(run())
     else:asyncio.run(run())
+
+
+@pytest.mark.parametrize('state',['NOT_PAID','WAIT_PROCESS'])
+def test_mexc_verified_buy_waiting_for_payment_supports_qr(state):
+    row={**mexc(),'state':state}
+    result=data.mexc_instruction(row,'d123456789','SELL')
+    assert result.exchange=='MEXC' and result.amount=='50000000' and result.note==''
+    assert result.account=='00123456789'
+
+
+def test_mexc_wait_process_wrong_side_is_not_payable():
+    row={**mexc(),'state':'WAIT_PROCESS','side':'BUY'}
+    with pytest.raises(ValueError):data.mexc_instruction(row,'d123456789','BUY')
+
+
+def test_mexc_discovery_includes_wait_process_but_not_paid_or_wrong_side(db,monkeypatch):
+    monkeypatch.setattr(worker.settings,'okx_p2p_enabled',False)
+    monkeypatch.setattr(worker.settings,'mexc_p2p_enabled',True)
+    monkeypatch.setattr(worker.settings,'mexc_p2p_api_incoming_side','BUY')
+    row={**mexc(),'state':'WAIT_PROCESS','createTime':int(time.time()*1000)}
+    api=SimpleNamespace(request=AsyncMock(return_value=[row,
+        {**row,'advOrderNo':'d222222222','state':'PROCESSING'},
+        {**row,'advOrderNo':'d333333333','side':'BUY'}]))
+    asyncio.run(worker.discover(db,None,api))
+    assert [x.code for x in db.query(worker.BuyPaymentQR)]==['d123456789']
+    assert api.request.call_args.kwargs['params']['orderDealState']=='NOT_PAID,WAIT_PROCESS'
+
+
+def test_mexc_notice_survives_missing_beneficiary_and_deduplicates(db,monkeypatch):
+    from app import notifications
+    monkeypatch.setattr(worker.settings,'mexc_p2p_api_incoming_side','BUY')
+    row=worker.BuyPaymentQR(key='MEXC:d123456789',exchange='MEXC',code='d123456789',
+        channel='123456789012345678',created=time.time())
+    db.add(row);db.commit()
+    detail={**mexc(),'state':'WAIT_PROCESS','paymentInfo':[]}
+    monkeypatch.setattr(worker,'read_mexc_buy_order',AsyncMock(return_value=detail))
+    sender=AsyncMock(return_value=True);monkeypatch.setattr(notifications,'notify_event',sender)
+    delivery=SimpleNamespace(send=AsyncMock(return_value=True))
+    asyncio.run(worker.process(db,None,None,delivery,row))
+    asyncio.run(worker.process(db,None,None,delivery,row))
+    sender.assert_awaited_once()
+    assert sender.call_args.args[0]=='ORDER_CREATED'
+    assert 'MEXC' in sender.call_args.args[1] and '50,000,000' in sender.call_args.args[1]
+    assert '00123456789' not in sender.call_args.args[1]
+    assert delivery.send.call_args.args[3] is None
+
+
+def test_mexc_wait_process_verified_twice_before_qr_send(db,monkeypatch):
+    from app import mexc_ads,notifications
+    monkeypatch.setattr(worker.settings,'mexc_p2p_api_incoming_side','BUY')
+    row=worker.BuyPaymentQR(key='MEXC:d123456789',exchange='MEXC',code='d123456789',
+        channel='123456789012345678',created=time.time())
+    db.add(row);db.commit()
+    api=SimpleNamespace(request=AsyncMock(return_value={**mexc(),'state':'WAIT_PROCESS'}))
+    owned=AsyncMock(return_value={'side':'BUY'});monkeypatch.setattr(mexc_ads,'read_ad',owned)
+    monkeypatch.setattr(notifications,'notify_event',AsyncMock(return_value=True))
+    delivery=SimpleNamespace(send=AsyncMock(return_value=True))
+    asyncio.run(worker.process(db,None,api,delivery,row))
+    assert owned.await_count==2 and api.request.await_count==2
+    assert delivery.send.call_args.args[3].startswith(b'\x89PNG')
+
+
+def test_mexc_processing_after_initial_read_invalidates_qr(db,monkeypatch):
+    from app import mexc_ads,notifications
+    monkeypatch.setattr(worker.settings,'mexc_p2p_api_incoming_side','BUY')
+    row=worker.BuyPaymentQR(key='MEXC:d123456789',exchange='MEXC',code='d123456789',
+        channel='123456789012345678',created=time.time())
+    db.add(row);db.commit()
+    api=SimpleNamespace(request=AsyncMock(side_effect=[{**mexc(),'state':'WAIT_PROCESS'},
+        {**mexc(),'state':'PROCESSING'}]))
+    monkeypatch.setattr(mexc_ads,'read_ad',AsyncMock(return_value={'side':'BUY'}))
+    monkeypatch.setattr(notifications,'notify_event',AsyncMock(return_value=True))
+    delivery=SimpleNamespace(send=AsyncMock(return_value=True))
+    asyncio.run(worker.process(db,None,api,delivery,row))
+    assert not delivery.send.called and row.terminal
+
+
+@pytest.mark.parametrize('payments',[None,[]])
+def test_mexc_selected_account_without_list_is_verified_directly(payments):
+    row=mexc();row['confirmPaymentInfo']=dict(row['paymentInfo'][0])
+    row['paymentInfo']=payments;row['state']='WAIT_PROCESS'
+    result=data.mexc_instruction(row,'d123456789','SELL')
+    assert result.account=='00123456789' and result.bank=='MBBank' and result.note==''
+
+
+@pytest.mark.parametrize('change',[{'id':None},{'payee':'OTHER PERSON'},{'account':'12***789'},
+    {'payMethod':2},{'bankName':'UNKNOWN BANK'}])
+def test_mexc_selected_only_account_never_bypasses_identity_or_bank(change):
+    row=mexc();row['confirmPaymentInfo']={**row['paymentInfo'][0],**change}
+    row['paymentInfo']=[];row['state']='WAIT_PROCESS'
+    with pytest.raises(ValueError):data.mexc_instruction(row,'d123456789','SELL')
+
+
+def test_mexc_person_name_in_bank_field_reports_order_but_no_qr(db,monkeypatch):
+    from app import notifications
+    monkeypatch.setattr(worker.settings,'mexc_p2p_api_incoming_side','BUY')
+    row=worker.BuyPaymentQR(key='MEXC:d123456789',exchange='MEXC',code='d123456789',
+        channel='123456789012345678',created=time.time())
+    db.add(row);db.commit()
+    detail={**mexc(),'state':'WAIT_PROCESS','paymentInfo':[],
+        'confirmPaymentInfo':{**mexc()['paymentInfo'][0],'bankName':'NGUYEN VAN A'}}
+    monkeypatch.setattr(worker,'read_mexc_buy_order',AsyncMock(return_value=detail))
+    sender=AsyncMock(return_value=True);monkeypatch.setattr(notifications,'notify_event',sender)
+    delivery=SimpleNamespace(send=AsyncMock(return_value=True))
+    asyncio.run(worker.process(db,None,None,delivery,row))
+    sender.assert_awaited_once()
+    assert sender.call_args.args[0]=='ORDER_CREATED'
+    assert delivery.send.call_args.args[3] is None
+    assert 'MEXC chưa cung cấp tên/mã ngân hàng nhận hợp lệ' in delivery.send.call_args.args[2]['content']
+
+
+def test_mexc_expired_wait_process_never_creates_payable_notice(db,monkeypatch):
+    from app import mexc_ads,notifications
+    monkeypatch.setattr(worker.settings,'mexc_p2p_api_incoming_side','BUY')
+    row=worker.BuyPaymentQR(key='MEXC:d123456789',exchange='MEXC',code='d123456789',
+        channel='123456789012345678',created=time.time())
+    db.add(row);db.commit()
+    api=SimpleNamespace(request=AsyncMock(return_value={**mexc(),'state':'WAIT_PROCESS',
+        'payTimeLimit':int((time.time()-1)*1000)}))
+    ad=AsyncMock();monkeypatch.setattr(mexc_ads,'read_ad',ad)
+    sender=AsyncMock();monkeypatch.setattr(notifications,'notify_event',sender)
+    delivery=SimpleNamespace(send=AsyncMock(return_value=True))
+    asyncio.run(worker.process(db,None,api,delivery,row))
+    assert row.terminal
+    ad.assert_not_awaited();sender.assert_not_awaited();delivery.send.assert_not_awaited()
