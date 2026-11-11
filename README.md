@@ -248,3 +248,37 @@ substring/fuzzy matching. VIB uses the existing verified BIN 970441. Conflicting
 recognized banks still block QR; the holder, account, order state and repeated
 pre-send checks are unchanged. Completed/paid order QRs are not restored by this
 mapping correction. Public bank reference: https://api.vietqr.io/v2/banks
+
+
+### Discord: select a specific nickname offer (OKX / MEXC)
+
+Open `/gia bang` in the exchange control channel, then **Bám biệt danh Mua** or
+**Bám biệt danh Bán**. Save nickname, signed offset and optional price ceiling/floor.
+The reply lists each public offer with its price, Min/Max and payment method;
+Slot 1/2 buttons sit beside that price. Green means the slot selects that offer,
+not that Auto is enabled. Choosing an offer preserves Auto and all existing cost,
+budget, rate-limit and uncertain-write protections. The configured offset/bound
+shown above the list apply to whichever slot is clicked. A slot needs an owned
+advertisement configured first. Use **Đọc lại giá** to refresh or page the list.
+
+An ambiguous worker result also publishes one picker per target revision into the
+existing authorized exchange control channel (bot token/send permission required).
+The regular warning remains in the alert channel. Delivery is claimed before POST;
+unknown Discord delivery is not automatically resent. Reopen the nickname form if
+a picker is missing. No new Discord permissions or environment variables are added.
+
+AutoP2P does not expose stable advertisement IDs. Offer selection therefore uses
+an exact fingerprint of Min, payment methods and public business conditions,
+excluding price, rank and changing Max. Price/rank/Max changes keep the selection.
+If that fingerprint disappears, changes or matches multiple rows, pricing blocks
+and requires reselection; it never silently chooses another row. This is not
+exchange advertisement-ID tracking. Legacy unselected nickname targets retain
+the existing unique-price behavior. New additive account-local tables are created
+by the normal startup `create_all`; no existing financial rows are rewritten.
+
+Picker selections require the existing signed Discord channel/account/operator
+checks, the picker owner, current slot configuration and a fresh same-exchange,
+same-side source. Selection buttons expire after ten minutes and are consumed on
+use; refreshing is read-only. Stale/replayed selections cannot overwrite newer
+settings. Both exchange workers include the selected fingerprint in their config
+revision checks before any write.
