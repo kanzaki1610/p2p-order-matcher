@@ -194,6 +194,9 @@ async def handle_verified_payload(payload, background_tasks):
     except ValueError as exc:
         return {"type": 4, "data": {"content": str(exc), "flags": 64}}
     background_tasks.add_task(claim_and_run_command, payload, text)
+    if payload.get("type") == 3 and custom.startswith(("price:offer:", "mprice:offer:")):
+        # Edit this picker in place so the chosen slot stays visibly green.
+        return {"type": 6}
     return {"type": 5, "data": {"flags": 64}}
 
 
