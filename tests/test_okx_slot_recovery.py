@@ -120,6 +120,37 @@ def test_secondary_account_cannot_recover_primary(db,monkeypatch):
     reader.assert_not_called()
 
 
+@pytest.mark.parametrize('case',['verified','present','list_error','timeout','rate_limit','result','other_read_error','concurrent'])
+def test_retire_rejected_unavailable_ad_requires_both_proofs(db,monkeypatch,case):
+    from app.okx_release import OKXRequestError
+    from app import ad_visibility
+    attempt=db.query(recovery.OKXAdPriceAttempt).one()
+    if case=='timeout':attempt.reason='Timeout'
+    if case=='rate_limit':attempt.reason='OKX HTTP 429; mã API: 50011.'
+    if case=='result':attempt.result_ad_id='456'
+    db.commit()
+    reader=AsyncMock(side_effect=OKXRequestError('OKX HTTP 400; mã API: '+('55349.' if case=='other_read_error' else '55651.')))
+    monkeypatch.setattr(recovery,'read_ad',reader)
+    async def listing(*args):
+        if case=='list_error':raise TimeoutError()
+        if case=='concurrent':
+            db.execute(update(recovery.OKXAdPriceAttempt).values(reason='changed'));db.commit()
+        return ([{'adId':'123' if case=='present' else '789','side':'sell'}],False)
+    listing_mock=AsyncMock(side_effect=listing)
+    monkeypatch.setattr(ad_visibility,'owned_list',listing_mock)
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    result=run(db)
+    slot=db.query(OKXSlot).one()
+    assert not slot.auto_enabled and slot.adv_id=='123' and slot.current_price==27563
+    post.assert_not_awaited()
+    if case=='verified':
+        assert attempt.state=='IDLE' and '55651' in result
+        assert 'REJECTED_AD_UNAVAILABLE' in db.query(OKXAuditLog).one().detail
+    else:
+        assert attempt.state!='IDLE' and db.query(OKXAuditLog).count()==0
+
+
+
 
 def manual_case(db):
     import json

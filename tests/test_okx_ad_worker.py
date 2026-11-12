@@ -62,7 +62,7 @@ def test_disabled_or_wrong_account_never_calls_exchange(db, setup, monkeypatch, 
 
 
 def test_replacement_id_verified_and_saved(db, setup, monkeypatch):
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(),ad('456','26070')]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}); monkeypatch.setattr(worker,'request',write)
     run(db)
@@ -71,8 +71,50 @@ def test_replacement_id_verified_and_saved(db, setup, monkeypatch):
     assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','minOrderLimit':'1000000','maxOrderLimit':'26069999'}
 
 
+@pytest.mark.parametrize('field,value',[('availableAmount','900'),('onHoldAmount','100'),('isHidden',True),('minOrderSize','2000000'),('unitPrice','26079')])
+def test_sell_changes_during_planning_abandon_before_write(db,setup,monkeypatch,field,value):
+    changed=ad();changed[field]=value
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),changed]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+    assert db.get(worker.OKXPendingLimits,setup.id) is None
+
+
+def test_sell_config_changed_during_final_read_abandons_before_write(db,setup,monkeypatch):
+    calls=0
+    async def read(*args):
+        nonlocal calls
+        calls+=1
+        if calls==2:
+            db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=2000000,maximum=26000000));db.commit()
+        return ad()
+    monkeypatch.setattr(worker,'read_ad',read)
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db);write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+
+
+def test_visibility_lock_appearing_during_final_read_does_not_create_unknown_write(db,setup,monkeypatch):
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    calls=0
+    def guard(*args,**kwargs):
+        nonlocal calls
+        calls+=1
+        if calls==2:raise ValueError('Visibility pending')
+    from app import ad_visibility
+    monkeypatch.setattr(ad_visibility,'assert_clear',guard)
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db);write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+
+
 def test_hide_then_resume_only_bot_paused_ad(db, setup, monkeypatch):
-    reader=AsyncMock(side_effect=[ad(),ad(hidden=True),ad(hidden=True),ad('456','26070')])
+    reader=AsyncMock(side_effect=[ad(),ad(),ad(hidden=True),ad(hidden=True),ad(hidden=True),ad('456','26070')])
     monkeypatch.setattr(worker,'read_ad',reader)
     rank=AsyncMock(side_effect=[plan('HIDE_AD','26059'),plan()]); monkeypatch.setattr(worker,'read_rank_plan',rank)
     write=AsyncMock(side_effect=[{'adId':'123'},{'oldAdId':'123','newAdId':'456'}]); monkeypatch.setattr(worker,'request',write)
@@ -85,7 +127,7 @@ def test_hide_then_resume_only_bot_paused_ad(db, setup, monkeypatch):
 
 
 def test_manually_hidden_ad_stays_hidden(db, setup, monkeypatch):
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(hidden=True),ad('456','26070',True)]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(hidden=True),ad(hidden=True),ad('456','26070',True)]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}); monkeypatch.setattr(worker,'request',write)
     run(db); assert 'online' not in write.call_args.args[3]
@@ -143,7 +185,7 @@ def test_cost_failure_never_hides_or_writes(db, setup, monkeypatch):
 def test_new_slot_ad_does_not_inherit_resume_permission(db, setup, monkeypatch):
     attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',old_ad_id='999',result_ad_id='999',paused_by_floor=True)
     db.add(attempt); db.commit()
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(hidden=True),ad('456','26070',True)]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(hidden=True),ad(hidden=True),ad('456','26070',True)]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}); monkeypatch.setattr(worker,'request',write)
     run(db); assert 'online' not in write.call_args.args[3]
@@ -161,7 +203,7 @@ def test_replacement_collision_does_not_overwrite(db, setup, monkeypatch):
 def test_worker_uses_persisted_side_rank(db,setup,monkeypatch):
     from app.okx_price_controls import save_ranks
     save_ranks(db,{'sell_rank':6})
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(),ad('456','26070')]))
     source=AsyncMock(return_value=plan());monkeypatch.setattr(worker,'read_rank_plan',source)
     monkeypatch.setattr(worker,'request',AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}))
     run(db);assert source.call_args.kwargs['target_rank']==6
@@ -183,7 +225,7 @@ def test_worker_uses_manual_cost_instead_of_okx_history(db,setup,monkeypatch):
     save_cost(db,Decimal('26050'),'test')
     reader=AsyncMock(side_effect=AssertionError('must not read OKX cost'))
     monkeypatch.setattr(worker,'read_last_buy_cost',reader)
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(),ad('456','26070')]))
     source=AsyncMock(return_value=plan());monkeypatch.setattr(worker,'read_rank_plan',source)
     monkeypatch.setattr(worker,'request',AsyncMock(return_value={'oldAdId':'123','newAdId':'456'}))
     run(db)
@@ -217,7 +259,7 @@ def test_thirty_second_write_interval_keeps_five_second_scans(db,setup,monkeypat
     write.assert_not_awaited()
     attempt.last_action_at=datetime.now(timezone.utc)-timedelta(seconds=31)
     db.commit()
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(),ad('456','26070')]))
     run(db)
     assert write.await_count==1
     assert setup.adv_id=='456'
@@ -245,7 +287,7 @@ def test_protective_hide_not_delayed_by_other_slot_price_update(db,setup,monkeyp
     db.add(other);db.commit()
     db.add(worker.OKXAdPriceAttempt(slot_id=other.id,state='IDLE',last_action_at=datetime.now(timezone.utc)))
     db.commit()
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(hidden=True)]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(),ad(hidden=True)]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan('HIDE_AD','26059')))
     write=AsyncMock(return_value={'adId':'123'});monkeypatch.setattr(worker,'request',write)
     run(db)
@@ -286,7 +328,7 @@ def test_auto_sends_limits_caps_sell_capacity_and_verifies(db, setup, monkeypatc
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=196444319)); db.commit()
     original=ad(price='27586'); original.update(availableAmount='7121.16',minOrderSize='20000000',maxOrderSize='196444319')
     final=ad('456','26400'); final.update(minOrderSize='20000000',maxOrderSize='187998623')
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,original,final]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26400')))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
@@ -318,7 +360,7 @@ def test_insufficient_or_unconfirmed_limits_never_succeed(db, setup, monkeypatch
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
     original=ad(price='27586');original.update(availableAmount=capacity,minOrderSize='20000000',maxOrderSize='196444319')
     final=ad('456','26400');final.update(minOrderSize='20000000',maxOrderSize=final_max)
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,final]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,original,final]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26400')))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
@@ -331,7 +373,7 @@ def test_insufficient_or_unconfirmed_limits_never_succeed(db, setup, monkeypatch
 def test_nickname_target_reaches_okx_worker(db,setup,monkeypatch):
     from app.nickname_target import save
     save(db,'OKX','SELL',{'slot':'1','target':'other','offset':'-1'},'owner')
-    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad('456','26070')]))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[ad(),ad(),ad('456','26070')]))
     planner=AsyncMock(return_value=plan());monkeypatch.setattr(worker,'read_rank_plan',planner)
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
