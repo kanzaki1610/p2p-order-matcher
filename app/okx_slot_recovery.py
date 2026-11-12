@@ -97,14 +97,32 @@ async def recover_slot(db, owner, side, slot_number):
     pending = db.get(OKXPendingLimits, slot.id)
     pending_before = (pending.ad_id, pending.minimum, pending.maximum) if pending else None
     code = attempt.result_ad_id or attempt.old_ad_id
+    unavailable=False
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            ad = await read_ad(client, code)
-        if (ad.get('side') != side.lower() or ad.get('type') != 'limit'
+            try:
+                ad = await read_ad(client, code)
+            except Exception as error:
+                # Only a recorded explicit rejection may be retired when the old
+                # ID is unavailable AND absent from the authenticated active list.
+                # A timeout/429 or an accepted request without a result stays locked.
+                if (attempt.action!='UPDATE_PRICE' or attempt.result_ad_id
+                        or attempt.reason!='OKX HTTP 400; mã API: 55723.'
+                        or safe_failure(error)!='OKX HTTP 400; mã API: 55651.'):
+                    raise
+                from .ad_visibility import owned_list
+                rows,more=await owned_list(client,'OKX',side,1)
+                if more or any(str(r.get('adId',''))==code for r in rows):
+                    raise ValueError('ID cũ vẫn có trong danh sách quảng cáo; giữ khóa để kiểm tra lại.')
+                unavailable=True
+                ad={'isHidden':None}
+        if not unavailable and (ad.get('side') != side.lower() or ad.get('type') != 'limit'
                 or ad.get('status') != 'new' or type(ad.get('isHidden')) is not bool):
             raise ValueError('Quảng cáo không còn hoạt động đúng chiều/loại hoặc thiếu trạng thái hiển thị.')
-        current = number(ad.get('unitPrice'))
-        if manual is not None:
+        current = None if unavailable else number(ad.get('unitPrice'))
+        if unavailable:
+            outcome='REJECTED_AD_UNAVAILABLE'
+        elif manual is not None:
             verify_manual_rejection(manual,attempt,ad)
             outcome='MANUAL_REJECTED_UNCHANGED'
         elif attempt.result_ad_id:
@@ -157,7 +175,7 @@ async def recover_slot(db, owner, side, slot_number):
             OKXAutoLimits.ad_id == slot.adv_id).values(ad_id=code))
         slot.adv_id = code
         attempt.paused_by_floor = attempt.action == 'HIDE_AD' and side == 'SELL'
-    slot.current_price = current
+    if current is not None: slot.current_price = current
     if ad.get('minOrderSize') is not None: slot.min_amount = number(ad['minOrderSize'])
     if ad.get('maxOrderSize') is not None: slot.max_amount = number(ad['maxOrderSize'])
     leftover = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
@@ -167,10 +185,15 @@ async def recover_slot(db, owner, side, slot_number):
     attempt.action = attempt.old_ad_id = attempt.result_ad_id = None
     attempt.price = attempt.hidden = attempt.reason = attempt.notified_key = None
     # Keep last_action_at so recovery cannot bypass the shared write cooldown.
+    if unavailable: attempt.paused_by_floor=False
     db.commit()
     conclusion = 'Đã xác minh kết quả yêu cầu cũ.' if outcome == 'CONFIRMED' else 'OKX đã trả lỗi 400/55723; quảng cáo cũ vẫn giữ giá trước yêu cầu. Đã lưu hồ sơ lỗi và gỡ khóa.'
     if manual is not None:
         conclusion='Đã xác minh lỗi 400/55723 của lần đặt giá thủ công: quảng cáo cũ vẫn giữ nguyên giá, số USDT và Min/Max. Đã lưu hồ sơ và gỡ khóa.'
+    if unavailable:
+        return ('Đã lưu hồ sơ lỗi 400/55723 và gỡ khóa yêu cầu cũ. OKX trả 55651 cho ID cũ và danh sách quảng cáo hoạt động không còn ID này.'
+                + f'\n{side} slot {slot_number} · ID cũ {code}. Auto vẫn TẮT.'
+                + '\nBấm Chọn từ quảng cáo của tôi để gắn quảng cáo đang hoạt động, kiểm tra Min rồi tự bật Auto. Không tự chọn ID thay thế hoặc gửi lại yêu cầu cũ.')
     visibility=' Quảng cáo vẫn đang ẩn; khôi phục không tự hiện quảng cáo.' if ad['isHidden'] else ''
     return (conclusion + visibility + f'\n{side} slot {slot_number} · ID {code} · giá {current:,.0f}đ/USDT.'
             + '\nAuto vẫn TẮT. Min/Max bạn đã lưu được giữ nguyên; kiểm tra rồi bấm Bật Auto. Không gửi yêu cầu sửa/ẩn quảng cáo trong bước khôi phục.')

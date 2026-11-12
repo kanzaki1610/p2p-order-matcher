@@ -264,15 +264,26 @@ async def process_ad_pricing(db, client):
                 attempt.state = 'IDLE';db.commit()
                 await notice(db,attempt,slot,'BLOCKED','Giá vốn vừa thay đổi; chờ tính lại giá bán, chưa gửi OKX.')
                 continue
-            if buy:
+            if buy or slot.side == 'SELL':
+                expected_ad = buy['fingerprint'] if buy else buy_budget.fingerprint(row)
                 try:
                     fresh_ad = await read_ad(client, slot.adv_id)
                 except Exception:
                     attempt.state = 'IDLE'
                     db.commit()
                     raise
+                db.expire_all()
                 db.refresh(slot)
-                if (buy_budget.fingerprint(fresh_ad) != buy['fingerprint'] or not slot.auto_enabled
+                fresh_config = db.get(OKXAutoLimits, slot.id)
+                try:
+                    assert_clear(db,'OKX',slot.adv_id,lock=True)
+                except Exception:
+                    attempt.state = 'IDLE'
+                    db.commit()
+                    raise
+                if (buy_budget.fingerprint(fresh_ad) != expected_ad
+                        or config_revision != ((fresh_config.ad_id, fresh_config.minimum, fresh_config.maximum) if fresh_config else None)
+                        or (slot.side == 'SELL' and cost_revision(db) != cost.get('settings_revision')) or not slot.auto_enabled
                         or slot.adv_id != attempt.old_ad_id or not pricing_active(db)
                         or selected_rank(db, slot.side) != rank
                         or nickname_target(db,'OKX',slot.side,slot.slot_number) != follow):
