@@ -307,3 +307,24 @@ balance for the P2P wallet. Existing manual MEXC entry remains available.
 
 References: https://static.coinall.ltd/cdn/assets/files/254/33BDA696CE38AF28.pdf
 (section 5.3); https://www.mexc.com/api-docs/p2p/account-order-info/get-my-ads-pagination
+
+
+### Recover a rejected manual OKX price edit
+
+The recovery button distinguishes advertisement-ID mismatch from unsupported
+request types. It now handles a MANUAL_PRICE attempt with an explicit stored
+HTTP 400 / code 55723 rejection and no result advertisement ID. It requires a
+unique used manual confirmation for the same slot/ad/price/visibility and its
+actual five-minute confirmation window, plus its complete saved price, quantity
+and Min/Max snapshot. Authenticated GET must confirm that the same owned active
+ad still exactly matches those pre-request numeric fields and the requested edit
+was a real change. Missing, conflicting or changed evidence leaves the lock.
+Timeouts, HTTP 429 and manual requests with a result ID remain locked by this
+new branch; they are not interpreted as rejected requests.
+
+An operator may have hidden the ad after its rejected edit. Recovery records the
+verified current visibility and preserves it; it never sends a visibility write.
+It also preserves saved limits and the shared cooldown, leaves Auto off and
+rechecks the attempt, slot, manual confirmation and pending records after the GET
+before clearing a proven rejected lock. Mixed pending budget/limit intents stop
+recovery. The previous attempt and matched manual draft ID are retained in audit.
