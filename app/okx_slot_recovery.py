@@ -23,6 +23,42 @@ def snapshot(attempt):
     return result
 
 
+def manual_intent(db, attempt):
+    from .discord_price_panel import ManualPriceDraft, ManualAdTerms
+    from datetime import timedelta
+    last=attempt.last_action_at
+    last=last.replace(tzinfo=timezone.utc) if last and not last.tzinfo else last
+    matches=[]
+    for draft in db.scalars(select(ManualPriceDraft).where(
+            ManualPriceDraft.slot_id==attempt.slot_id, ManualPriceDraft.ad_id==attempt.old_ad_id,
+            ManualPriceDraft.price==attempt.price, ManualPriceDraft.hidden==attempt.hidden,
+            ManualPriceDraft.used.is_(True))):
+        expiry=draft.expires.replace(tzinfo=timezone.utc) if not draft.expires.tzinfo else draft.expires
+        if last is None or not expiry-timedelta(minutes=5)<=last<=expiry:continue
+        terms=db.get(ManualAdTerms,draft.id,populate_existing=True)
+        if terms:matches.append((draft.id,terms.snapshot_json,terms.terms_json))
+    if len(matches)!=1:
+        raise ValueError('Chưa tìm được duy nhất hồ sơ đặt giá thủ công đã dùng đúng thời điểm yêu cầu; giữ khóa.')
+    return matches[0]
+
+
+def verify_manual_rejection(intent, attempt, ad):
+    from .discord_price_panel import ad_snapshot
+    before=json.loads(intent[1]); terms=json.loads(intent[2])
+    fields={'unitPrice','minOrderLimit','maxOrderLimit','cryptoAmount'}
+    if (not isinstance(before,dict) or not fields<=set(before)
+            or set(before)-fields-{'_wallet_remaining'} or not isinstance(terms,dict)
+            or set(terms)-{'minOrderLimit','maxOrderLimit','cryptoAmount'}):
+        raise ValueError('Hồ sơ đặt giá thủ công thiếu giá/số USDT/Min/Max; giữ khóa.')
+    current=ad_snapshot(ad)
+    if any(number(current.get(k))!=number(before[k]) for k in fields):
+        raise ValueError('Giá, số USDT hoặc Min/Max quảng cáo đã khác trước yêu cầu thủ công; chưa gỡ khóa.')
+    if number(before['unitPrice'])==attempt.price and all(number(v)==number(before[k]) for k,v in terms.items()):
+        raise ValueError('Hồ sơ thủ công không có thay đổi để đối chiếu chắc chắn; giữ khóa.')
+    # Visibility may have been changed manually since rejection. Never restore it.
+    return current
+
+
 async def recover_slot(db, owner, side, slot_number):
     if settings.database_schema == 'kayhap' and not settings.discord_pricing_commands_enabled:
         raise ValueError('Chức năng bám giá này chỉ dành cho tài khoản gốc.')
@@ -46,8 +82,18 @@ async def recover_slot(db, owner, side, slot_number):
     if (attempt.state not in {'UNKNOWN', 'CONFIRMING'} or last is None
             or (now - last).total_seconds() < 120):
         return 'Chưa khôi phục: yêu cầu đang xử lý hoặc chưa qua 120 giây. Auto đã tắt; không gửi lại OKX.'
-    if attempt.old_ad_id != slot.adv_id or attempt.action not in {'UPDATE_PRICE', 'HIDE_AD'}:
-        return 'Chưa khôi phục: ID/loại yêu cầu cũ chưa phù hợp để xác minh tự động. Auto đã tắt.'
+    if attempt.old_ad_id != slot.adv_id:
+        return 'Chưa khôi phục: ID quảng cáo hiện tại khác ID của yêu cầu cũ. Auto đã tắt; giữ khóa để tránh xác minh nhầm quảng cáo.'
+    if attempt.action not in {'UPDATE_PRICE','HIDE_AD','MANUAL_PRICE'}:
+        return 'Chưa khôi phục: loại yêu cầu cũ chưa được hỗ trợ xác minh. Auto đã tắt.'
+    manual=None
+    if attempt.action=='MANUAL_PRICE':
+        if attempt.result_ad_id or attempt.reason!='OKX HTTP 400; mã API: 55723.':
+            return 'Chưa khôi phục: yêu cầu đặt giá thủ công chưa có bằng chứng bị từ chối rõ ràng (400/55723); giữ khóa, không gửi lại. Auto đã tắt.'
+        try:manual=manual_intent(db,attempt)
+        except ValueError as error:return 'Chưa khôi phục: '+str(error)+' Auto đã tắt.'
+        if db.get(OKXPendingLimits,slot.id) or db.get(buy_budget.OKXPendingBuyBudget,slot.id):
+            return 'Chưa khôi phục: còn hồ sơ Min/Max hoặc ngân sách của yêu cầu khác; giữ khóa. Auto đã tắt.'
     pending = db.get(OKXPendingLimits, slot.id)
     pending_before = (pending.ad_id, pending.minimum, pending.maximum) if pending else None
     code = attempt.result_ad_id or attempt.old_ad_id
@@ -58,7 +104,10 @@ async def recover_slot(db, owner, side, slot_number):
                 or ad.get('status') != 'new' or type(ad.get('isHidden')) is not bool):
             raise ValueError('Quảng cáo không còn hoạt động đúng chiều/loại hoặc thiếu trạng thái hiển thị.')
         current = number(ad.get('unitPrice'))
-        if attempt.result_ad_id:
+        if manual is not None:
+            verify_manual_rejection(manual,attempt,ad)
+            outcome='MANUAL_REJECTED_UNCHANGED'
+        elif attempt.result_ad_id:
             if current != attempt.price or ad['isHidden'] is not attempt.hidden or not limits_match(pending, attempt, ad) or not buy_budget.pending_matches(db, slot.id, attempt, ad):
                 raise ValueError('Quảng cáo trả về chưa khớp giá, trạng thái hoặc Min/Max của yêu cầu cũ.')
             outcome = 'CONFIRMED'
@@ -87,13 +136,19 @@ async def recover_slot(db, owner, side, slot_number):
             or ((pending.ad_id, pending.minimum, pending.maximum) if pending else None) != pending_before):
         db.rollback()
         return 'Cấu hình/yêu cầu đã thay đổi trong lúc kiểm tra; chưa gỡ khóa. Kiểm tra lại trạng thái slot.'
+    if manual is not None:
+        try:unchanged=manual_intent(db,attempt)==manual and not pending and not db.get(buy_budget.OKXPendingBuyBudget,slot.id)
+        except ValueError:unchanged=False
+        if not unchanged:
+            db.rollback()
+            return 'Hồ sơ đặt giá thủ công đã thay đổi trong lúc kiểm tra; chưa gỡ khóa. Auto vẫn tắt.'
     collision = db.scalar(select(OKXSlot.id).where(OKXSlot.id != slot.id, OKXSlot.adv_id == code))
     if collision is not None:
         db.rollback()
         return 'Chưa khôi phục: ID quảng cáo đang gắn với slot khác. Auto vẫn tắt.'
     db.add(OKXAuditLog(action='OKX_SLOT_RECOVERED', actor='discord:' + owner,
         detail=json.dumps({'slot': slot_number, 'side': side, 'outcome': outcome,
-            'previous_attempt': before, 'verified_ad': code, 'verified_price': str(current),
+            'previous_attempt': before, 'manual_draft_id':manual[0] if manual else None, 'verified_ad': code, 'verified_price': str(current),
             'hidden': ad['isHidden'], 'minimum': ad.get('minOrderSize'),
             'maximum': ad.get('maxOrderSize')}, default=str)))
     if outcome == 'CONFIRMED':
@@ -114,5 +169,8 @@ async def recover_slot(db, owner, side, slot_number):
     # Keep last_action_at so recovery cannot bypass the shared write cooldown.
     db.commit()
     conclusion = 'Đã xác minh kết quả yêu cầu cũ.' if outcome == 'CONFIRMED' else 'OKX đã trả lỗi 400/55723; quảng cáo cũ vẫn giữ giá trước yêu cầu. Đã lưu hồ sơ lỗi và gỡ khóa.'
-    return (conclusion + f'\n{side} slot {slot_number} · ID {code} · giá {current:,.0f}đ/USDT.'
+    if manual is not None:
+        conclusion='Đã xác minh lỗi 400/55723 của lần đặt giá thủ công: quảng cáo cũ vẫn giữ nguyên giá, số USDT và Min/Max. Đã lưu hồ sơ và gỡ khóa.'
+    visibility=' Quảng cáo vẫn đang ẩn; khôi phục không tự hiện quảng cáo.' if ad['isHidden'] else ''
+    return (conclusion + visibility + f'\n{side} slot {slot_number} · ID {code} · giá {current:,.0f}đ/USDT.'
             + '\nAuto vẫn TẮT. Min/Max bạn đã lưu được giữ nguyên; kiểm tra rồi bấm Bật Auto. Không gửi yêu cầu sửa/ẩn quảng cáo trong bước khôi phục.')
