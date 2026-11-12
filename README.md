@@ -282,3 +282,28 @@ same-side source. Selection buttons expire after ten minutes and are consumed on
 use; refreshing is read-only. Stale/replayed selections cannot overwrite newer
 settings. Both exchange workers include the selected fingerprint in their config
 revision checks before any write.
+
+
+### Manual stock and Sell All
+
+The primary web manual-price form shows current ad total, remaining and held
+USDT beside an independently read P2P wallet balance. **Đọc lại số USDT** and
+**Tất cả** only issue authenticated reads. OKX uses the documented
+`GET /api/v5/p2p/user/balance?currencySymbol=USDT`, validates the currency and
+finite nonnegative amounts, and respects a reported security sell/transfer cap.
+Sell All always reads again and fills the remaining amount from the wallet.
+Max uses that remaining quantity times the entered price. Existing completed and
+held ad history is converted to the exchange's total-quantity field during the
+preview; the user sees the remaining quantity in the form. Wallet balance is
+checked at preview and again before confirmation. No All click changes Auto,
+submits an exchange write or removes unknown-write locks. Edits during the read
+or a changed slot/exchange prevent a delayed response from overwriting input.
+
+MEXC's verified public P2P account endpoints expose per-ad `availableQuantity`,
+not a wallet-balance endpoint. Until a documented wallet API is verified, the
+form displays MEXC ad stock separately, marks wallet balance unavailable and
+disables Sell All. It never substitutes ad quantity, account limits or Spot
+balance for the P2P wallet. Existing manual MEXC entry remains available.
+
+References: https://static.coinall.ltd/cdn/assets/files/254/33BDA696CE38AF28.pdf
+(section 5.3); https://www.mexc.com/api-docs/p2p/account-order-info/get-my-ads-pagination
