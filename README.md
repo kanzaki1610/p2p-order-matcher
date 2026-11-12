@@ -328,3 +328,19 @@ It also preserves saved limits and the shared cooldown, leaves Auto off and
 rechecks the attempt, slot, manual confirmation and pending records after the GET
 before clearing a proven rejected lock. Mixed pending budget/limit intents stop
 recovery. The previous attempt and matched manual draft ID are retained in audit.
+
+### Recover a rejected OKX update after its old ad disappears
+
+For an UPDATE_PRICE attempt with the exact stored HTTP 400/55723 rejection,
+no result ID and a minimum age of 120 seconds, recovery also handles an old ID
+that now returns HTTP 400/55651. An authenticated active-list GET must succeed
+and exclude that old ID before the rejected attempt is archived and unlocked.
+It does not infer a replacement ID, update a price, show an ad or enable Auto.
+The operator selects an existing active ad after recovery. Other read errors,
+timeouts, rate limits, pending result IDs and concurrent changes keep the lock.
+
+SELL repricing now rereads the owned ad immediately before submission, as BUY
+already does. Changes in available/held stock, price, visibility, Min/Max or
+operator settings abandon the unsubmitted plan, with no exchange write. The
+next cycle recomputes its limits from current stock. This reduces stale-limit
+rejections without automatically retrying an unresolved exchange write.
