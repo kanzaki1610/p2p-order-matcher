@@ -95,7 +95,7 @@ def modal(action,side):
 def command(action,**options):
     return {'name':'gia','options':[{'name':action,'options':[{'name':k,'value':v} for k,v in options.items()]}]}
 
-async def manual_preview(db,owner,side,slot_number,price,terms=None):
+async def manual_preview(db,owner,side,slot_number,price,terms=None,remaining=None):
     terms=terms or {}
     if set(terms)-{'cryptoAmount','minOrderLimit','maxOrderLimit'}: raise ValueError('Thông số quảng cáo không hợp lệ.')
     terms={key:str(input_number(str(value),money=key!='cryptoAmount')) for key,value in terms.items()}
@@ -113,15 +113,27 @@ async def manual_preview(db,owner,side,slot_number,price,terms=None):
         if side=='SELL':
             cost=await read_pricing_cost(db,client,reader=read_last_buy_cost)
             if cost.get('mode')!='DISABLED' and price<number(cost['unit_price'])+10: raise ValueError('Giá bán phải đạt giá vốn đang chọn +10đ.')
+        if remaining is not None:
+            from .manual_stock import wallet, fill_quantity, quantity as stock_quantity
+            if side!='SELL' or 'cryptoAmount' in terms:raise ValueError('Chế độ số USDT còn bán chỉ dùng cho Bán OKX.')
+            remaining=input_number(str(remaining))
+            balance=await wallet(client,'OKX')
+            if remaining>stock_quantity(balance['available']):raise ValueError('Số USDT ví P2P đã giảm; đọc lại số dư và bấm Tất cả trước khi xem trước.')
+            converted=fill_quantity({'quantity':ad_quantity(ad),'available':ad.get('availableAmount'),'frozen':ad.get('onHoldAmount')},remaining)
+            terms['cryptoAmount']=converted['quantity']
+            if 'maxOrderLimit' in terms and Decimal(terms['maxOrderLimit'])>remaining*price:raise ValueError('Max vượt giá trị USDT còn muốn bán ở giá mới.')
     snapshot=ad_snapshot(ad)
+    if remaining is not None:
+        snapshot['_wallet_remaining']=str(remaining)
     lower=terms.get('minOrderLimit') or snapshot['minOrderLimit']
     upper=terms.get('maxOrderLimit') or snapshot['maxOrderLimit']
     quantity=terms.get('cryptoAmount') or snapshot['cryptoAmount']
+    if remaining is not None and any(Decimal(v)>remaining*price for v in (lower,upper) if v is not None): raise ValueError('Min/Max vượt giá trị USDT còn muốn bán; điều chỉnh hạn mức trước khi xem trước.')
     if lower is not None and upper is not None and Decimal(lower)>Decimal(upper): raise ValueError('Hạn mức tối thiểu không được lớn hơn tối đa.')
     if 'cryptoAmount' in terms and lower is not None and Decimal(lower)>Decimal(quantity)*price: raise ValueError('Số lượng USDT × giá nhỏ hơn hạn mức tối thiểu mỗi giao dịch.')
     draft=ManualPriceDraft(id=uuid.uuid4().hex,owner=owner,slot_id=slot.id,ad_id=slot.adv_id,price=price,hidden=ad['isHidden'],expires=datetime.now(timezone.utc)+timedelta(minutes=5))
     db.add(draft);db.add(ManualAdTerms(draft_id=draft.id,terms_json=json.dumps(terms),snapshot_json=json.dumps(snapshot)));db.commit()
-    details=''
+    details=('\nUSDT còn muốn bán từ ví P2P: '+str(remaining)) if remaining is not None else ''
     for key,label in [('cryptoAmount','Số lượng USDT'),('minOrderLimit','Tối thiểu VND'),('maxOrderLimit','Tối đa VND')]:
         details+=f'\n{label}: {snapshot[key] or "chưa có dữ liệu"} → {terms[key] if key in terms else "giữ nguyên"}'
     return {'content':f'**Xác nhận cập nhật quảng cáo {side} slot {slot_number}**\nID {slot.adv_id}\nGiá hiện tại {ad["unitPrice"]}đ → {price}đ/USDT.{details}\nAuto của slot sẽ tắt; quảng cáo {"giữ ẩn" if ad["isHidden"] else "giữ hiển thị"}. Các thiết lập khác giữ nguyên.\nXác nhận hết hạn sau 5 phút.','components':[{'type':1,'components':[button('Xác nhận gửi OKX','confirm:'+draft.id,3),button('Hủy','cancel:'+draft.id)]}]}
@@ -141,7 +153,13 @@ async def manual_confirm(db,owner,draft_id):
     async with httpx.AsyncClient(timeout=30) as client:
         ad=await read_ad(client,draft.ad_id)
         if ad['side']!=slot.side.lower() or ad.get('type')!='limit' or ad.get('status')!='new' or ad.get('isHidden') is not draft.hidden: raise ValueError('Quảng cáo đã thay đổi; hãy tạo xác nhận mới.')
-        if stored and ad_snapshot(ad)!=json.loads(stored.snapshot_json): raise ValueError('Giá/số lượng/hạn mức đã thay đổi từ lúc xem trước; hãy tạo xác nhận mới.')
+        expected=json.loads(stored.snapshot_json) if stored else None
+        wallet_remaining=expected.pop('_wallet_remaining',None) if expected else None
+        if stored and ad_snapshot(ad)!=expected: raise ValueError('Giá/số lượng/hạn mức đã thay đổi từ lúc xem trước; hãy tạo xác nhận mới.')
+        if wallet_remaining is not None:
+            from .manual_stock import wallet, quantity as stock_quantity
+            balance=await wallet(client,'OKX')
+            if stock_quantity(wallet_remaining)>stock_quantity(balance['available']):raise ValueError('Số dư ví P2P đã giảm sau khi xem trước; tạo xác nhận mới. Chưa gửi OKX.')
         if slot.side=='SELL':
             cost=await read_pricing_cost(db,client,reader=read_last_buy_cost)
             if cost.get('mode')!='DISABLED' and draft.price<number(cost['unit_price'])+10: raise ValueError('Giá vốn mới không cho phép giá bán này.')

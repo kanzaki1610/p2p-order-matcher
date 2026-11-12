@@ -214,10 +214,19 @@ async def dispatch(db, data):
     prefix='price' if exchange=='OKX' else 'mprice'
     ui=okx_ui if exchange=='OKX' else mexc_ui
     allowed={'ad':{'ad_id'},'rank':{'rank'},'follow':{'target','offset','bound'},'cost':{'cost'},
-             'limits':{'minimum'},'manual':{'price','quantity','minimum','maximum'}}
+             'limits':{'minimum'},'manual':{'price','quantity','minimum','maximum','quantity_mode'}}
     values={k:str(v).strip() for k,v in data.fields.items()}
     if set(values)-allowed.get(action,set()) or any(len(v)>150 for v in values.values()):
         raise ValueError('Trường cấu hình không hợp lệ.')
+    if action=='manual' and 'quantity_mode' in values:
+        if values['quantity_mode']!='remaining' or exchange!='OKX' or side!='SELL' or not values.get('quantity'):
+            raise ValueError('Chế độ Tất cả ví P2P chỉ hỗ trợ Bán OKX với số USDT đã nhập.')
+        terms={field:values[source] for source,field in [('minimum','minOrderLimit'),('maximum','maxOrderLimit')] if values.get(source)}
+        result=await okx_ui.manual_preview(db,OWNER,side,n,okx_ui.input_number(values.get('price',''),money=True),
+            terms,remaining=okx_ui.input_number(values['quantity']))
+        db.add(OKXAuditLog(action='WEB_CONTROL_MANUAL',actor=OWNER,detail=f'{exchange} {side} slot {n}; wallet remaining quantity'))
+        db.commit()
+        return translate(result,exchange,side,n)
     if action in {'ad','rank','follow','cost','limits','manual'}:
         if action=='rank' and exchange=='OKX':
             from .okx_price_controls import save_ranks
@@ -299,6 +308,37 @@ async def live(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],n:int,d
             except Exception as error:proposal={'action':'BLOCKED','reason':safe_error(error),'proposed_price':None}
         return {'exchange':exchange,'side':side,'slot':n,'read_at':time.time(),'ad':ad,
             'plan':{k:proposal.get(k) for k in ('action','reason','proposed_price','competitor','minimum_sell_price','bound_applied')}}
+    except Exception as error:raise HTTPException(400,safe_error(error)) from None
+
+
+@router.get('/manual-stock/{exchange}/{side}/{n}')
+@isolated_io
+async def manual_stock(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],n:int,db=Depends(get_db)):
+    from . import manual_stock as stock
+    if n not in {1,2}:raise HTTPException(400,'Chọn slot 1 hoặc 2.')
+    slot=db.scalar(select(OKXSlot).where(OKXSlot.side==side,OKXSlot.slot_number==n)) if exchange=='OKX' else db.get(MexcPriceSlot,f'{side}:{n}')
+    code=(slot.adv_id if exchange=='OKX' else slot.ad) if slot else ''
+    if not code:raise HTTPException(400,'Slot chưa có quảng cáo.')
+    try:
+        async with httpx.AsyncClient(timeout=15,follow_redirects=False) as client:
+            if exchange=='OKX':
+                from .okx_ads import read_ad
+                row=await read_ad(client,code)
+                if row['side']!=side.lower():raise ValueError('Quảng cáo không đúng chiều của slot.')
+                ad={'quantity':okx_ui.ad_quantity(row),'available':amount(row.get('availableAmount')),'frozen':amount(row.get('onHoldAmount'))}
+            else:
+                from .mexc import MexcP2PClient
+                from .mexc_ads import read_ad
+                async with MexcP2PClient() as api:row=await read_ad(api,code,side)
+                ad={'quantity':amount(row.get('quantity')),'available':amount(row.get('availableQuantity')),'frozen':amount(row.get('frozenQuantity'))}
+            try:balance=await stock.wallet(client,exchange)
+            except Exception as error:balance={'supported':False,'available':None,'reason':safe_error(error)}
+        fill=None
+        if side=='SELL' and balance['supported']:
+            try:fill=stock.fill_quantity(ad,balance['available'])
+            except ValueError as error:balance={**balance,'supported':False,'reason':str(error)}
+        return {'exchange':exchange,'side':side,'slot':n,'ad_id':code,'read_at':time.time(),
+                'ad':ad,'wallet':balance,'fill':fill}
     except Exception as error:raise HTTPException(400,safe_error(error)) from None
 
 
