@@ -35,10 +35,10 @@ async def wallet(client, exchange):
 
 
 def fill_quantity(ad, available):
-    # Form/API quantity is lifetime ad total; wallet is the NEW remaining amount.
-    # Keep completed/reserved history instead of accidentally reducing it again.
+    # OKX update cancels the old advertisement and creates a new one. Its new
+    # quantity must not include completed/reserved stock of the old advertisement.
     total, remaining, held = (quantity(ad.get(k)) for k in ('quantity','available','frozen'))
     if total < remaining + held:
         raise ValueError('Tổng USDT quảng cáo không khớp lượng còn lại/đang giữ; chưa điền Tất cả.')
     available = quantity(available).quantize(Decimal('.00000001'), rounding=ROUND_DOWN)
-    return {'quantity':text(total-remaining+available), 'sell_available':text(available)}
+    return {'quantity':text(available), 'sell_available':text(available)}
