@@ -12,9 +12,9 @@ def test_invalid_quantity_blocked(value):
     with pytest.raises(ValueError):stock.quantity(value)
 
 
-def test_all_converts_wallet_remaining_to_total_and_preserves_reserved_history():
+def test_all_uses_new_ad_quantity_without_completed_or_reserved_history():
     ad={'quantity':'6000','available':'1000','frozen':'200'}
-    assert stock.fill_quantity(ad,'3000')=={'quantity':'8000','sell_available':'3000'}
+    assert stock.fill_quantity(ad,'3000')=={'quantity':'3000','sell_available':'3000'}
     assert stock.fill_quantity(ad,'3000.123456789')['sell_available']=='3000.12345678'
     with pytest.raises(ValueError):stock.fill_quantity({**ad,'available':'5900'},'3000')
 
@@ -50,7 +50,7 @@ def test_stock_endpoint_auth_scope_context_and_no_mutations(client,monkeypatch):
     result=client.get(url)
     assert result.status_code==200 and result.headers['cache-control']=='no-store'
     data=result.json()
-    assert data['fill']=={'quantity':'8000','sell_available':'3000'}
+    assert data['fill']=={'quantity':'3000','sell_available':'3000'}
     assert (data['exchange'],data['side'],data['slot'],data['ad_id'])==('OKX','SELL',1,'456')
     assert client.get('/dashboard/api/control/manual-stock/OKX/SELL/2').status_code==400
     with client.factory() as db:
@@ -91,7 +91,7 @@ def test_remaining_preview_preserves_history_and_confirm_checks_wallet_again(cli
         ad=dict(adId='456',side='sell',type='limit',status='new',isHidden=False,unitPrice='26000',
                 cryptoAmount='6000',availableAmount='1000',onHoldAmount='200',minOrderSize='100',maxOrderSize='79500000')
         monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=ad))
-        monkeypatch.setattr(ui,'read_pricing_cost',AsyncMock(return_value={'mode':'DISABLED'}))
+        monkeypatch.setattr(ui,'read_pricing_cost',AsyncMock(return_value={'mode':'DISABLED','settings_revision':ui.cost_revision(db)}))
         balances=AsyncMock(side_effect=[{'available':'3000'},{'available':'2999'}])
         monkeypatch.setattr(stock,'wallet',balances)
         write=AsyncMock();monkeypatch.setattr(ui,'request',write)
@@ -101,8 +101,47 @@ def test_remaining_preview_preserves_history_and_confirm_checks_wallet_again(cli
         draft=db.query(ui.ManualPriceDraft).one()
         import json
         terms=json.loads(db.get(ui.ManualAdTerms,draft.id).terms_json)
-        assert terms['cryptoAmount']=='8000'
+        assert terms['cryptoAmount']=='3000'
         with pytest.raises(ValueError,match='Số dư ví P2P đã giảm'):
             asyncio.run(ui.manual_confirm(db,'owner',draft.id))
         write.assert_not_awaited()
         assert db.query(OKXSlot).filter_by(side='SELL').one().auto_enabled
+
+
+@pytest.mark.parametrize('case',['normal','legacy_draft','over_wallet','max_over_capacity'])
+def test_sell_all_sends_only_new_quantity_and_blocks_stale_or_excess_terms(client,monkeypatch,case):
+    import json
+    from decimal import Decimal
+    from app import discord_price_panel as ui
+    with client.factory() as db:
+        db.add(OKXSlot(side='SELL',slot_number=1,adv_id='456',auto_enabled=False));db.commit()
+        old=dict(adId='456',side='sell',type='limit',status='new',isHidden=True,unitPrice='26000',
+                 cryptoAmount='6000',availableAmount='1000',onHoldAmount='200',minOrderSize='100',maxOrderSize='79500000')
+        final={**old,'adId':'789','unitPrice':'26500','cryptoAmount':'3000','availableAmount':'3000','onHoldAmount':'0'}
+        reader=AsyncMock(side_effect=[old,old,final,final]);monkeypatch.setattr(ui,'read_ad',reader)
+        from app import okx_ad_worker
+        monkeypatch.setattr(okx_ad_worker,'read_ad',reader)
+        monkeypatch.setattr(ui,'read_pricing_cost',AsyncMock(return_value={'mode':'DISABLED','settings_revision':ui.cost_revision(db)}))
+        monkeypatch.setattr(stock,'wallet',AsyncMock(return_value={'available':'3000'}))
+        write=AsyncMock(return_value={'oldAdId':'456','newAdId':'789'});monkeypatch.setattr(ui,'request',write)
+        if case=='over_wallet':
+            with pytest.raises(ValueError,match='vượt số dư'):
+                asyncio.run(ui.manual_preview(db,'owner','SELL',1,Decimal('26500'),{'cryptoAmount':'8000'}))
+        elif case=='max_over_capacity':
+            with pytest.raises(ValueError,match='Max vượt'):
+                asyncio.run(ui.manual_preview(db,'owner','SELL',1,Decimal('26500'),{'maxOrderLimit':'80000000'},remaining=Decimal('3000')))
+        else:
+            asyncio.run(ui.manual_preview(db,'owner','SELL',1,Decimal('26500'),{'maxOrderLimit':'79500000'},remaining=Decimal('3000')))
+            draft=db.query(ui.ManualPriceDraft).one()
+            if case=='legacy_draft':
+                terms=db.get(ui.ManualAdTerms,draft.id)
+                terms.terms_json=json.dumps({'cryptoAmount':'8000','maxOrderLimit':'79500000'});db.commit()
+                with pytest.raises(ValueError,match='Bản xác nhận cũ'):
+                    asyncio.run(ui.manual_confirm(db,'owner',draft.id))
+            else:
+                result=asyncio.run(ui.manual_confirm(db,'owner',draft.id))
+                assert 'Đã xác minh' in result
+                assert write.call_args.args[3]=={'adId':'456','unitPrice':'26500','online':'false',
+                                               'cryptoAmount':'3000','maxOrderLimit':'79500000'}
+                assert db.query(OKXSlot).filter_by(side='SELL').one().adv_id=='789'
+        if case!='normal':write.assert_not_awaited()
