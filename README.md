@@ -292,9 +292,12 @@ USDT beside an independently read P2P wallet balance. **Đọc lại số USDT**
 `GET /api/v5/p2p/user/balance?currencySymbol=USDT`, validates the currency and
 finite nonnegative amounts, and respects a reported security sell/transfer cap.
 Sell All always reads again and fills the remaining amount from the wallet.
-Max uses that remaining quantity times the entered price. Existing completed and
-held ad history is converted to the exchange's total-quantity field during the
-preview; the user sees the remaining quantity in the form. Wallet balance is
+Max uses that remaining quantity times the entered price. OKX updates cancel the
+old ad and create a new ad: Sell All sends the selected wallet quantity directly,
+without adding completed or reserved quantities from the old advertisement.
+Confirmations produced by the old history-adding calculation are invalidated.
+Explicit SELL quantities and effective Min/Max are checked against wallet funds
+and the quantity offered at the proposed price before any write. Wallet balance is
 checked at preview and again before confirmation. No All click changes Auto,
 submits an exchange write or removes unknown-write locks. Edits during the read
 or a changed slot/exchange prevent a delayed response from overwriting input.
