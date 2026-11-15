@@ -9,7 +9,7 @@ from typing import Literal
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy import select
@@ -47,6 +47,55 @@ class PrivateJSONResponse(JSONResponse):
 
 
 router=APIRouter(prefix='/dashboard/api/control',dependencies=[Depends(verify_primary)],default_response_class=PrivateJSONResponse)
+
+# Import before main.create_all so reporting tables are created in this account's
+# own schema. Reporting never changes trading or bank-transaction tables.
+from . import profit
+
+
+class ProfitPeriod(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    from_day: str=Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    to_day: str=Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+
+
+class ProfitOpeningInput(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    day: str=Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    quantity: str=Field(max_length=40)
+    unit_cost: str=Field(max_length=40)
+
+
+@router.get('/profit')
+@isolated_io
+async def profit_report(from_day:str,to_day:str,exchange:Literal['ALL','OKX','MEXC']='ALL',
+                        page:int=Query(1,ge=1,le=10000),db=Depends(get_db)):
+    try:return profit.report(db,from_day,to_day,exchange,page)
+    except ValueError as error:raise HTTPException(400,str(error)) from None
+
+
+@router.post('/profit/sync')
+async def profit_sync(data:ProfitPeriod,background:BackgroundTasks,db=Depends(get_db)):
+    try:job,created=profit.start_sync(db,data.from_day,data.to_day)
+    except ValueError as error:raise HTTPException(400,str(error)) from None
+    if created:
+        from .background_io import run_isolated
+        background.add_task(run_isolated,lambda:profit.run_sync(job.id))
+    return profit.job_state(job)
+
+
+@router.get('/profit/sync/{job_id}')
+async def profit_sync_status(job_id:str,db=Depends(get_db)):
+    job=db.get(profit.ProfitSyncJob,job_id)
+    if not job:raise HTTPException(404,'Không tìm thấy phiên đồng bộ.')
+    return profit.job_state(job)
+
+
+@router.put('/profit/opening')
+async def profit_opening(data:ProfitOpeningInput,db=Depends(get_db)):
+    try:profit.save_opening(db,data.day,data.quantity,data.unit_cost)
+    except ValueError as error:raise HTTPException(400,str(error)) from None
+    return {'message':'Đã lưu vốn đầu kỳ cho sổ Lời/Lỗ. Không thay đổi giá vốn bám giá hoặc lệnh trên sàn.'}
 
 
 class VisibilityChange(BaseModel):

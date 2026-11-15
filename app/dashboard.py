@@ -484,6 +484,11 @@ def dashboard_page():
     return FileResponse(Path(__file__).with_name("control.html") if enabled() else DASHBOARD_FILE)
 
 
+@router.get('/dashboard/profit.js',include_in_schema=False)
+def profit_script():
+    return FileResponse(Path(__file__).with_name('profit_view.js'),media_type='application/javascript',headers={'Cache-Control':'no-cache'})
+
+
 @router.get("/dashboard/api/state")
 def dashboard_state(
     db: Session = Depends(get_db),
