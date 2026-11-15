@@ -407,3 +407,18 @@ cancelled orders never get a new payable QR after this update. Directory
 inclusion identifies a BIN; the `transferSupported` flag describes scanning in
 that bank's app, per [VietQR documentation](https://www.vietqr.io/api-bank),
 and is not used to exclude recipient BINs.
+
+### Recover a rejected OKX 55147 price edit
+
+The existing web and Discord **Kiểm tra / khôi phục** button also handles an
+`UPDATE_PRICE` attempt with the exact saved HTTP 400 / API 55147 response and no
+result ID, after 120 seconds. This does not assign a business meaning to 55147.
+An authenticated GET must confirm the same owned, active fixed-price ad still
+has the saved pre-request price, different from the requested price. A later
+manual hide or exhausted stock stays hidden; recovery never restores stock,
+shows an ad, enables Auto or resends the rejected request. The prior intent is
+audited and its pending terms are cleared only after the attempt, slot, pending
+Min/Max, quantity and BUY budget are checked again for concurrent changes.
+The operator may then select another verified owned advertisement normally.
+Timeouts, 429s, missing ads, accepted requests with result IDs, changed prices and
+inconsistent pending records are not unlocked by this new branch.
