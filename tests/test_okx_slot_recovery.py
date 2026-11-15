@@ -103,6 +103,21 @@ def test_concurrent_attempt_change_is_not_overwritten(db,monkeypatch):
     assert db.query(recovery.OKXAdPriceAttempt).one().state=='UNKNOWN'
 
 
+@pytest.mark.parametrize('wrong_quantity',[False,True])
+def test_recovery_checks_replacement_sell_quantity_including_new_reservations(db,monkeypatch,wrong_quantity):
+    attempt=db.query(recovery.OKXAdPriceAttempt).one();attempt.result_ad_id='456';attempt.state='CONFIRMING'
+    db.add(recovery.OKXPendingSellQuantity(slot_id=attempt.slot_id,ad_id='123',quantity=1000));db.commit()
+    row=ad('456','26350');row.update(availableAmount='800' if wrong_quantity else '900',
+                                  onHoldAmount='100',completedOrderCryptoAmount='0')
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(return_value=row))
+    run(db)
+    if wrong_quantity:
+        assert attempt.state=='CONFIRMING' and db.get(recovery.OKXPendingSellQuantity,attempt.slot_id)
+    else:
+        assert attempt.state=='IDLE' and db.get(recovery.OKXPendingSellQuantity,attempt.slot_id) is None
+    assert not db.query(OKXSlot).one().auto_enabled
+
+
 def test_recovery_button_selects_slot_without_exchange_call(db,monkeypatch):
     handler=AsyncMock(return_value='checked');monkeypatch.setattr(ui,'recover_slot',handler)
     response=asyncio.run(ui.execute_panel({'data':{'custom_id':'price:recover:SELL'}},db,'owner'))
@@ -118,6 +133,22 @@ def test_secondary_account_cannot_recover_primary(db,monkeypatch):
     reader=AsyncMock();monkeypatch.setattr(recovery,'read_ad',reader)
     with pytest.raises(ValueError):run(db)
     reader.assert_not_called()
+
+
+def test_manual_sell_preview_keeps_remaining_excludes_old_held_stock(db,monkeypatch):
+    import json
+    from app import manual_stock
+    row=ad();row.update(availableAmount='1000',completedOrderCryptoAmount='1000',onHoldAmount='500')
+    monkeypatch.setattr(ui.settings,'okx_ad_pricing_enabled',True)
+    monkeypatch.setattr(ui,'read_ad',AsyncMock(return_value=row))
+    monkeypatch.setattr(ui,'read_pricing_cost',AsyncMock(return_value={'mode':'DISABLED'}))
+    monkeypatch.setattr(manual_stock,'wallet',AsyncMock(return_value={'available':'2000'}))
+    attempt=db.query(recovery.OKXAdPriceAttempt).one();attempt.state='IDLE';db.commit()
+    post=AsyncMock();monkeypatch.setattr(ui,'request',post)
+    asyncio.run(ui.manual_preview(db,'owner','SELL',2,Decimal('27600'),{'maxOrderLimit':'27600000'}))
+    terms=json.loads(db.query(ui.ManualAdTerms).one().terms_json)
+    assert terms['cryptoAmount']=='1000'
+    post.assert_not_awaited()
 
 
 @pytest.mark.parametrize('case',['verified','present','list_error','timeout','rate_limit','result','other_read_error','concurrent'])

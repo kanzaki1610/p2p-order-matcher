@@ -18,7 +18,7 @@ def db():
     for model in (OfferSelection, OfferPicker, OfferNotice): model.__table__.create(engine)
     NicknameTarget.__table__.create(engine)
     NicknamePriceBound.__table__.create(engine)
-    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
+    for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, worker.OKXPendingSellQuantity.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
 
@@ -68,7 +68,26 @@ def test_replacement_id_verified_and_saved(db, setup, monkeypatch):
     run(db)
     assert setup.adv_id=='456' and setup.current_price==Decimal('26070')
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
-    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','minOrderLimit':'1000000','maxOrderLimit':'26069999'}
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26070','minOrderLimit':'1000000','maxOrderLimit':'26069999','cryptoAmount':'1000'}
+
+
+@pytest.mark.parametrize('wrong_quantity',[False,True])
+def test_sell_replacement_excludes_old_held_and_completed_stock(db,setup,monkeypatch,wrong_quantity):
+    old=ad();old.update(availableAmount='2000',completedOrderCryptoAmount='1000',onHoldAmount='500')
+    final=ad('456','26070');final.update(availableAmount='1900' if wrong_quantity else '2000',maxOrderSize='52139999')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[old,old,final]))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
+    run(db)
+    assert write.call_args.args[3]['cryptoAmount']=='2000'
+    assert write.call_args.args[3]['maxOrderLimit']=='52139999'
+    attempt=db.get(worker.OKXAdPriceAttempt,setup.id)
+    if wrong_quantity:
+        assert attempt.state=='CONFIRMING' and setup.adv_id=='123'
+        assert db.get(worker.OKXPendingSellQuantity,setup.id).quantity==2000
+    else:
+        assert attempt.state=='IDLE' and setup.adv_id=='456'
+        assert db.get(worker.OKXPendingSellQuantity,setup.id) is None
 
 
 @pytest.mark.parametrize('field,value',[('availableAmount','900'),('onHoldAmount','100'),('isHidden',True),('minOrderSize','2000000'),('unitPrice','26079')])
@@ -327,12 +346,12 @@ def test_worker_waits_five_seconds_not_sixty(monkeypatch):
 def test_auto_sends_limits_caps_sell_capacity_and_verifies(db, setup, monkeypatch):
     db.add(worker.OKXAutoLimits(slot_id=setup.id,ad_id='123',minimum=20000000,maximum=196444319)); db.commit()
     original=ad(price='27586'); original.update(availableAmount='7121.16',minOrderSize='20000000',maxOrderSize='196444319')
-    final=ad('456','26400'); final.update(minOrderSize='20000000',maxOrderSize='187998623')
+    final=ad('456','26400'); final.update(minOrderSize='20000000',maxOrderSize='187998623',availableAmount='7121.16')
     monkeypatch.setattr(worker,'read_ad',AsyncMock(side_effect=[original,original,final]))
     monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26400')))
     write=AsyncMock(return_value={'oldAdId':'123','newAdId':'456'});monkeypatch.setattr(worker,'request',write)
     run(db)
-    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26400','minOrderLimit':'20000000','maxOrderLimit':'187998623'}
+    assert write.call_args.args[3]=={'adId':'123','unitPrice':'26400','minOrderLimit':'20000000','maxOrderLimit':'187998623','cryptoAmount':'7121.16'}
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
     assert setup.max_amount==187998623
     assert db.get(worker.OKXAutoLimits,setup.id).maximum==196444319
