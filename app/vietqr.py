@@ -24,14 +24,28 @@ ALIASES = {'MB': 'MBBANK', 'KLB': 'KIENLONGBANK', 'STB': 'SACOMBANK', 'CTG': 'VI
 
 
 def bank_keys(bank):
-    legal = folded(bank['name'])
+    names = {folded(bank['name'])} | {folded(x) for x in bank.get('aliases', [])}
     labels = {folded(bank['short_name']), folded(bank['code'])}
-    # Exchanges can append/prepend the same bank's abbreviation to its full
-    # legal name. Accept only these exact registered combinations, never a
-    # substring, fuzzy name or a different bank's label.
-    return ({legal, bank['bin']} | labels
-            | {legal + label for label in labels}
-            | {label + legal for label in labels})
+    labels |= {x for x in names if not x.startswith('NGANHANG')}
+    # Exchanges omit the corporate form: ACB - Ngan hang A Chau. Remove only
+    # the fixed TMCP prefix, retaining the entire distinctive registered name.
+    # Never remove country/branch qualifiers or search arbitrary substrings.
+    names |= {x.replace('NGANHANGTMCP', 'NGANHANG', 1)
+              for x in names if x.startswith('NGANHANGTMCP')}
+    return (names | {bank['bin']} | labels
+            | {name + label for name in names for label in labels}
+            | {label + name for name in names for label in labels})
+
+
+def bank_index():
+    index = {}
+    for bank in BANKS:
+        for key in bank_keys(bank):
+            index.setdefault(key, set()).add(bank['bin'])
+    return index
+
+
+BANK_INDEX = bank_index()
 
 
 def resolve_bank(*values):
@@ -39,12 +53,14 @@ def resolve_bank(*values):
     for value in values:
         key = folded(value or '')
         key = ALIASES.get(key, key)
-        found = {b['bin'] for b in BANKS if key and key in bank_keys(b)}
+        found = BANK_INDEX.get(key, set()) if key else set()
         if len(found) > 1:
             raise ValueError('Tên ngân hàng không xác định duy nhất; chưa tạo QR.')
         matches |= found
-    if len(matches) != 1:
-        raise ValueError('Ngân hàng chưa có mã BIN xác minh hoặc thông tin ngân hàng mâu thuẫn; chưa tạo QR.')
+    if len(matches) > 1:
+        raise ValueError('Tên và mã ngân hàng trỏ đến các ngân hàng khác nhau; chưa tạo QR.')
+    if not matches:
+        raise ValueError('Chưa nhận diện được tên/mã ngân hàng do sàn cung cấp trong danh mục VietQR; chưa tạo QR.')
     return next(b for b in BANKS if b['bin'] == next(iter(matches)))
 
 
