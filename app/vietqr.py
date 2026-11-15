@@ -17,7 +17,10 @@ def folded(value):
 
 BANKS = json.loads(Path(__file__).with_name('vietqr_banks.json').read_text(encoding='utf-8'))
 ALIASES = {'MB': 'MBBANK', 'KLB': 'KIENLONGBANK', 'STB': 'SACOMBANK', 'CTG': 'VIETINBANK',
-           'LPBANK': 'LIENVIETPOSTBANK'}
+           'LPBANK': 'LIENVIETPOSTBANK',
+           # Exact label observed in authenticated OKX collection instructions.
+           # Do not broaden this into edit-distance or substring matching.
+           'SHIHANBANK': 'SHINHANBANK'}
 
 
 def bank_keys(bank):
