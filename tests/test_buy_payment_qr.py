@@ -70,6 +70,59 @@ def test_exact_shinhan_collection_labels_resolve_and_encode_correct_bin(label):
     assert '970424' in vietqr.payload(result.bank_bin,result.account,result.amount)
 
 
+@pytest.mark.parametrize('label',[
+    'ACB - Ngân hàng á châu', 'NGAN HANG A CHAU (ACB)',
+    'Ngân hàng Á Châu', 'ACB - Ngân hàng TMCP Á Châu',
+])
+@pytest.mark.parametrize('exchange',['OKX','MEXC'])
+def test_acb_exchange_short_legal_name_retains_verified_bin_and_empty_memo(label,exchange):
+    if exchange=='OKX':
+        row=okx();p=row['counterpartyDetail']['takerPaymentMethod']
+        p.update(bankName=label,bankCode='BANK')
+        result=data.okx_instruction(row,row['orderId'])
+    else:
+        row=mexc();p=row['paymentInfo'][0];p.update(bankName=label,bankCode='BANK')
+        result=data.mexc_instruction(row,row['advOrderNo'],'SELL')
+    assert result.bank_bin=='970416' and result.bank=='ACB' and result.note==''
+    assert result.account==p.get('accountNo',p.get('account'))
+    assert '970416' in vietqr.payload(result.bank_bin,result.account,result.amount)
+
+
+def test_complete_bank_catalog_has_unique_exact_names_and_shortened_legal_combinations():
+    assert len(vietqr.BANKS)==76
+    assert len({b['bin'] for b in vietqr.BANKS})==76
+    for bank in vietqr.BANKS:
+        for key in vietqr.bank_keys(bank):
+            assert vietqr.resolve_bank(key)['bin']==bank['bin']
+        assert bank['bin'] in vietqr.payload(bank['bin'],'00123456789','350000')
+
+
+@pytest.mark.parametrize('label,bin',[
+    ('NamABank','970428'),('VietABank','970427'),('SCB','970429'),
+    ('SaigonBank','970400'),('CIMB','422589'),('Woori','970457'),
+    ('LienVietPostBank','970449'),('LPBank','970449'),
+    ('Sacombank','970403'),('Ngân hàng TMCP Sài Gòn Thương Tín','970403'),
+])
+def test_expanded_catalog_and_previous_bank_names(label,bin):
+    assert vietqr.resolve_bank(label,'BANK')['bin']==bin
+
+
+@pytest.mark.parametrize('label,code',[
+    ('ACB - Ngân hàng á châu','MB'),
+    ('ACB - Ngân hàng Quân đội','BANK'),
+    ('Chuyển tiền ACB','BANK'),('ACB ngân hàng bất kỳ','BANK'),
+    ('Ngân hàng Á Châu chi nhánh giả','BANK'),
+])
+def test_expanded_bank_names_still_block_conflicts_and_unknown_suffixes(label,code):
+    with pytest.raises(ValueError):vietqr.resolve_bank(label,code)
+
+
+def test_paid_okx_acb_order_never_restores_a_payable_qr():
+    row=okx();row['paymentStatus']='paid'
+    row['counterpartyDetail']['takerPaymentMethod'].update(bankName='ACB - Ngân hàng á châu',bankCode='BANK')
+    with pytest.raises(data.InactiveOrder):data.okx_instruction(row,row['orderId'])
+
+
 @pytest.mark.parametrize('case',['different_bank','wrong_holder','completed','unknown_typo'])
 def test_shinhan_alias_preserves_conflict_identity_and_terminal_guards(case):
     row=okx();payment=row['counterpartyDetail']['takerPaymentMethod']
