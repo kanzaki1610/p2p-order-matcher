@@ -58,6 +58,7 @@ def test_55147_same_owned_ad_at_previous_price_recovers_and_keeps_hidden_state(d
     slot=db.query(OKXSlot).one();slot.side=side
     attempt=db.query(recovery.OKXAdPriceAttempt).one()
     attempt.reason='OKX HTTP 400; mã API: 55147.'
+    attempt.paused_by_floor=True
     # Current stock can have been consumed after the rejected request. Recovery
     # does not restore stock, show the ad or send the old request again.
     row={**ad(),'side':side.lower(),'isHidden':hidden,'availableAmount':'208.69',
@@ -67,6 +68,7 @@ def test_55147_same_owned_ad_at_previous_price_recovers_and_keeps_hidden_state(d
     post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
     result=asyncio.run(recovery.recover_slot(db,'owner',side,2))
     assert attempt.state=='IDLE' and not slot.auto_enabled and slot.adv_id=='123'
+    assert not attempt.paused_by_floor
     assert '55147' in result and 'gỡ khóa' in result and 'Auto vẫn TẮT' in result
     assert ('vẫn đang ẩn' in result)==hidden
     assert row['isHidden'] is hidden
