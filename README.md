@@ -387,3 +387,23 @@ The OKX history reader passes explicit start/end timestamps and respects its
 documented six-month retention; older cached rows are retained rather than
 inventing zero activity outside the API's available period. MEXC pagination
 uses both documented cursor fields and continues until an empty page.
+
+### VietQR bank catalogue (2026-11-15)
+
+The primary BUY QR reader includes all 76 BIN records from the public
+[VietQR bank directory](https://api.vietqr.io/v2/banks), replacing the previous
+23-record subset. Codes, short names and complete legal names resolve exactly;
+same-bank combinations also accept an omitted TMCP prefix, such as
+`ACB - Ngân hàng á châu` → ACB / `970416`. Existing names remain aliases when
+the directory changes a bank's name. Sacombank's previous legal name is retained
+per its [official name-change notice](https://www.sacombank.com.vn/trang-chu/tin-tuc/thong-bao/2026/sacombank-thong-bao-thay-doi-ten-goi.html).
+
+The directory is bundled locally: beneficiary information is never sent to the
+directory or a remote QR generator. Names are not matched by fuzzy similarity
+or arbitrary substrings. Conflicting recognized codes/names and unrecognized
+labels still stop QR creation, with separate diagnostic messages. Existing
+account, holder/KYC, order and deadline checks remain. Paid, completed or
+cancelled orders never get a new payable QR after this update. Directory
+inclusion identifies a BIN; the `transferSupported` flag describes scanning in
+that bank's app, per [VietQR documentation](https://www.vietqr.io/api-bank),
+and is not used to exclude recipient BINs.
