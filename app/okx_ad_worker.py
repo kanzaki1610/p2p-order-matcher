@@ -22,7 +22,7 @@ from .okx_price_controls import selected_rank, pricing_active
 from .okx_rank import read_rank_plan
 from .nickname_target import target as nickname_target, plan_options
 from .okx_release import request, failure_reason
-from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, price_limits, limits_match
+from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, OKXPendingSellQuantity, price_limits, limits_match, sell_quantity_matches
 from . import okx_buy_budget as buy_budget
 from .telegram_commands import format_vietnam_time
 
@@ -85,6 +85,9 @@ async def confirm(db, client, attempt, slot, plan=None):
     if not buy_budget.pending_matches(db, slot.id, attempt, row):
         await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'Lượng USDT của quảng cáo mới chưa khớp phần còn lại; không gửi lại yêu cầu.', plan)
         return False
+    if not sell_quantity_matches(db,slot.id,attempt,row):
+        await notice(db,attempt,slot,'REVIEW_REQUIRED','Số USDT quảng cáo bán mới chưa khớp lượng còn bán đã gửi; không gửi lại yêu cầu.',plan)
+        return False
     db.refresh(slot)
     if slot.adv_id != attempt.old_ad_id:
         await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'Slot đã đổi ID trong lúc đọc kết quả; không ghi đè quảng cáo mới.')
@@ -110,6 +113,8 @@ async def confirm(db, client, attempt, slot, plan=None):
         db.execute(update(OKXAutoLimits).where(OKXAutoLimits.slot_id == slot.id,
             OKXAutoLimits.ad_id == attempt.old_ad_id).values(ad_id=attempt.result_ad_id))
         db.delete(pending)
+    sell_pending=db.get(OKXPendingSellQuantity,slot.id)
+    if sell_pending:db.delete(sell_pending)
     if attempt.action == "HIDE_AD":
         attempt.paused_by_floor = slot.side == 'SELL'
     elif was_paused:
@@ -204,6 +209,10 @@ async def process_ad_pricing(db, client):
                 continue
             proposed = Decimal(plan["proposed_price"])
             terms = price_limits(db, slot, row, proposed) if plan['action'] == 'UPDATE_PRICE' else {}
+            if slot.side=='SELL' and plan['action']=='UPDATE_PRICE':
+                # Update creates a replacement ad. Only the available stock may
+                # be offered again; old held/completed quantities stay on old orders.
+                terms['cryptoAmount']=format(number(row.get('availableAmount')),'f')
             if slot.side == 'BUY' and plan['action'] == 'UPDATE_PRICE':
                 buy = await buy_budget.prepare_buy(db, client, slot, row, proposed)
                 if buy['exhausted']:
@@ -304,6 +313,10 @@ async def process_ad_pricing(db, client):
                 db.flush()
             if terms:
                 db.add(OKXPendingLimits(slot_id=slot.id, ad_id=slot.adv_id, minimum=Decimal(terms['minOrderLimit']), maximum=Decimal(terms['maxOrderLimit'])))
+            old_sell=db.get(OKXPendingSellQuantity,slot.id)
+            if old_sell:db.delete(old_sell);db.flush()
+            if slot.side=='SELL' and not is_hide:
+                db.add(OKXPendingSellQuantity(slot_id=slot.id,ad_id=slot.adv_id,quantity=Decimal(terms['cryptoAmount'])))
             db.commit()  # A crash/timeout never authorizes automatic resubmission.
             if is_hide:
                 result = await request(client, "POST", "/api/v5/p2p/ad/update-active-status", {"adId": slot.adv_id, "status": "hidden"})

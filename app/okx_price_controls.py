@@ -109,6 +109,9 @@ async def manage_price_command(data, db, user_id):
             db.add(OKXAuditLog(action='OKX_OLD_AD_ATTEMPT_ARCHIVED',actor=actor,detail=f'Old ad={attempt.old_ad_id}; result={attempt.result_ad_id}; state={attempt.state}; action={attempt.action}; price={attempt.price}; reason={attempt.reason}; user-selected new ad={code}. Old request never resubmitted.'))
             reset=db.execute(update(OKXAdPriceAttempt).where(OKXAdPriceAttempt.slot_id==slot.id,OKXAdPriceAttempt.state==attempt.state,OKXAdPriceAttempt.old_ad_id==attempt.old_ad_id).values(state='IDLE',action=None,old_ad_id=None,result_ad_id=None,price=None,hidden=None,paused_by_floor=False,last_action_at=None,reason=None,notified_key=None))
             if reset.rowcount!=1: db.rollback();raise ValueError('Yêu cầu đang thay đổi trạng thái; kiểm tra lại trước khi chọn ID.')
+            from .okx_ad_limits import OKXPendingSellQuantity
+            sell_pending=db.get(OKXPendingSellQuantity,slot.id)
+            if sell_pending:db.delete(sell_pending)
         db.execute(update(OKXSlot).where(OKXSlot.id==slot.id).values(adv_id=code,current_price=number(row['unitPrice']),auto_enabled=False))
         detail=f'{side} slot {slot_number}: ID={code}; Auto=False'
     else: raise ValueError('Lệnh không được hỗ trợ.')

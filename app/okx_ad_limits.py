@@ -22,6 +22,21 @@ class OKXPendingLimits(Base):
     maximum: Mapped[Decimal] = mapped_column(Numeric(20, 0))
 
 
+class OKXPendingSellQuantity(Base):
+    __tablename__ = 'okx_pending_sell_quantity'
+    slot_id: Mapped[int] = mapped_column(ForeignKey('okx_slots.id'), primary_key=True)
+    ad_id: Mapped[str] = mapped_column(String(30))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 8))
+
+
+def sell_quantity_matches(db, slot_id, attempt, ad):
+    pending=db.get(OKXPendingSellQuantity,slot_id)
+    if pending is None:return True  # Legacy requests have no quantity evidence.
+    from .okx_buy_budget import stock_total
+    return (pending.ad_id==attempt.old_ad_id and attempt.action=='UPDATE_PRICE'
+            and stock_total(ad)==pending.quantity)
+
+
 def price_limits(db, slot, ad, price):
     # BUY tracks price only, including slots with legacy saved limits.
     if slot.side == 'BUY':

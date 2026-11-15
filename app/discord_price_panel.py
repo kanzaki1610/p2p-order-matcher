@@ -122,8 +122,12 @@ async def manual_preview(db,owner,side,slot_number,price,terms=None,remaining=No
             converted=fill_quantity({'quantity':ad_quantity(ad),'available':ad.get('availableAmount'),'frozen':ad.get('onHoldAmount')},remaining)
             terms['cryptoAmount']=converted['quantity']
             if 'maxOrderLimit' in terms and Decimal(terms['maxOrderLimit'])>remaining*price:raise ValueError('Max vượt giá trị USDT còn muốn bán ở giá mới.')
-        elif side=='SELL' and 'cryptoAmount' in terms:
+        elif side=='SELL':
             from .manual_stock import wallet, quantity as stock_quantity
+            # Even a price-only edit creates a replacement advertisement.
+            # Preserve the amount still offered, not its old lifetime total.
+            if 'cryptoAmount' not in terms:
+                terms['cryptoAmount']=str(number(ad.get('availableAmount')))
             balance=await wallet(client,'OKX')
             if Decimal(terms['cryptoAmount'])>stock_quantity(balance['available']):
                 raise ValueError('Số USDT muốn đăng bán vượt số dư ví P2P khả dụng; không cộng lượng đã bán của quảng cáo cũ.')

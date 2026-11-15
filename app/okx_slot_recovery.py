@@ -8,7 +8,7 @@ from .models import OKXSlot, OKXAuditLog
 from .okx_ads import read_ad, number
 from . import okx_buy_budget as buy_budget
 from .okx_ad_worker import OKXAdPriceAttempt, safe_failure
-from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, limits_match
+from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, OKXPendingSellQuantity, limits_match, sell_quantity_matches
 
 
 FIELDS = ('state', 'action', 'old_ad_id', 'result_ad_id', 'price', 'hidden',
@@ -96,6 +96,8 @@ async def recover_slot(db, owner, side, slot_number):
             return 'Chưa khôi phục: còn hồ sơ Min/Max hoặc ngân sách của yêu cầu khác; giữ khóa. Auto đã tắt.'
     pending = db.get(OKXPendingLimits, slot.id)
     pending_before = (pending.ad_id, pending.minimum, pending.maximum) if pending else None
+    sell_pending=db.get(OKXPendingSellQuantity,slot.id)
+    sell_before=(sell_pending.ad_id,sell_pending.quantity) if sell_pending else None
     code = attempt.result_ad_id or attempt.old_ad_id
     unavailable=False
     try:
@@ -126,7 +128,7 @@ async def recover_slot(db, owner, side, slot_number):
             verify_manual_rejection(manual,attempt,ad)
             outcome='MANUAL_REJECTED_UNCHANGED'
         elif attempt.result_ad_id:
-            if current != attempt.price or ad['isHidden'] is not attempt.hidden or not limits_match(pending, attempt, ad) or not buy_budget.pending_matches(db, slot.id, attempt, ad):
+            if current != attempt.price or ad['isHidden'] is not attempt.hidden or not limits_match(pending, attempt, ad) or not buy_budget.pending_matches(db, slot.id, attempt, ad) or not sell_quantity_matches(db,slot.id,attempt,ad):
                 raise ValueError('Quảng cáo trả về chưa khớp giá, trạng thái hoặc Min/Max của yêu cầu cũ.')
             outcome = 'CONFIRMED'
         else:
@@ -149,9 +151,11 @@ async def recover_slot(db, owner, side, slot_number):
     attempt = db.scalar(select(OKXAdPriceAttempt).where(OKXAdPriceAttempt.slot_id == slot.id)
         .with_for_update().execution_options(populate_existing=True))
     pending = db.get(OKXPendingLimits, slot.id)
+    sell_pending=db.get(OKXPendingSellQuantity,slot.id)
     if (slot.auto_enabled or (slot.adv_id, slot.side, slot.current_price) != slot_before
             or attempt is None or snapshot(attempt) != before
-            or ((pending.ad_id, pending.minimum, pending.maximum) if pending else None) != pending_before):
+            or ((pending.ad_id, pending.minimum, pending.maximum) if pending else None) != pending_before
+            or ((sell_pending.ad_id,sell_pending.quantity) if sell_pending else None)!=sell_before):
         db.rollback()
         return 'Cấu hình/yêu cầu đã thay đổi trong lúc kiểm tra; chưa gỡ khóa. Kiểm tra lại trạng thái slot.'
     if manual is not None:
@@ -181,6 +185,7 @@ async def recover_slot(db, owner, side, slot_number):
     leftover = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
     if leftover: db.delete(leftover)
     if pending: db.delete(pending)
+    if sell_pending:db.delete(sell_pending)
     attempt.state = 'IDLE'
     attempt.action = attempt.old_ad_id = attempt.result_ad_id = None
     attempt.price = attempt.hidden = attempt.reason = attempt.notified_key = None
