@@ -96,6 +96,8 @@ async def recover_slot(db, owner, side, slot_number):
             return 'Chưa khôi phục: còn hồ sơ Min/Max hoặc ngân sách của yêu cầu khác; giữ khóa. Auto đã tắt.'
     pending = db.get(OKXPendingLimits, slot.id)
     pending_before = (pending.ad_id, pending.minimum, pending.maximum) if pending else None
+    budget_pending = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
+    budget_before = (budget_pending.root_ad_id, budget_pending.old_ad_id, budget_pending.quantity) if budget_pending else None
     sell_pending=db.get(OKXPendingSellQuantity,slot.id)
     sell_before=(sell_pending.ad_id,sell_pending.quantity) if sell_pending else None
     code = attempt.result_ad_id or attempt.old_ad_id
@@ -133,13 +135,21 @@ async def recover_slot(db, owner, side, slot_number):
             outcome = 'CONFIRMED'
         else:
             # A transport error, timeout or rate limit is never evidence of rejection.
-            # For the explicit legacy 400/55723 rejection, require the same owned
-            # active ad to still have its pre-request price, not the requested price.
+            # An explicit 400/55147 may also be reconciled without knowing the
+            # code's business meaning: the same owned fixed-price ad must still
+            # exist at the saved pre-request price, different from the requested
+            # price. An accepted cancel-and-replace would not leave that old ad.
+            # 55147 recovery may preserve a subsequently hidden/exhausted ad;
+            # never show it or treat a timeout/429 as a rejection.
+            rejected_55147 = attempt.reason == 'OKX HTTP 400; mã API: 55147.'
             if (attempt.action != 'UPDATE_PRICE'
-                    or attempt.reason != 'OKX HTTP 400; mã API: 55723.'
+                    or attempt.reason not in {'OKX HTTP 400; mã API: 55723.', 'OKX HTTP 400; mã API: 55147.'}
                     or current != slot.current_price or current == attempt.price
-                    or ad['isHidden'] is not attempt.hidden):
+                    or (ad['isHidden'] is not attempt.hidden and not rejected_55147)):
                 raise ValueError('Chưa có bằng chứng yêu cầu cũ bị từ chối hoặc hoàn tất; tiếp tục giữ khóa.')
+            if ((budget_pending and budget_pending.old_ad_id != attempt.old_ad_id)
+                    or (pending and pending.ad_id != attempt.old_ad_id)):
+                raise ValueError('Hồ sơ ngân sách/Min Max không thuộc yêu cầu cũ; giữ khóa.')
             outcome = 'REJECTED_UNCHANGED'
     except Exception as error:
         reason = str(error) if isinstance(error, ValueError) else safe_failure(error)
@@ -151,10 +161,12 @@ async def recover_slot(db, owner, side, slot_number):
     attempt = db.scalar(select(OKXAdPriceAttempt).where(OKXAdPriceAttempt.slot_id == slot.id)
         .with_for_update().execution_options(populate_existing=True))
     pending = db.get(OKXPendingLimits, slot.id)
+    budget_pending = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
     sell_pending=db.get(OKXPendingSellQuantity,slot.id)
     if (slot.auto_enabled or (slot.adv_id, slot.side, slot.current_price) != slot_before
             or attempt is None or snapshot(attempt) != before
             or ((pending.ad_id, pending.minimum, pending.maximum) if pending else None) != pending_before
+            or ((budget_pending.root_ad_id, budget_pending.old_ad_id, budget_pending.quantity) if budget_pending else None) != budget_before
             or ((sell_pending.ad_id,sell_pending.quantity) if sell_pending else None)!=sell_before):
         db.rollback()
         return 'Cấu hình/yêu cầu đã thay đổi trong lúc kiểm tra; chưa gỡ khóa. Kiểm tra lại trạng thái slot.'
@@ -190,15 +202,17 @@ async def recover_slot(db, owner, side, slot_number):
     attempt.action = attempt.old_ad_id = attempt.result_ad_id = None
     attempt.price = attempt.hidden = attempt.reason = attempt.notified_key = None
     # Keep last_action_at so recovery cannot bypass the shared write cooldown.
-    if unavailable: attempt.paused_by_floor=False
+    if unavailable or (outcome == 'REJECTED_UNCHANGED' and before['reason'] == 'OKX HTTP 400; mã API: 55147.'):
+        attempt.paused_by_floor=False
     db.commit()
-    conclusion = 'Đã xác minh kết quả yêu cầu cũ.' if outcome == 'CONFIRMED' else 'OKX đã trả lỗi 400/55723; quảng cáo cũ vẫn giữ giá trước yêu cầu. Đã lưu hồ sơ lỗi và gỡ khóa.'
+    rejected_code = '55147' if before['reason'] == 'OKX HTTP 400; mã API: 55147.' else '55723'
+    conclusion = 'Đã xác minh kết quả yêu cầu cũ.' if outcome == 'CONFIRMED' else f'OKX đã trả lỗi 400/{rejected_code}; quảng cáo cũ vẫn giữ giá trước yêu cầu. Đã lưu hồ sơ lỗi và gỡ khóa.'
     if manual is not None:
         conclusion='Đã xác minh lỗi 400/55723 của lần đặt giá thủ công: quảng cáo cũ vẫn giữ nguyên giá, số USDT và Min/Max. Đã lưu hồ sơ và gỡ khóa.'
     if unavailable:
         return ('Đã lưu hồ sơ lỗi 400/55723 và gỡ khóa yêu cầu cũ. OKX trả 55651 cho ID cũ và danh sách quảng cáo hoạt động không còn ID này.'
                 + f'\n{side} slot {slot_number} · ID cũ {code}. Auto vẫn TẮT.'
                 + '\nBấm Chọn từ quảng cáo của tôi để gắn quảng cáo đang hoạt động, kiểm tra Min rồi tự bật Auto. Không tự chọn ID thay thế hoặc gửi lại yêu cầu cũ.')
-    visibility=' Quảng cáo vẫn đang ẩn; khôi phục không tự hiện quảng cáo.' if ad['isHidden'] else ''
+    visibility=' Quảng cáo vẫn đang ẩn; khôi phục không tự hiện quảng cáo. Bạn có thể chọn ID quảng cáo đang hoạt động khác cho slot.' if ad['isHidden'] else ''
     return (conclusion + visibility + f'\n{side} slot {slot_number} · ID {code} · giá {current:,.0f}đ/USDT.'
             + '\nAuto vẫn TẮT. Min/Max bạn đã lưu được giữ nguyên; kiểm tra rồi bấm Bật Auto. Không gửi yêu cầu sửa/ẩn quảng cáo trong bước khôi phục.')
