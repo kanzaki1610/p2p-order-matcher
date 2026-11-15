@@ -355,3 +355,35 @@ completed orders. The exact submitted quantity is retained in the per-account
 ad's available + held + completed total. A mismatch keeps the result locked and
 never triggers a retry. Recovery applies the same check and preserves Auto off.
 Price-only manual SELL previews likewise retain the remaining amount explicitly.
+
+### Primary dashboard: Lời/Lỗ
+
+The Lời/Lỗ tab filters completed USDT/VND orders by Vietnamese calendar day,
+month or an inclusive date range, with OKX/MEXC/all presentation filters. A
+separate reporting ledger imports authenticated completed history using GETs
+only. OKX imports both account sides. MEXC reads all-account completed history and
+a complete maker-membership history separately, so maker and taker directions
+are identified without guessing from a counterparty badge.
+No bank-account details or counterparties are stored in this ledger.
+
+Reports consistently use verified **completion time**, never a guessed creation-time fallback.
+FIFO cost lots are shared across both exchanges and built from history before
+the displayed period. Filtering one exchange does not discard purchases on the
+other. Profit is gross, before fees, and estimated from available imported data.
+Unknown opening cost is never treated as zero: unpriced sales are shown
+separately and the total profit remains undetermined if any sale lacks cost.
+The optional opening quantity/unit cost resets FIFO at 00:00 VN on its chosen
+day; it does not alter pricing cost controls, wallet balances or orders.
+
+History sync runs as a bounded background read job with per-venue outcomes,
+pagination/deduplication checks, no partial successful coverage on an error,
+and a visible last-sync timestamp. Reimporting a successfully read range updates
+the same exchange/order key rather than duplicating orders. API retention,
+fees and trades outside these sources are not invented.
+New reporting tables are created by the existing schema-scoped create_all;
+no new environment variables or secrets are required. Reporting endpoints use
+the same primary dashboard authentication and Cache-Control: no-store.
+The OKX history reader passes explicit start/end timestamps and respects its
+documented six-month retention; older cached rows are retained rather than
+inventing zero activity outside the API's available period. MEXC pagination
+uses both documented cursor fields and continues until an empty page.
