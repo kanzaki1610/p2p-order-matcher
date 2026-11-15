@@ -52,6 +52,80 @@ def test_rejected_unchanged_ad_recovers_same_id_keeps_limits_and_auto_off(db,mon
     assert 'không có yêu cầu' in run(db)
 
 
+@pytest.mark.parametrize('side',['BUY','SELL'])
+@pytest.mark.parametrize('hidden',[False,True])
+def test_55147_same_owned_ad_at_previous_price_recovers_and_keeps_hidden_state(db,monkeypatch,side,hidden):
+    slot=db.query(OKXSlot).one();slot.side=side
+    attempt=db.query(recovery.OKXAdPriceAttempt).one()
+    attempt.reason='OKX HTTP 400; mã API: 55147.'
+    # Current stock can have been consumed after the rejected request. Recovery
+    # does not restore stock, show the ad or send the old request again.
+    row={**ad(),'side':side.lower(),'isHidden':hidden,'availableAmount':'208.69',
+         'completedOrderCryptoAmount':'10811.69','onHoldAmount':'0.00'}
+    db.commit()
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(return_value=row))
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    result=asyncio.run(recovery.recover_slot(db,'owner',side,2))
+    assert attempt.state=='IDLE' and not slot.auto_enabled and slot.adv_id=='123'
+    assert '55147' in result and 'gỡ khóa' in result and 'Auto vẫn TẮT' in result
+    assert ('vẫn đang ẩn' in result)==hidden
+    assert row['isHidden'] is hidden
+    assert '55147' in db.query(OKXAuditLog).one().detail
+    post.assert_not_awaited()
+
+
+@pytest.mark.parametrize('case',['target_price','changed_price','recent','timeout','wrong_side','missing_id','concurrent_budget','wrong_budget'])
+def test_55147_requires_unchanged_price_and_matching_stable_pending_budget(db,monkeypatch,case):
+    from app import okx_buy_budget as budget
+    slot=db.query(OKXSlot).one();slot.side='BUY'
+    attempt=db.query(recovery.OKXAdPriceAttempt).one();attempt.reason='OKX HTTP 400; mã API: 55147.'
+    db.add(budget.OKXBuyBudget(root_ad_id='123',slot_id=slot.id,total_vnd=180000000,total_crypto=10000))
+    db.flush()
+    db.add(budget.OKXPendingBuyBudget(slot_id=slot.id,root_ad_id='123',old_ad_id='999' if case=='wrong_budget' else '123',quantity=10000))
+    row={**ad(),'side':'buy','isHidden':True}
+    if case=='target_price':row['unitPrice']='26350'
+    if case=='changed_price':row['unitPrice']='27562'
+    if case=='wrong_side':row['side']='sell'
+    if case=='recent':attempt.last_action_at=datetime.now(timezone.utc)
+    if case=='timeout':attempt.reason='OKX HTTP 504; phản hồi không phải JSON.'
+    db.commit()
+    async def read(*args):
+        if case=='missing_id':
+            from app.okx_release import OKXRequestError
+            raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+        if case=='concurrent_budget':
+            db.execute(update(budget.OKXPendingBuyBudget).values(quantity=9999));db.commit()
+        return row
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(side_effect=read))
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    result=asyncio.run(recovery.recover_slot(db,'owner','BUY',2))
+    assert attempt.state=='UNKNOWN' and not slot.auto_enabled
+    assert db.get(budget.OKXPendingBuyBudget,slot.id) is not None
+    assert db.query(OKXAuditLog).count()==0
+    post.assert_not_awaited()
+
+
+def test_55147_recovers_then_operator_can_rebind_without_new_exchange_write(db,monkeypatch):
+    from app import okx_price_controls as controls,okx_buy_budget as budget
+    slot=db.query(OKXSlot).one();slot.side='BUY'
+    attempt=db.query(recovery.OKXAdPriceAttempt).one();attempt.reason='OKX HTTP 400; mã API: 55147.'
+    db.add(budget.OKXBuyBudget(root_ad_id='123',slot_id=slot.id,total_vnd=180000000,total_crypto=10000));db.flush()
+    db.add(budget.OKXPendingBuyBudget(slot_id=slot.id,root_ad_id='123',old_ad_id='123',quantity=10000))
+    db.add(recovery.OKXPendingLimits(slot_id=slot.id,ad_id='123',minimum=20000000,maximum=180000000));db.commit()
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(return_value={**ad(),'side':'buy','isHidden':True}))
+    asyncio.run(recovery.recover_slot(db,'owner','BUY',2))
+    assert attempt.state=='IDLE' and db.get(budget.OKXPendingBuyBudget,slot.id) is None
+    assert db.get(recovery.OKXPendingLimits,slot.id) is None
+    assert db.get(budget.OKXBuyBudget,'123').total_vnd==180000000
+    monkeypatch.setattr(controls,'read_ad',AsyncMock(return_value={**ad('456'),'side':'buy'}))
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    result=asyncio.run(controls.manage_price_command({'options':[{'name':'quangcao','options':[
+        {'name':'chieu','value':'BUY'},{'name':'slot','value':2},{'name':'id','value':'456'}]}]},db,'owner'))
+    db.refresh(slot)
+    assert 'Đã lưu' in result and slot.adv_id=='456' and not slot.auto_enabled
+    post.assert_not_awaited()
+
+
 @pytest.mark.parametrize('case',['timeout','429','other400','same_target','changed_price','hidden','wrong_side','closed','recent','submitting','no_date','manual','different_slot_id','missing_result'])
 def test_unproven_attempt_stays_locked(db,monkeypatch,case):
     attempt=db.query(recovery.OKXAdPriceAttempt).one();row=ad()
