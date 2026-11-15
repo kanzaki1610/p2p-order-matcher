@@ -347,3 +347,11 @@ already does. Changes in available/held stock, price, visibility, Min/Max or
 operator settings abandon the unsubmitted plan, with no exchange write. The
 next cycle recomputes its limits from current stock. This reduces stale-limit
 rejections without automatically retrying an unresolved exchange write.
+
+SELL replacement requests also explicitly send `cryptoAmount` equal to the
+owned ad's available USDT. They never reuse the old quantity containing held or
+completed orders. The exact submitted quantity is retained in the per-account
+`okx_pending_sell_quantity` table until authenticated readback confirms the new
+ad's available + held + completed total. A mismatch keeps the result locked and
+never triggers a retry. Recovery applies the same check and preserves Auto off.
+Price-only manual SELL previews likewise retain the remaining amount explicitly.
