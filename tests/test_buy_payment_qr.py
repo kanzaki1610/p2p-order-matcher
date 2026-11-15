@@ -60,6 +60,27 @@ def test_okx_real_lowercase_currency_codes_keep_valid_payment_instruction():
     with pytest.raises(data.InactiveOrder):data.okx_instruction(row,row['orderId'])
 
 
+@pytest.mark.parametrize('label',['Shihan bank','SHIHAN BANK','ShinhanBank','Shinhan Bank'])
+def test_exact_shinhan_collection_labels_resolve_and_encode_correct_bin(label):
+    row=okx();payment=row['counterpartyDetail']['takerPaymentMethod']
+    payment.update(bankName=label,bankCode='bank')
+    result=data.okx_instruction(row,row['orderId'])
+    assert result.bank=='ShinhanBank' and result.bank_bin=='970424'
+    assert result.account==payment['accountNo'] and result.note==''
+    assert '970424' in vietqr.payload(result.bank_bin,result.account,result.amount)
+
+
+@pytest.mark.parametrize('case',['different_bank','wrong_holder','completed','unknown_typo'])
+def test_shinhan_alias_preserves_conflict_identity_and_terminal_guards(case):
+    row=okx();payment=row['counterpartyDetail']['takerPaymentMethod']
+    payment.update(bankName='Shihan bank',bankCode='bank')
+    if case=='different_bank':payment['bankCode']='MB'
+    if case=='wrong_holder':payment['accountName']='TRAN VAN B'
+    if case=='completed':row['orderStatus']='completed'
+    if case=='unknown_typo':payment['bankName']='Shihann bank'
+    with pytest.raises(ValueError):data.okx_instruction(row,row['orderId'])
+
+
 def test_discover_accepts_lowercase_okx_symbols_without_guessing_other_currencies(db,monkeypatch):
     from app import okx_sync
     monkeypatch.setattr(worker.settings,'okx_p2p_enabled',True)
