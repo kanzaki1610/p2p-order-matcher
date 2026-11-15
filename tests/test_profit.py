@@ -16,7 +16,7 @@ def history_window(monkeypatch):
 
 def trade(code,side,q,f,at='2025-03-01T02:00:00+00:00',exchange='OKX'):
     return SimpleNamespace(key=exchange+':'+code,exchange=exchange,code=code,side=side,
-        quantity=Decimal(str(q)),fiat=Decimal(str(f)),created_at=datetime.fromisoformat(at))
+        quantity=Decimal(str(q)),fiat=Decimal(str(f)),created_at=datetime.fromisoformat(at),completed_at=datetime.fromisoformat(at))
 
 
 def calc(rows,start='2025-03-01',end='2025-03-31',opening=None,exchange='ALL'):
@@ -27,7 +27,7 @@ def calc(rows,start='2025-03-01',end='2025-03-31',opening=None,exchange='ALL'):
 def okx(code='12345',**values):
     return {'orderId':code,'side':'buy','orderStatus':'completed','paymentStatus':'confirmed',
             'cryptoCurrency':'usdt','fiatCurrency':'vnd','cryptoAmount':'100','fiatAmount':'2600000',
-            'createdTimestamp':'1740794400000',**values}
+            'createdTimestamp':'1740794400000','completionTimestamp':'1740794460000',**values}
 
 
 def test_fifo_multiple_lots_realized_loss_and_unsold_inventory():
@@ -84,6 +84,21 @@ def test_same_timestamp_sell_does_not_assume_buy_completed_first():
     assert r['totals']['profit'] is None
 
 
+def test_overnight_order_is_reported_and_costed_by_completion_time():
+    buy=trade('1','BUY',10,250000,'2025-03-02T01:00:00+00:00')
+    sell=trade('2','SELL',10,260000,'2025-03-01T01:00:00+00:00')
+    sell.completed_at=datetime.fromisoformat('2025-03-02T02:00:00+00:00')
+    r=calc([sell,buy],'2025-03-02','2025-03-02')
+    assert r['totals']['sell_count']==1 and Decimal(r['totals']['profit'])==10000
+    assert r['rows'][0]['completed']!=r['rows'][0]['created']
+
+
+def test_missing_or_conflicting_completion_time_is_not_guessed():
+    for change in ({'completionTimestamp':None},{'completionTimestamp':'1740794300000'},
+                   {'completedTimestamp':'1740794490000'}):
+        with pytest.raises(ValueError):profit.normalize('OKX',okx(**change))
+
+
 @pytest.mark.parametrize('start,end',[('bad','2025-01-01'),('2025-02-02','2025-02-01'),('2024-01-01','2025-03-01')])
 def test_invalid_periods(start,end):
     with pytest.raises(ValueError):profit.day_range(start,end)
@@ -104,7 +119,7 @@ def test_mexc_maker_direction_is_account_direction(monkeypatch,api_side,expected
     monkeypatch.setattr(profit.settings,'mexc_p2p_api_incoming_side','BUY')
     monkeypatch.setattr(profit.settings,'mexc_p2p_incoming_side','SELL')
     row={'advOrderNo':'d12345','side':api_side,'state':'DONE','coinName':'USDT','fiatUnit':'VND',
-         'tradableQuantity':'100','amount':'2600000','createTime':'1740794400000'}
+         'tradableQuantity':'100','amount':'2600000','createTime':'1740794400000','finishTime':'1740794460000'}
     assert profit.normalize('MEXC',row)['side']==expected
     assert profit.normalize('MEXC',{**row,'state':'CANCEL'}) is None
 
@@ -129,11 +144,33 @@ def test_outside_okx_retention_never_marks_empty_history_complete(monkeypatch):
 def test_collect_mexc_uses_only_read_endpoint_and_advances_cursor(monkeypatch):
     monkeypatch.setattr(profit.settings,'mexc_p2p_api_incoming_side','BUY');monkeypatch.setattr(profit.settings,'mexc_p2p_incoming_side','SELL')
     row={'advOrderNo':'d12345','side':'SELL','state':'DONE','coinName':'USDT','fiatUnit':'VND',
-         'tradableQuantity':'100','amount':'2600000','createTime':'1740794400000'}
-    api=SimpleNamespace(request=AsyncMock(side_effect=[[row],[]]));a,b=profit.day_range('2025-03-01','2025-03-31')
+         'tradableQuantity':'100','amount':'2600000','createTime':'1740794400000','finishTime':'1740794460000'}
+    api=SimpleNamespace(request=AsyncMock(side_effect=[[{**row,'side':'BUY'}],[],[row],[]]));a,b=profit.day_range('2025-03-01','2025-03-31')
     rows=asyncio.run(profit.collect('MEXC',a,b,api))
-    assert len(rows)==1 and api.request.call_args.kwargs['params']['lastId']=='d12345'
-    assert all(c.args[0]=='/api/v3/fiat/merchant/order/paginationV2' for c in api.request.call_args_list)
+    assert len(rows)==1 and api.request.call_args_list[1].kwargs['params']['lastId']=='d12345'
+    assert [c.args[0] for c in api.request.call_args_list]==['/api/v3/fiat/market/order/paginationV2']*2+['/api/v3/fiat/merchant/order/paginationV2']*2
+    assert 'orderDealState' not in api.request.call_args_list[2].kwargs['params']
+
+
+@pytest.mark.parametrize('case',['both_roles','cancelled_maker','conflicting_source'])
+def test_mexc_full_history_matches_maker_membership_before_side_mapping(monkeypatch,case):
+    monkeypatch.setattr(profit.settings,'mexc_p2p_api_incoming_side','BUY');monkeypatch.setattr(profit.settings,'mexc_p2p_incoming_side','SELL')
+    row={'advOrderNo':'d12345','side':'BUY','state':'DONE','coinName':'USDT','fiatUnit':'VND',
+         'tradableQuantity':'100','amount':'2600000','createTime':'1740794400000','finishTime':'1740794460000'}
+    maker={**row}
+    row={**row,'side':'SELL'}
+    if case=='cancelled_maker':maker['state']='CANCEL'
+    if case=='conflicting_source':maker['amount']='2600001'
+    api=SimpleNamespace(request=AsyncMock(side_effect=[[row,{**row,'advOrderNo':'d12346','side':'BUY'}],[],[maker],[],{**row,'advOrderNo':'d12346','side':'BUY'}]))
+    a,b=profit.day_range('2025-03-01','2025-03-31')
+    if case=='conflicting_source':
+        with pytest.raises(ValueError,match='chưa khớp'):asyncio.run(profit.collect('MEXC',a,b,api))
+    else:
+        rows=asyncio.run(profit.collect('MEXC',a,b,api))
+        sides={r['code']:r['side'] for r in rows}
+        assert sides['d12346']=='BUY'
+        if case=='both_roles':assert sides['d12345']=='SELL'
+        else:assert 'd12345' not in sides
 
 
 def test_report_auth_opening_and_no_trading_mutation(client,monkeypatch):
