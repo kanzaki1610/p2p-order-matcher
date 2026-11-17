@@ -227,6 +227,10 @@ async def process_ad_pricing(db, client):
             if buy and terms:
                 terms_changed = terms_changed or buy_budget.stock_total(row) != Decimal(terms['cryptoAmount'])
             if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume and not terms_changed:
+                if attempt.reason:
+                    attempt.reason=None
+                    attempt.notified_key=None
+                    db.commit()
                 continue
             now = datetime.now(timezone.utc)
             # Share the write interval across BUY/SELL slots and worker restarts.

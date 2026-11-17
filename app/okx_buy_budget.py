@@ -1,5 +1,8 @@
 """Persistent BUY budget across replacement ad IDs; authenticated reads only."""
 import asyncio
+import hashlib
+import time
+import httpx
 import json
 import re
 from datetime import datetime, timezone, timedelta
@@ -185,24 +188,47 @@ async def sync_budget(db, client, budget, current_ad):
     db.commit()
 
 
+_quantum_cache = None
+
+
 async def read_buy_quantum(client):
-    # Use the exchange-declared currency precision, never infer it from balances.
+    # Cache only successfully verified exchange metadata for one minute. Never
+    # infer scale from balances, reuse it after expiry, or cross API identities.
+    global _quantum_cache
+    identity = (settings.okx_base_url, hashlib.sha256(settings.okx_api_key.encode()).digest())
+    if _quantum_cache and _quantum_cache[0] == identity and time.monotonic() < _quantum_cache[2]:
+        return _quantum_cache[1]
     path = '/api/v5/p2p/currency/currency-pair-list?fiatCurrency=VND'
-    stamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
-    response = await client.get(settings.okx_base_url.rstrip('/') + path, headers={
-        'OK-ACCESS-KEY': settings.okx_api_key, 'OK-ACCESS-PASSPHRASE': settings.okx_api_passphrase,
-        'OK-ACCESS-TIMESTAMP': stamp, 'OK-ACCESS-SIGN': sign(settings.okx_api_secret, stamp, path)})
-    payload = response.json()
-    if response.status_code != 200 or not isinstance(payload, dict) or str(payload.get('code')) != '0':
-        raise BuyBudgetError('Chưa đọc được độ chính xác USDT/VND từ OKX; chưa đổi giá mua.')
-    rows = payload.get('data')
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise BuyBudgetError('Dữ liệu độ chính xác OKX sai cấu trúc; chưa đổi giá mua.')
-    pairs = [row for row in rows if str(row.get('cryptoCurrency', '')).upper() == 'USDT'
-        and str(row.get('fiatCurrency', '')).upper() == 'VND']
-    if len(pairs) != 1 or not re.fullmatch(r'[0-8]', str(pairs[0].get('cryptoScale', ''))):
-        raise BuyBudgetError('Thiếu/sai độ chính xác USDT/VND; chưa đổi giá mua.')
-    return Decimal(1).scaleb(-int(pairs[0]['cryptoScale']))
+    for attempt in range(3):
+        stamp = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        try:
+            response = await client.get(settings.okx_base_url.rstrip('/') + path, headers={
+                'OK-ACCESS-KEY': settings.okx_api_key, 'OK-ACCESS-PASSPHRASE': settings.okx_api_passphrase,
+                'OK-ACCESS-TIMESTAMP': stamp, 'OK-ACCESS-SIGN': sign(settings.okx_api_secret, stamp, path)})
+        except httpx.TransportError:
+            if attempt < 2:
+                await asyncio.sleep(attempt+1);continue
+            raise BuyBudgetError('Hết thời gian/kết nối khi đọc độ chính xác USDT/VND; chưa đổi giá mua.') from None
+        if response.status_code in {429,500,502,503,504} and attempt < 2:
+            await asyncio.sleep(attempt+1);continue
+        try:payload = response.json()
+        except (ValueError,TypeError):
+            raise BuyBudgetError(f'OKX đọc độ chính xác: HTTP {response.status_code}, phản hồi không phải JSON; chưa đổi giá mua.') from None
+        code = str(payload.get('code')) if isinstance(payload,dict) else ''
+        if code == '50011' and attempt < 2:
+            await asyncio.sleep(attempt+1);continue
+        if response.status_code != 200 or not isinstance(payload, dict) or code != '0':
+            raise BuyBudgetError(f'OKX đọc độ chính xác: HTTP {response.status_code}, mã API {safe_code(code)}; chưa đổi giá mua.')
+        rows = payload.get('data')
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise BuyBudgetError('Dữ liệu độ chính xác OKX sai cấu trúc; chưa đổi giá mua.')
+        pairs = [row for row in rows if str(row.get('cryptoCurrency', '')).upper() == 'USDT'
+            and str(row.get('fiatCurrency', '')).upper() == 'VND']
+        if len(pairs) != 1 or not re.fullmatch(r'[0-8]', str(pairs[0].get('cryptoScale', ''))):
+            raise BuyBudgetError('Thiếu/sai độ chính xác USDT/VND; chưa đổi giá mua.')
+        quantum = Decimal(1).scaleb(-int(pairs[0]['cryptoScale']))
+        _quantum_cache = (identity,quantum,time.monotonic()+60)
+        return quantum
 
 
 async def prepare_buy(db, client, slot, ad, new_price):
