@@ -116,6 +116,18 @@ def test_controlled_evidence_error_is_specific_without_exposing_arbitrary_api_te
     assert 'private-secret' not in worker.safe_failure(ValueError('private-secret'))
 
 
+def test_verified_unchanged_price_clears_resolved_idle_error_without_a_write(db,setup,monkeypatch):
+    attempt=worker.OKXAdPriceAttempt(slot_id=setup.id,state='IDLE',reason='Old pre-send error',notified_key='old')
+    db.add(attempt);db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26080')))
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    assert attempt.state=='IDLE' and attempt.reason is None and attempt.notified_key is None
+    assert setup.adv_id=='123' and setup.auto_enabled
+    write.assert_not_awaited()
+
+
 @pytest.mark.parametrize('guard', ['disabled', 'friend', 'missing_hook'])
 def test_disabled_or_wrong_account_never_calls_exchange(db, setup, monkeypatch, guard):
     if guard == 'disabled': monkeypatch.setattr(worker.settings, 'okx_ad_pricing_enabled', False)

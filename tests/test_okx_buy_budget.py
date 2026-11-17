@@ -153,7 +153,8 @@ def test_exchange_precision_controls_amount_instead_of_fixed_eight_decimals(db,m
     ([{'cryptoCurrency':'USDT','fiatCurrency':'VND','cryptoScale':'2'}]*2,False),
     ([{'cryptoCurrency':'USDT','fiatCurrency':'VND'}],False),
 ])
-def test_authenticated_precision_reader_validates_exact_currency_pair(rows,accepted):
+def test_authenticated_precision_reader_validates_exact_currency_pair(rows,accepted,monkeypatch):
+    monkeypatch.setattr(b,'_quantum_cache',None)
     import httpx
     paths=[]
     def handle(request):
@@ -167,3 +168,54 @@ def test_authenticated_precision_reader_validates_exact_currency_pair(rows,accep
     else:
         with pytest.raises(b.BuyBudgetError):asyncio.run(check())
     assert paths[0].endswith('/api/v5/p2p/currency/currency-pair-list?fiatCurrency=VND')
+
+
+def test_precision_cache_is_bounded_and_invalidated_by_credentials(monkeypatch):
+    import httpx
+    monkeypatch.setattr(b,'_quantum_cache',None)
+    clock=[0];monkeypatch.setattr(b.time,'monotonic',lambda:clock[0])
+    count=[]
+    def handle(request):
+        count.append(1)
+        return httpx.Response(200,json={'code':'0','data':[{'cryptoCurrency':'USDT','fiatCurrency':'VND','cryptoScale':'2'}]})
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            assert await b.read_buy_quantum(client)==Decimal('.01')
+            clock[0]=59;assert await b.read_buy_quantum(client)==Decimal('.01')
+            assert len(count)==1
+            clock[0]=60;assert await b.read_buy_quantum(client)==Decimal('.01')
+            assert len(count)==2
+            monkeypatch.setattr(b.settings,'okx_api_key','test-key-changed')
+            assert await b.read_buy_quantum(client)==Decimal('.01')
+            assert len(count)==3
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('mode',['429','504','50011','transport','permanent','expired'])
+def test_precision_reader_retries_only_gets_and_never_uses_expired_or_guessed_scale(monkeypatch,mode):
+    import httpx
+    monkeypatch.setattr(b,'_quantum_cache',None)
+    monkeypatch.setattr(b.asyncio,'sleep',AsyncMock())
+    calls=[]
+    def handle(request):
+        assert request.method=='GET';calls.append(1)
+        if mode=='transport' and len(calls)<3:raise httpx.ReadTimeout('test',request=request)
+        if mode=='429' and len(calls)<3:return httpx.Response(429,json={'code':'50011'})
+        if mode=='504' and len(calls)<3:return httpx.Response(504,text='gateway')
+        if mode=='50011' and len(calls)<3:return httpx.Response(200,json={'code':'50011'})
+        if mode=='permanent':return httpx.Response(400,json={'code':'55349','msg':'private-secret'})
+        if mode=='expired':return httpx.Response(200,json={'code':'0','data':[]})
+        return httpx.Response(200,json={'code':'0','data':[{'cryptoCurrency':'USDT','fiatCurrency':'VND','cryptoScale':'2'}]})
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            if mode=='expired':
+                identity=(b.settings.okx_base_url,b.hashlib.sha256(b.settings.okx_api_key.encode()).digest())
+                b._quantum_cache=(identity,Decimal('.01'),b.time.monotonic()-1)
+            if mode in {'permanent','expired'}:
+                with pytest.raises(b.BuyBudgetError) as error:await b.read_buy_quantum(client)
+                assert 'private-secret' not in str(error.value)
+                assert len(calls)==1
+            else:
+                assert await b.read_buy_quantum(client)==Decimal('.01')
+                assert len(calls)==3
+    asyncio.run(check())
