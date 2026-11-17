@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app import okx_ad_worker as worker
+ORIGINAL_BASELINE = worker.replacement.baseline
 from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwitch, OKXManualCost
 
 
@@ -18,6 +19,7 @@ def db():
     for model in (OfferSelection, OfferPicker, OfferNotice): model.__table__.create(engine)
     NicknameTarget.__table__.create(engine)
     NicknamePriceBound.__table__.create(engine)
+    worker.replacement.OKXReplacementIntent.__table__.create(engine)
     for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, worker.OKXPendingSellQuantity.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
@@ -25,6 +27,7 @@ def db():
 
 @pytest.fixture
 def setup(monkeypatch, db):
+    monkeypatch.setattr(worker.replacement, 'baseline', AsyncMock(side_effect=lambda client, slot: [slot.adv_id]))
     monkeypatch.setattr(worker.buy_budget, 'read_buy_quantum', AsyncMock(return_value=Decimal('.01')))
     monkeypatch.setattr(worker.buy_budget, 'read_order_page', AsyncMock(return_value=[]))
     monkeypatch.setattr(worker.settings, 'okx_ad_pricing_enabled', True)
@@ -50,6 +53,59 @@ def plan(action='UPDATE_PRICE', price='26070'):
 
 
 def run(db): asyncio.run(worker.process_ad_pricing(db, None))
+
+
+@pytest.mark.parametrize('cause',['timeout','absent','duplicate','incomplete'])
+def test_baseline_failure_stops_before_any_price_post(db,setup,monkeypatch,cause):
+    monkeypatch.setattr(worker.replacement,'baseline',ORIGINAL_BASELINE)
+    batch=[{'adId':'123'}]
+    if cause=='absent':batch=[]
+    if cause=='duplicate':batch*=2
+    if cause=='incomplete':batch=[{'adId':str(i)} for i in range(100)]
+    listing=AsyncMock(side_effect=TimeoutError()) if cause=='timeout' else AsyncMock(return_value=(batch,False))
+    monkeypatch.setattr(worker.replacement,'owned_list',listing)
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    write=AsyncMock();monkeypatch.setattr(worker,'request',write)
+    run(db)
+    write.assert_not_awaited()
+    assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+
+
+def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite_evidence(db,setup,monkeypatch):
+    from datetime import datetime,timezone,timedelta
+    from app import okx_slot_recovery as recovery
+    from app.okx_release import OKXRequestError
+    monkeypatch.setattr(worker.replacement,'baseline',ORIGINAL_BASELINE)
+    monkeypatch.setattr(worker.replacement,'owned_list',AsyncMock(return_value=([{'adId':'123'}],False)))
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan()))
+    proof_at_post=[]
+    async def lost_reply(*args):
+        proof_at_post.append(worker.replacement.snapshot(db,setup.id))
+        assert proof_at_post[-1] is not None
+        assert db.get(worker.OKXPendingSellQuantity,setup.id).quantity==1000
+        raise OKXRequestError('OKX HTTP 504; phản hồi không phải JSON.')
+    write=AsyncMock(side_effect=lost_reply);monkeypatch.setattr(worker,'request',write)
+    run(db);db.expire_all()
+    attempt=db.get(worker.OKXAdPriceAttempt,setup.id)
+    assert attempt.state=='UNKNOWN' and attempt.result_ad_id is None
+    candidate={**ad('456','26070'),'isOwner':True,'cryptoCurrency':'USDT','fiatCurrency':'VND',
+        'createdTimestamp':int(datetime.fromisoformat(worker.replacement.stamp(attempt.last_action_at)).timestamp()*1000+1000)}
+    async def read(client,code):
+        if code=='123':raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+        return candidate
+    monkeypatch.setattr(worker.replacement,'read_ad',AsyncMock(side_effect=read))
+    monkeypatch.setattr(worker.replacement,'owned_list',AsyncMock(return_value=([{'adId':'456'}],False)))
+    class Later(datetime):
+        @classmethod
+        def now(cls,tz=None):return datetime.now(tz)+timedelta(seconds=121)
+    monkeypatch.setattr(recovery,'datetime',Later)
+    result=asyncio.run(recovery.recover_slot(db,'owner','SELL',1))
+    assert 'sau lỗi 504' in result and setup.adv_id=='456'
+    assert attempt.state=='IDLE' and not setup.auto_enabled
+    assert worker.replacement.snapshot(db,setup.id)==proof_at_post[0]
+    assert write.await_count==1  # Recovery must never send another price edit.
 
 
 @pytest.mark.parametrize('guard', ['disabled', 'friend', 'missing_hook'])

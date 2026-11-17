@@ -12,6 +12,7 @@ from app import okx_ad_worker as w
 
 @pytest.fixture
 def db(monkeypatch):
+    monkeypatch.setattr(w.replacement,'baseline',AsyncMock(side_effect=lambda client,slot:[slot.adv_id]))
     monkeypatch.setattr(b,'read_buy_quantum',AsyncMock(return_value=Decimal('.01')))
     engine=create_engine('sqlite://')
     Base.metadata.create_all(engine)

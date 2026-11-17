@@ -36,6 +36,122 @@ def ad(code='123',price='27563'):
 def run(db): return asyncio.run(recovery.recover_slot(db,'owner','SELL',2))
 
 
+def replacement_case(db, side='SELL'):
+    slot=db.query(OKXSlot).one();slot.side=side
+    attempt=db.query(recovery.OKXAdPriceAttempt).one()
+    attempt.reason='OKX HTTP 504; phản hồi không phải JSON.'
+    terms={'minOrderLimit':'20000000','maxOrderLimit':'26349999','cryptoAmount':'1000'}
+    db.add(recovery.OKXPendingLimits(slot_id=slot.id,ad_id='123',minimum=20000000,maximum=26349999))
+    if side=='BUY':
+        b=recovery.buy_budget
+        db.add(b.OKXBuyBudget(root_ad_id='123',slot_id=slot.id,total_vnd=26349999,total_crypto=1000));db.flush()
+        db.add(b.OKXBuyBudgetAd(ad_id='123',root_ad_id='123'))
+        db.add(b.OKXPendingBuyBudget(slot_id=slot.id,root_ad_id='123',old_ad_id='123',quantity=1000))
+    else:db.add(recovery.OKXPendingSellQuantity(slot_id=slot.id,ad_id='123',quantity=1000))
+    recovery.replacement.save(db,slot,attempt,terms,['123','777']);db.commit()
+    candidate={**ad('456','26350'),'side':side.lower(),'isOwner':True,
+        'cryptoCurrency':'USDT','fiatCurrency':'VND','maxOrderSize':'26349999',
+        'availableAmount':'900','onHoldAmount':'100','completedOrderCryptoAmount':'0',
+        'createdTimestamp':int((datetime.fromisoformat(recovery.replacement.stamp(attempt.last_action_at)).timestamp()+6)*1000)}
+    return slot,attempt,candidate
+
+
+@pytest.mark.parametrize('side',['BUY','SELL'])
+def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side):
+    from app.okx_release import OKXRequestError
+    slot,attempt,row=replacement_case(db,side)
+    async def read(client,code):
+        if code=='123':raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+        return row
+    monkeypatch.setattr(recovery.replacement,'read_ad',AsyncMock(side_effect=read))
+    listing=AsyncMock(return_value=([{'adId':'456','side':side.lower()}],False))
+    monkeypatch.setattr(recovery.replacement,'owned_list',listing)
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    db.expire_all()  # Saved evidence, not an in-memory response, drives recovery.
+    result=asyncio.run(recovery.recover_slot(db,'owner',side,2))
+    assert slot.adv_id=='456' and attempt.state=='IDLE' and not slot.auto_enabled, result
+    assert slot.current_price==26350 and 'sau lỗi 504' in result
+    assert db.get(recovery.OKXPendingLimits,slot.id) is None
+    assert db.query(recovery.OKXAutoLimits).one().ad_id=='456'
+    if side=='BUY':
+        b=recovery.buy_budget
+        assert db.get(b.OKXBuyBudgetAd,'456').root_ad_id=='123'
+        assert db.get(b.OKXBuyBudget,'123').total_vnd==26349999
+        assert db.get(b.OKXPendingBuyBudget,slot.id) is None
+    else:assert db.get(recovery.OKXPendingSellQuantity,slot.id) is None
+    assert 'replacement_evidence' in db.query(OKXAuditLog).one().detail
+    post.assert_not_awaited();assert listing.await_count==2
+
+
+@pytest.mark.parametrize('case',[
+    'none','multiple','preexisting','wrong_price','wrong_quantity','wrong_min','wrong_max',
+    'hidden','wrong_side','wrong_owner','wrong_currency','early','late','missing_time',
+    'old_present','old_readable','old_timeout','candidate_error','list_changed','read_changed',
+    'other_slot','concurrent_attempt','concurrent_evidence','missing_evidence','wrong_evidence',
+    'missing_limits','missing_budget','wrong_root','wrong_pending_quantity','old_429',
+])
+def test_lost_504_never_guesses_or_resubmits_when_evidence_is_incomplete(db,monkeypatch,case):
+    import json
+    from app.okx_release import OKXRequestError
+    slot,attempt,row=replacement_case(db,'BUY')
+    proof=db.get(recovery.replacement.OKXReplacementIntent,slot.id)
+    if case=='preexisting':
+        evidence=json.loads(proof.evidence);evidence['baseline'].append('456');proof.evidence=json.dumps(evidence)
+    if case=='missing_evidence':db.delete(proof)
+    if case=='missing_limits':db.delete(db.get(recovery.OKXPendingLimits,slot.id))
+    if case=='missing_budget':db.delete(db.get(recovery.buy_budget.OKXPendingBuyBudget,slot.id))
+    if case=='wrong_root':
+        proof_data=json.loads(proof.evidence);proof_data['budget_root']='999';proof.evidence=json.dumps(proof_data)
+    if case=='wrong_pending_quantity':db.get(recovery.buy_budget.OKXPendingBuyBudget,slot.id).quantity=999
+    if case=='wrong_evidence':
+        evidence=json.loads(proof.evidence);evidence['quantity']='1001';proof.evidence=json.dumps(evidence)
+    if case=='wrong_price':row['unitPrice']='26349'
+    if case=='wrong_quantity':row['availableAmount']='899'
+    if case=='wrong_min':row['minOrderSize']='20000001'
+    if case=='wrong_max':row['maxOrderSize']='26349998'
+    if case=='hidden':row['isHidden']=True
+    if case=='wrong_side':row['side']='sell'
+    if case=='wrong_owner':row['isOwner']=False
+    if case=='wrong_currency':row['fiatCurrency']='USD'
+    if case=='early':row['createdTimestamp']-=60000
+    if case=='late':row['createdTimestamp']+=180000
+    if case=='missing_time':row.pop('createdTimestamp')
+    if case=='other_slot':db.add(OKXSlot(side='BUY',slot_number=1,adv_id='456',auto_enabled=False))
+    db.commit()
+    reads=0
+    async def read(client,code):
+        nonlocal reads
+        if code=='123':
+            if case=='old_readable':return ad()
+            if case=='old_timeout':raise TimeoutError()
+            if case=='old_429':raise OKXRequestError('OKX HTTP 429; mã API: 50011.')
+            raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+        if case=='candidate_error':raise TimeoutError()
+        reads+=1
+        if reads==2:
+            if case=='read_changed':return {**row,'unitPrice':'26349'}
+            if case=='concurrent_attempt':
+                db.execute(update(recovery.OKXAdPriceAttempt).values(reason='Changed'));db.commit()
+            if case=='concurrent_evidence':
+                db.execute(update(recovery.replacement.OKXReplacementIntent).values(revision='changed'));db.commit()
+        return {**row,'adId':code}
+    calls=0
+    async def listing(*args):
+        nonlocal calls
+        calls+=1
+        ids=[] if case=='none' else ['456','789'] if case=='multiple' else ['123','456'] if case=='old_present' else ['456']
+        if calls==2 and case=='list_changed':ids.append('789')
+        return ([{'adId':code,'side':'buy'} for code in ids],False)
+    monkeypatch.setattr(recovery.replacement,'read_ad',AsyncMock(side_effect=read))
+    monkeypatch.setattr(recovery.replacement,'owned_list',AsyncMock(side_effect=listing))
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    result=asyncio.run(recovery.recover_slot(db,'owner','BUY',2))
+    assert slot.adv_id=='123' and attempt.state=='UNKNOWN' and not slot.auto_enabled
+    assert db.query(OKXAuditLog).count()==0
+    if case!='missing_budget':assert db.get(recovery.buy_budget.OKXPendingBuyBudget,slot.id) is not None
+    post.assert_not_awaited()
+
+
 def test_rejected_unchanged_ad_recovers_same_id_keeps_limits_and_auto_off(db,monkeypatch):
     reader=AsyncMock(return_value=ad());monkeypatch.setattr(recovery,'read_ad',reader)
     # Every network call must be an authenticated ad GET through read_ad.
