@@ -62,8 +62,9 @@ thanh toán, đặc biệt nếu bot/mạng/Discord đang gián đoạn.
 VietQR/NAPAS IBFT (`A000000727`, `QRIBFTTA`, VND 704, CRC16/CCITT-FALSE)
 được tạo cục bộ bằng `qrcode[pil]`. Không gửi số tài khoản/tiền/tên tới dịch vụ
 ảnh QR và không đặt chúng vào URL công khai. Chỉ tải ảnh vào kênh Discord đã
-được cấp quyền. Danh sách 23 ngân hàng được đánh dấu hỗ trợ trong dữ liệu công
-khai SePay/VietQR ngày 09/11/2026 được đóng gói tại `app/vietqr_banks.json`.
+được cấp quyền. Danh mục 76 ngân hàng từ API VietQR công khai ngày 15/11/2026 được đóng gói
+tại `app/vietqr_banks.json`. Cờ hỗ trợ quét của ngân hàng gửi không được dùng
+để loại BIN ngân hàng nhận.
 Ngân hàng ngoài danh sách cần bổ sung/xác minh BIN trước khi tạo QR.
 
 Bảng `buy_payment_qr_notifications` chỉ lưu mã lệnh, kênh/message ID, trạng
@@ -96,3 +97,15 @@ Bộ phát hiện và kiểm tra chỉ dẫn QR chuẩn hóa đúng các mã nà
 USDT/VND, tài khoản nhận đã xác minh và lệnh Mua chưa thanh toán. Không dựng lại QR
 cho lệnh đã báo thanh toán, hoàn tất, hủy hoặc quá hạn. Thông báo lệnh ở p2p-orders
 ghi rõ chiều theo tài khoản: bạn mua USDT / đối tác bán USDT, kèm dẫn tới kênh QR.
+
+## Tên ngân hàng rút gọn của sàn
+
+Tên OCB/Phương Đông được xác minh theo tên ngân hàng chính thức và BIN 970448
+trong danh mục VietQR. Alias chính xác `Phương Đông` hỗ trợ nhãn sàn như
+`Ocb phương đông`, `OCB - PHUONG DONG` và `Phương Đông (OCB)` qua cùng bộ
+nhận diện của OKX/MEXC. Chỉ kết hợp tên với mã của chính ngân hàng đó;
+không tìm chuỗi con hay đoán tên gần giống. Tên/mã mâu thuẫn vẫn chặn QR.
+Lệnh đã thanh toán không được dựng lại QR sau khi cập nhật alias.
+
+Nguồn xác minh tên: [OCB](https://www.ocb.com.vn/vi/ca-nhan/tai-khoan-thanh-toan),
+[danh mục VietQR](https://api.vietqr.io/v2/banks).
