@@ -422,3 +422,32 @@ Min/Max, quantity and BUY budget are checked again for concurrent changes.
 The operator may then select another verified owned advertisement normally.
 Timeouts, 429s, missing ads, accepted requests with result IDs, changed prices and
 inconsistent pending records are not unlocked by this new branch.
+
+### Lost OKX 504 replacement ID recovery (2026-11-17)
+
+Automatic BUY and SELL price edits now save an account-local
+`okx_replacement_intents` record before POST: the complete active ID baseline,
+request time, old ID, side, price, visibility, quantity, Min/Max and BUY budget
+root. Failure to read a complete baseline or save that evidence prevents the
+POST. The normal startup `create_all` adds the table; no new secrets or flags.
+
+For an UPDATE_PRICE with the exact 504/non-JSON diagnostic and no result ID,
+the existing **Kiểm tra / khôi phục** button on web and Discord waits at least
+120 seconds and performs authenticated GETs only. The old ID must return 55651
+and disappear from the complete active list. Exactly one ID absent from the
+saved baseline must be owned USDT/VND, fixed price, active, with the exact
+requested price, visibility, total available + held + completed USDT and
+Min/Max, created within the request window (−5 seconds to +180 seconds).
+The list and selected detail are read again before committing. Duplicate
+matches, unreadable candidates, missing/changed evidence, pending budgets,
+wrong ownership, another slot using the result or concurrent configuration
+changes keep the lock with an explanation.
+
+Successful recovery binds the verified new ID to the same BUY budget root,
+preserves its total and the write cooldown, audits the original evidence and
+clears only the verified pending request. Auto stays off; recovery never
+resends a price update, shows an ad or enables trading. It does not prevent
+OKX from returning 504. Legacy requests without a pre-send baseline cannot be
+matched automatically; they retain the explicit owned-ad selection fallback.
+Other timeout/rate-limit responses and manual-price/HIDE_AD requests are not
+interpreted as this 504 cancel-and-replace case.
