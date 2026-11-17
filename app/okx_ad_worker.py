@@ -48,7 +48,7 @@ class OKXAdPriceAttempt(Base):
 def safe_failure(error):
     # Do not expose arbitrary exception text, signed URLs or API response messages.
     from .okx_release import OKXRequestError
-    if isinstance(error, buy_budget.BuyBudgetError): return str(error)
+    if isinstance(error, (buy_budget.BuyBudgetError, replacement.ReplacementEvidenceError)): return str(error)
     return failure_reason(error) if isinstance(error, OKXRequestError) else error_detail(error)
 
 

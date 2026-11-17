@@ -14,6 +14,10 @@ from .okx_buy_budget import stock_total
 from .ad_visibility import owned_list
 
 
+class ReplacementEvidenceError(ValueError):
+    """Only controlled diagnostics from the replacement-evidence validator."""
+
+
 class OKXReplacementIntent(Base):
     __tablename__ = 'okx_replacement_intents'
     slot_id: Mapped[int] = mapped_column(ForeignKey('okx_slots.id'), primary_key=True)
@@ -28,25 +32,29 @@ def stamp(value):
 async def active_ids(client, side):
     rows, more = await owned_list(client, 'OKX', side, 1)
     if more or len(rows) >= 100:
-        raise ValueError('Chưa đọc đủ danh sách quảng cáo OKX để lưu/xác minh ID thay thế.')
+        raise ReplacementEvidenceError('Chưa đọc đủ danh sách quảng cáo OKX để lưu/xác minh ID thay thế.')
     ids = [str(r.get('adId', '')) for r in rows]
     if any(not re.fullmatch(r'[0-9]{1,30}', x) for x in ids) or len(set(ids)) != len(ids):
-        raise ValueError('Danh sách quảng cáo OKX thiếu/trùng ID; chưa xác minh thay thế.')
+        raise ReplacementEvidenceError('Danh sách quảng cáo OKX thiếu/trùng ID; chưa xác minh thay thế.')
     return sorted(ids)
 
 
 async def baseline(client, slot):
     ids = await active_ids(client, slot.side)
     if slot.adv_id not in ids:
-        raise ValueError('ID hiện tại không còn trong danh sách quảng cáo; chưa gửi đổi giá.')
+        raise ReplacementEvidenceError('ID hiện tại không còn trong danh sách quảng cáo; chưa gửi đổi giá.')
     return ids
 
 
 def save(db, slot, attempt, terms, ids):
     from .okx_buy_budget import OKXPendingBuyBudget
+    # Production sessions deliberately disable autoflush. Materialize the
+    # pending budget/terms in this transaction before querying by primary key.
+    # The worker still commits evidence and terms together before the POST.
+    db.flush()
     pending = db.get(OKXPendingBuyBudget, slot.id) if slot.side == 'BUY' else None
     if slot.side == 'BUY' and (not pending or pending.old_ad_id != slot.adv_id):
-        raise ValueError('Thiếu hồ sơ ngân sách mua trước khi gửi; chưa đổi giá.')
+        raise ReplacementEvidenceError('Thiếu hồ sơ ngân sách mua trước khi gửi; chưa đổi giá.')
     expected = {
         'old': slot.adv_id, 'side': slot.side, 'started': stamp(attempt.last_action_at),
         'price': str(number(attempt.price)), 'hidden': attempt.hidden,
@@ -71,7 +79,7 @@ def lost_response(attempt):
 
 def validate(evidence, slot, attempt):
     if not evidence:
-        raise ValueError('Yêu cầu 504 cũ chưa có hồ sơ ID trước khi gửi; chưa tự gắn ID. Chọn quảng cáo của tôi sau khi xác minh ID cũ.')
+        raise ReplacementEvidenceError('Yêu cầu 504 cũ chưa có hồ sơ ID trước khi gửi; chưa tự gắn ID. Chọn quảng cáo của tôi sau khi xác minh ID cũ.')
     try:
         e = json.loads(evidence[1])
         if (set(e) != {'old','side','started','price','hidden','minimum','maximum','quantity','baseline','budget_root'}
@@ -90,7 +98,7 @@ def validate(evidence, slot, attempt):
         if number(e['minimum']) > number(e['maximum']):raise ValueError()
         return e
     except (ValueError, TypeError, KeyError):
-        raise ValueError('Hồ sơ trước khi gửi không khớp yêu cầu 504 hiện tại; giữ khóa.') from None
+        raise ReplacementEvidenceError('Hồ sơ trước khi gửi không khớp yêu cầu 504 hiện tại; giữ khóa.') from None
 
 
 def verify_pending(db, slot, attempt, evidence):
@@ -100,7 +108,7 @@ def verify_pending(db, slot, attempt, evidence):
     limits = db.get(OKXPendingLimits, slot.id)
     if (not limits or limits.ad_id != e['old'] or limits.minimum != number(e['minimum'])
             or limits.maximum != number(e['maximum'])):
-        raise ValueError('Hồ sơ Min/Max đã thiếu hoặc khác lần gửi 504; giữ khóa.')
+        raise ReplacementEvidenceError('Hồ sơ Min/Max đã thiếu hoặc khác lần gửi 504; giữ khóa.')
     if slot.side == 'BUY':
         q = db.get(OKXPendingBuyBudget, slot.id)
         root = db.get(OKXBuyBudget, e['budget_root'])
@@ -108,11 +116,11 @@ def verify_pending(db, slot, attempt, evidence):
         if (not q or q.old_ad_id != e['old'] or q.root_ad_id != e['budget_root']
                 or q.quantity != number(e['quantity']) or not root or root.slot_id != slot.id
                 or not link or link.root_ad_id != e['budget_root']):
-            raise ValueError('Chuỗi ngân sách mua không khớp hồ sơ 504; giữ khóa.')
+            raise ReplacementEvidenceError('Chuỗi ngân sách mua không khớp hồ sơ 504; giữ khóa.')
     else:
         q = db.get(OKXPendingSellQuantity, slot.id)
         if not q or q.ad_id != e['old'] or q.quantity != number(e['quantity']):
-            raise ValueError('Lượng USDT còn bán không khớp hồ sơ 504; giữ khóa.')
+            raise ReplacementEvidenceError('Lượng USDT còn bán không khớp hồ sơ 504; giữ khóa.')
 
 
 def matches(row, code, e):
@@ -141,20 +149,20 @@ async def discover(client, slot, attempt, evidence):
     except OKXRequestError as error:
         if failure_reason(error) != 'OKX HTTP 400; mã API: 55651.':raise
     else:
-        raise ValueError('ID cũ vẫn đọc được; chưa chứng minh đã đổi sang quảng cáo khác. Giữ khóa, không gửi lại.')
+        raise ReplacementEvidenceError('ID cũ vẫn đọc được; chưa chứng minh đã đổi sang quảng cáo khác. Giữ khóa, không gửi lại.')
     ids = await active_ids(client, slot.side)
-    if e['old'] in ids:raise ValueError('ID cũ vẫn có trong danh sách quảng cáo; giữ khóa.')
+    if e['old'] in ids:raise ReplacementEvidenceError('ID cũ vẫn có trong danh sách quảng cáo; giữ khóa.')
     new_ids = sorted(set(ids) - set(e['baseline']))
-    if len(new_ids) > 10:raise ValueError('Có quá nhiều ID mới để xác minh chắc chắn; giữ khóa.')
+    if len(new_ids) > 10:raise ReplacementEvidenceError('Có quá nhiều ID mới để xác minh chắc chắn; giữ khóa.')
     candidates = []
     for code in new_ids:
         row = await read_ad(client, code)  # An unreadable candidate cannot be ignored.
         if matches(row, code, e):candidates.append((code, row))
     if len(candidates) != 1:
-        raise ValueError(f'Có {len(candidates)} quảng cáo thay thế khớp đủ giá, số USDT, Min/Max, trạng thái và thời gian; cần đúng 1 để gỡ khóa.')
+        raise ReplacementEvidenceError(f'Có {len(candidates)} quảng cáo thay thế khớp đủ giá, số USDT, Min/Max, trạng thái và thời gian; cần đúng 1 để gỡ khóa.')
     code, row = candidates[0]
     if await active_ids(client, slot.side) != ids:
-        raise ValueError('Danh sách quảng cáo thay đổi trong lúc xác minh; kiểm tra lại, chưa gỡ khóa.')
+        raise ReplacementEvidenceError('Danh sách quảng cáo thay đổi trong lúc xác minh; kiểm tra lại, chưa gỡ khóa.')
     row = await read_ad(client, code)
-    if not matches(row, code, e):raise ValueError('Quảng cáo thay thế thay đổi trong lúc xác minh; giữ khóa.')
+    if not matches(row, code, e):raise ReplacementEvidenceError('Quảng cáo thay thế thay đổi trong lúc xác minh; giữ khóa.')
     return code, row
