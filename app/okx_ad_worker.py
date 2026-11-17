@@ -24,6 +24,7 @@ from .nickname_target import target as nickname_target, plan_options
 from .okx_release import request, failure_reason
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, OKXPendingSellQuantity, price_limits, limits_match, sell_quantity_matches
 from . import okx_buy_budget as buy_budget
+from . import okx_replacement as replacement
 from .telegram_commands import format_vietnam_time
 
 logger = logging.getLogger("uvicorn.error.okx_ad_pricing")
@@ -133,7 +134,7 @@ def pending_reason(attempt):
     """Keep the original diagnostic stable across polling and restarts."""
     detail = f" Chi tiết: {attempt.reason}" if attempt.reason else ""
     return ("Chưa xác minh được kết quả sửa/ẩn quảng cáo." + detail
-            + " Bot đã dừng bám giá cho slot này; không tự gửi lại. Cần kiểm tra trên OKX.")
+            + " Bot đã dừng bám giá cho slot này; không tự gửi lại. Bấm Kiểm tra / khôi phục để xác minh ID quảng cáo thay thế.")
 
 
 async def process_ad_pricing(db, client):
@@ -273,6 +274,14 @@ async def process_ad_pricing(db, client):
                 attempt.state = 'IDLE';db.commit()
                 await notice(db,attempt,slot,'BLOCKED','Giá vốn vừa thay đổi; chờ tính lại giá bán, chưa gửi OKX.')
                 continue
+            replacement_ids = None
+            if not is_hide:
+                try:
+                    replacement_ids = await replacement.baseline(client, slot)
+                except Exception:
+                    attempt.state = 'IDLE'
+                    db.commit()
+                    raise
             if buy or slot.side == 'SELL':
                 expected_ad = buy['fingerprint'] if buy else buy_budget.fingerprint(row)
                 try:
@@ -317,6 +326,15 @@ async def process_ad_pricing(db, client):
             if old_sell:db.delete(old_sell);db.flush()
             if slot.side=='SELL' and not is_hide:
                 db.add(OKXPendingSellQuantity(slot_id=slot.id,ad_id=slot.adv_id,quantity=Decimal(terms['cryptoAmount'])))
+            if not is_hide:
+                try:
+                    replacement.save(db, slot, attempt, terms, replacement_ids)
+                except Exception:
+                    db.rollback()
+                    attempt=db.get(OKXAdPriceAttempt,slot.id)
+                    attempt.state='IDLE'
+                    db.commit()
+                    raise
             db.commit()  # A crash/timeout never authorizes automatic resubmission.
             if is_hide:
                 result = await request(client, "POST", "/api/v5/p2p/ad/update-active-status", {"adId": slot.adv_id, "status": "hidden"})

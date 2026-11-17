@@ -7,6 +7,7 @@ from .config import settings
 from .models import OKXSlot, OKXAuditLog
 from .okx_ads import read_ad, number
 from . import okx_buy_budget as buy_budget
+from . import okx_replacement as replacement
 from .okx_ad_worker import OKXAdPriceAttempt, safe_failure
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, OKXPendingSellQuantity, limits_match, sell_quantity_matches
 
@@ -102,24 +103,31 @@ async def recover_slot(db, owner, side, slot_number):
     sell_before=(sell_pending.ad_id,sell_pending.quantity) if sell_pending else None
     code = attempt.result_ad_id or attempt.old_ad_id
     unavailable=False
+    discovered=False
+    replacement_before=replacement.snapshot(db,slot.id)
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            try:
-                ad = await read_ad(client, code)
-            except Exception as error:
-                # Only a recorded explicit rejection may be retired when the old
-                # ID is unavailable AND absent from the authenticated active list.
-                # A timeout/429 or an accepted request without a result stays locked.
-                if (attempt.action!='UPDATE_PRICE' or attempt.result_ad_id
-                        or attempt.reason!='OKX HTTP 400; mã API: 55723.'
-                        or safe_failure(error)!='OKX HTTP 400; mã API: 55651.'):
-                    raise
-                from .ad_visibility import owned_list
-                rows,more=await owned_list(client,'OKX',side,1)
-                if more or any(str(r.get('adId',''))==code for r in rows):
-                    raise ValueError('ID cũ vẫn có trong danh sách quảng cáo; giữ khóa để kiểm tra lại.')
-                unavailable=True
-                ad={'isHidden':None}
+            if replacement.lost_response(attempt):
+                replacement.verify_pending(db, slot, attempt, replacement_before)
+                code, ad = await replacement.discover(client, slot, attempt, replacement_before)
+                discovered=True
+            else:
+                try:
+                    ad = await read_ad(client, code)
+                except Exception as error:
+                    # Only a recorded explicit rejection may be retired when the old
+                    # ID is unavailable AND absent from the authenticated active list.
+                    # A timeout/429 or an accepted request without a result stays locked.
+                    if (attempt.action!='UPDATE_PRICE' or attempt.result_ad_id
+                            or attempt.reason!='OKX HTTP 400; mã API: 55723.'
+                            or safe_failure(error)!='OKX HTTP 400; mã API: 55651.'):
+                        raise
+                    from .ad_visibility import owned_list
+                    rows,more=await owned_list(client,'OKX',side,1)
+                    if more or any(str(r.get('adId',''))==code for r in rows):
+                        raise ValueError('ID cũ vẫn có trong danh sách quảng cáo; giữ khóa để kiểm tra lại.')
+                    unavailable=True
+                    ad={'isHidden':None}
         if not unavailable and (ad.get('side') != side.lower() or ad.get('type') != 'limit'
                 or ad.get('status') != 'new' or type(ad.get('isHidden')) is not bool):
             raise ValueError('Quảng cáo không còn hoạt động đúng chiều/loại hoặc thiếu trạng thái hiển thị.')
@@ -129,7 +137,7 @@ async def recover_slot(db, owner, side, slot_number):
         elif manual is not None:
             verify_manual_rejection(manual,attempt,ad)
             outcome='MANUAL_REJECTED_UNCHANGED'
-        elif attempt.result_ad_id:
+        elif attempt.result_ad_id or discovered:
             if current != attempt.price or ad['isHidden'] is not attempt.hidden or not limits_match(pending, attempt, ad) or not buy_budget.pending_matches(db, slot.id, attempt, ad) or not sell_quantity_matches(db,slot.id,attempt,ad):
                 raise ValueError('Quảng cáo trả về chưa khớp giá, trạng thái hoặc Min/Max của yêu cầu cũ.')
             outcome = 'CONFIRMED'
@@ -165,6 +173,7 @@ async def recover_slot(db, owner, side, slot_number):
     sell_pending=db.get(OKXPendingSellQuantity,slot.id)
     if (slot.auto_enabled or (slot.adv_id, slot.side, slot.current_price) != slot_before
             or attempt is None or snapshot(attempt) != before
+            or replacement.snapshot(db,slot.id) != replacement_before
             or ((pending.ad_id, pending.minimum, pending.maximum) if pending else None) != pending_before
             or ((budget_pending.root_ad_id, budget_pending.old_ad_id, budget_pending.quantity) if budget_pending else None) != budget_before
             or ((sell_pending.ad_id,sell_pending.quantity) if sell_pending else None)!=sell_before):
@@ -176,13 +185,18 @@ async def recover_slot(db, owner, side, slot_number):
         if not unchanged:
             db.rollback()
             return 'Hồ sơ đặt giá thủ công đã thay đổi trong lúc kiểm tra; chưa gỡ khóa. Auto vẫn tắt.'
+    if discovered:
+        try:replacement.verify_pending(db,slot,attempt,replacement_before)
+        except ValueError as error:
+            db.rollback()
+            return 'Chưa khôi phục: '+str(error)+' Auto vẫn tắt.'
     collision = db.scalar(select(OKXSlot.id).where(OKXSlot.id != slot.id, OKXSlot.adv_id == code))
     if collision is not None:
         db.rollback()
         return 'Chưa khôi phục: ID quảng cáo đang gắn với slot khác. Auto vẫn tắt.'
     db.add(OKXAuditLog(action='OKX_SLOT_RECOVERED', actor='discord:' + owner,
         detail=json.dumps({'slot': slot_number, 'side': side, 'outcome': outcome,
-            'previous_attempt': before, 'manual_draft_id':manual[0] if manual else None, 'verified_ad': code, 'verified_price': str(current),
+            'previous_attempt': before, 'manual_draft_id':manual[0] if manual else None, 'replacement_evidence':replacement_before if discovered else None, 'verified_ad': code, 'verified_price': str(current),
             'hidden': ad['isHidden'], 'minimum': ad.get('minOrderSize'),
             'maximum': ad.get('maxOrderSize')}, default=str)))
     if outcome == 'CONFIRMED':
@@ -207,6 +221,8 @@ async def recover_slot(db, owner, side, slot_number):
     db.commit()
     rejected_code = '55147' if before['reason'] == 'OKX HTTP 400; mã API: 55147.' else '55723'
     conclusion = 'Đã xác minh kết quả yêu cầu cũ.' if outcome == 'CONFIRMED' else f'OKX đã trả lỗi 400/{rejected_code}; quảng cáo cũ vẫn giữ giá trước yêu cầu. Đã lưu hồ sơ lỗi và gỡ khóa.'
+    if discovered:
+        conclusion='Đã tìm và xác minh duy nhất quảng cáo thay thế sau lỗi 504. Đã cập nhật ID slot và giữ chuỗi ngân sách cũ; không gửi lại yêu cầu đổi giá.'
     if manual is not None:
         conclusion='Đã xác minh lỗi 400/55723 của lần đặt giá thủ công: quảng cáo cũ vẫn giữ nguyên giá, số USDT và Min/Max. Đã lưu hồ sơ và gỡ khóa.'
     if unavailable:
