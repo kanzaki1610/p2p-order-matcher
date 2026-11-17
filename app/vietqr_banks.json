@@ -27,7 +27,8 @@
     "name": "Ngân hàng TMCP Phương Đông",
     "code": "OCB",
     "bin": "970448",
-    "short_name": "OCB"
+    "short_name": "OCB",
+    "aliases": ["Phương Đông"]
   },
   {
     "name": "Ngân hàng TMCP Quân đội",
