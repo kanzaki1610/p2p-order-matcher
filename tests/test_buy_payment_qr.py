@@ -562,3 +562,41 @@ def test_completed_okx_order_does_not_restore_qr_after_bank_alias_fix(db,monkeyp
     source=AsyncMock();monkeypatch.setattr(okx_release,'request',source)
     with pytest.raises(data.InactiveOrder):asyncio.run(worker.read_payment(None,None,record(db)))
     source.assert_not_awaited()
+
+
+@pytest.mark.parametrize('label', [
+    'Ocb phương đông', 'OCB - PHUONG DONG', 'Phương Đông (OCB)',
+    'Ngân hàng Phương Đông', 'OCB - Ngân hàng TMCP Phương Đông',
+])
+@pytest.mark.parametrize('exchange', ['OKX', 'MEXC'])
+def test_ocb_short_collection_labels_encode_verified_bin(label, exchange):
+    if exchange == 'OKX':
+        row = okx()
+        payment = row['counterpartyDetail']['takerPaymentMethod']
+        payment.update(bankName=label, bankCode='BANK')
+        result = data.okx_instruction(row, row['orderId'])
+        row['paymentStatus'] = 'paid'
+        with pytest.raises(data.InactiveOrder):
+            data.okx_instruction(row, row['orderId'])
+    else:
+        row = mexc()
+        payment = row['paymentInfo'][0]
+        payment.update(bankName=label, bankCode='BANK')
+        result = data.mexc_instruction(row, row['advOrderNo'], 'SELL')
+    assert result.bank == 'OCB' and result.bank_bin == '970448'
+    assert result.account == payment.get('accountNo', payment.get('account'))
+    assert result.note == ''
+    assert '970448' in vietqr.payload(result.bank_bin, result.account, result.amount)
+
+
+def test_ocb_short_name_does_not_allow_conflicting_or_partial_bank_labels():
+    with pytest.raises(ValueError, match='khác nhau'):
+        vietqr.resolve_bank('Ocb phương đông', 'ACB')
+    for label in ('OCB Phuong Dong ACB', 'OCB Phuong', 'Dong', 'Phuong Dong bank unknown'):
+        with pytest.raises(ValueError):
+            vietqr.resolve_bank(label, 'BANK')
+    row = okx()
+    row['counterpartyDetail']['takerPaymentMethod'].update(
+        bankName='Ocb phương đông', bankCode='BANK', accountName='TRAN VAN B')
+    with pytest.raises(ValueError):
+        data.okx_instruction(row, row['orderId'])
