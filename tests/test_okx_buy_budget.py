@@ -88,7 +88,9 @@ def test_readback_must_not_refill_quantity(db,quantity,accepted):
     ad=source();ad['availableAmount']=quantity
     assert b.pending_matches(db,slot(db).id,SimpleNamespace(action='UPDATE_PRICE',old_ad_id='200'),ad)==accepted
 
-def test_worker_sends_remaining_not_initial_quantity_and_keeps_hidden(db,monkeypatch):
+@pytest.mark.parametrize('autoflush',[False,True])
+def test_worker_sends_remaining_not_initial_quantity_and_keeps_hidden(db,monkeypatch,autoflush):
+    db.autoflush=autoflush
     from app.okx_cost import save_cost
     monkeypatch.setattr(w.settings,'okx_ad_pricing_enabled',True)
     monkeypatch.setattr(w.settings,'database_schema','public')
@@ -104,6 +106,10 @@ def test_worker_sends_remaining_not_initial_quantity_and_keeps_hidden(db,monkeyp
     assert Decimal(body['cryptoAmount']) < 1000 and body['maxOrderLimit']=='26057000'
     assert 'online' not in body and slot(db).adv_id=='300'
     assert db.get(w.OKXAdPriceAttempt,slot(db).id).state=='IDLE'
+    evidence=w.replacement.snapshot(db,slot(db).id)
+    assert evidence is not None
+    import json
+    assert json.loads(evidence[1])['budget_root']=='100'
 
 def test_worker_does_not_post_if_order_arrives_between_reads(db,monkeypatch):
     monkeypatch.setattr(w.settings,'okx_ad_pricing_enabled',True)

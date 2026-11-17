@@ -72,7 +72,9 @@ def test_baseline_failure_stops_before_any_price_post(db,setup,monkeypatch,cause
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
 
 
-def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite_evidence(db,setup,monkeypatch):
+@pytest.mark.parametrize('autoflush',[False,True])
+def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite_evidence(db,setup,monkeypatch,autoflush):
+    db.autoflush=autoflush
     from datetime import datetime,timezone,timedelta
     from app import okx_slot_recovery as recovery
     from app.okx_release import OKXRequestError
@@ -106,6 +108,12 @@ def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite
     assert attempt.state=='IDLE' and not setup.auto_enabled
     assert worker.replacement.snapshot(db,setup.id)==proof_at_post[0]
     assert write.await_count==1  # Recovery must never send another price edit.
+
+
+def test_controlled_evidence_error_is_specific_without_exposing_arbitrary_api_text():
+    message='Thiếu hồ sơ ngân sách mua trước khi gửi; chưa đổi giá.'
+    assert worker.safe_failure(worker.replacement.ReplacementEvidenceError(message))==message
+    assert 'private-secret' not in worker.safe_failure(ValueError('private-secret'))
 
 
 @pytest.mark.parametrize('guard', ['disabled', 'friend', 'missing_hook'])
