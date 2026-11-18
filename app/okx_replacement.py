@@ -147,7 +147,14 @@ async def discover(client, slot, attempt, evidence):
     try:
         await read_ad(client, e['old'])
     except OKXRequestError as error:
-        if failure_reason(error) != 'OKX HTTP 400; mã API: 55651.':raise
+        # Authenticated Get Ad uses both codes for 'Ad is no longer available'.
+        # This permits discovery only: absence from two owned active lists plus
+        # unique pre-write evidence and two matching candidate reads are still
+        # mandatory. Never classify the original POST as rejected or retry it.
+        if failure_reason(error) not in {
+                'OKX HTTP 400; mã API: 55651.',
+                'OKX HTTP 400; mã API: 55349.'}:
+            raise
     else:
         raise ReplacementEvidenceError('ID cũ vẫn đọc được; chưa chứng minh đã đổi sang quảng cáo khác. Giữ khóa, không gửi lại.')
     ids = await active_ids(client, slot.side)
