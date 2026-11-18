@@ -80,7 +80,9 @@ async def rank_plan(client, slot, cost, follow=None, enforce_cost=True):
     normalized = {**data, 'exchange':'okx', 'side':side.lower(), 'panel':'okx_'+side.lower()}
     if data.get('cache') == 'new': normalized['cache'] = 'fresh'
     kwargs = plan_options(follow)
-    return plan_rank_price(normalized, side, cost, own_nickname=slot.nickname, target_rank=slot.rank,enforce_cost=enforce_cost, **kwargs)
+    own_names = [name.strip() for name in settings.mexc_merchant_nicknames.split(',') if name.strip()]
+    own_nickname = slot.nickname.strip() or (own_names[0] if own_names else '')
+    return plan_rank_price(normalized, side, cost, own_nickname=own_nickname, own_aliases=own_names, target_rank=slot.rank,enforce_cost=enforce_cost, **kwargs)
 
 
 async def confirm(db, api, slot):

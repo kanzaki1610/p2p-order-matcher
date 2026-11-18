@@ -74,7 +74,7 @@ async def recover_slot(db, owner, side, slot_number):
     db.commit()
     attempt = db.get(OKXAdPriceAttempt, slot.id)
     if attempt is None or attempt.state == 'IDLE':
-        return 'Slot không có yêu cầu bị khóa. Auto đang tắt; kiểm tra Min/Max rồi tự bật khi sẵn sàng.'
+        return 'Slot không có yêu cầu bị khóa. Auto đang tắt; bấm Đọc lại từ sàn để kiểm tra lượng USDT, Min và trạng thái hiện/ẩn trước khi bật.'
     before = snapshot(attempt)
     slot_before = (slot.adv_id, slot.side, slot.current_price)
     now = datetime.now(timezone.utc)
@@ -230,5 +230,19 @@ async def recover_slot(db, owner, side, slot_number):
                 + f'\n{side} slot {slot_number} · ID cũ {code}. Auto vẫn TẮT.'
                 + '\nBấm Chọn từ quảng cáo của tôi để gắn quảng cáo đang hoạt động, kiểm tra Min rồi tự bật Auto. Không tự chọn ID thay thế hoặc gửi lại yêu cầu cũ.')
     visibility=' Quảng cáo vẫn đang ẩn; khôi phục không tự hiện quảng cáo. Bạn có thể chọn ID quảng cáo đang hoạt động khác cho slot.' if ad['isHidden'] else ''
+    next_step = 'Kiểm tra cấu hình rồi tự bật Auto khi sẵn sàng.'
+    if ad['isHidden']:
+        next_step = 'Quảng cáo đang ẩn; tự kiểm tra trạng thái trên sàn trước khi bật Auto.'
+    if 'availableAmount' in ad:
+        try:
+            available = buy_budget.nonnegative(ad['availableAmount'])
+            minimum = number(ad.get('minOrderSize'))
+            if available == 0 or available * current < minimum:
+                shown_available = format(available, ',.8f').rstrip('0').rstrip('.')
+                next_step = (f'Còn {shown_available} USDT · giá trị {available * current:,.0f} VND, '
+                    + f'chưa đủ Min {minimum:,.0f} VND. Không bật Auto; cần điều chỉnh lượng hoặc Min rồi đọc lại từ sàn.')
+        except (ValueError, ArithmeticError):
+            next_step = 'Chưa xác minh được lượng USDT/Min. Không bật Auto; bấm Đọc lại từ sàn trước.'
     return (conclusion + visibility + f'\n{side} slot {slot_number} · ID {code} · giá {current:,.0f}đ/USDT.'
-            + '\nAuto vẫn TẮT. Min/Max bạn đã lưu được giữ nguyên; kiểm tra rồi bấm Bật Auto. Không gửi yêu cầu sửa/ẩn quảng cáo trong bước khôi phục.')
+            + '\nAuto vẫn TẮT. ' + next_step
+            + '\nKhôi phục không gửi yêu cầu sửa/ẩn quảng cáo hoặc thay đổi Min/Max.')

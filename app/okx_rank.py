@@ -10,7 +10,7 @@ MIN_SPREAD = Decimal("10")
 SOURCE_MAX_AGE = 30
 
 
-def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True, target_offer=None):
+def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=None, target_rank=TARGET_RANK, target_nickname=None, price_offset=0, price_bound=0, enforce_cost=True, target_offer=None, own_aliases=()):
     from .nickname_target import validate_target, validate_bound
     if target_nickname is not None:
         target_nickname, price_offset = validate_target(target_nickname, str(price_offset))
@@ -40,6 +40,10 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
     rows = data.get("rows")
     if not isinstance(rows, list):
         return {**base, "reason": "Bảng giá AutoP2P sai cấu trúc."}
+    # Only explicit names from this account's settings/slot are ours.
+    # No substring, accent-folding or global cross-account alias registry.
+    own_names = {name.strip().casefold() for name in (own_nickname, *own_aliases)
+                 if isinstance(name, str) and name.strip()}
     competitors = []
     excluded = 0
     try:
@@ -49,7 +53,7 @@ def plan_rank_price(data, side, cost_basis=None, own_nickname="VNTrader", now=No
             price = number(row.get("price"))
             if price != price.to_integral_value():
                 raise ValueError("Giá VND sai bước giá")
-            if row["nick"].strip().casefold() == own_nickname.strip().casefold():
+            if row["nick"].strip().casefold() in own_names:
                 excluded += 1
                 continue
             competitors.append({"nickname": row["nick"], "price": price, "row": row})
@@ -112,8 +116,9 @@ async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK,
     response = await client.get("https://autop2p.biz/", params={"api": "panel", "panel": "okx_" + side.lower()})
     response.raise_for_status()
     from .config import settings
-    own_nickname = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
-    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound,enforce_cost=enforce_cost,target_offer=target_offer)
+    own_names = [name.strip() for name in settings.okx_merchant_nicknames.split(',') if name.strip()]
+    own_nickname = own_names[0] if own_names else 'VNTrader'
+    return plan_rank_price(response.json(), side, cost_basis, own_nickname=own_nickname, own_aliases=own_names[1:], target_rank=target_rank, target_nickname=target_nickname, price_offset=price_offset, price_bound=price_bound,enforce_cost=enforce_cost,target_offer=target_offer)
 
 
 async def send_preview_alert(plan):
