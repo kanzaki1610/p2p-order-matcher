@@ -31,9 +31,17 @@ def stop_all(db, actor):
     set_release(db,False,actor)
     db.merge(OKXPricingSwitch(id=1,enabled=False))
     db.merge(MexcPricingSwitch(id=1,enabled=False))
-    db.add(OKXAuditLog(action='PRIMARY_EMERGENCY_STOP',actor=actor,detail='release and OKX/MEXC pricing stopped'))
+    from .okx_auto_messages import AutoMessageConfig
+    from sqlalchemy import select
+    import uuid
+    for message_config in db.scalars(select(AutoMessageConfig).with_for_update()):
+        message_config.enabled=False
+        message_config.enabled_since=None
+        message_config.revision=uuid.uuid4().hex
+        message_config.updated_at=datetime.now(timezone.utc)
+    db.add(OKXAuditLog(action='PRIMARY_EMERGENCY_STOP',actor=actor,detail='release, OKX/MEXC pricing and OKX auto messages stopped'))
     db.commit()
-    return 'Đã dừng Auto mở khóa và bám giá OKX/MEXC của bạn. Vẫn nhận tiền, đối chiếu và gửi thông báo. Yêu cầu đã gửi trước đó có thể vẫn hoàn tất; quảng cáo trên sàn giữ nguyên.'
+    return 'Đã dừng Auto mở khóa, bám giá OKX/MEXC và tin nhắn tự động OKX của bạn. Vẫn nhận tiền, đối chiếu và gửi thông báo. Yêu cầu đã gửi trước đó có thể vẫn hoàn tất; quảng cáo trên sàn giữ nguyên.'
 
 
 def status(db):

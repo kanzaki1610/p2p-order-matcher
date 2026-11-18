@@ -12,6 +12,7 @@ from .background_io import run_isolated, isolated_io
 from .bitget_sync import bitget_sync_loop
 from .mexc_sync import mexc_sync_loop
 from .okx_sync import okx_sync_loop
+from .okx_auto_messages import message_loop, enabled as okx_messages_enabled
 from .okx_release import OKXReleaseAttempt
 from .okx_ad_worker import pricing_loop
 from .mexc_pricing import pricing_loop as mexc_pricing_loop
@@ -40,6 +41,25 @@ okx_task: asyncio.Task | None = None
 pricing_task: asyncio.Task | None = None
 mexc_pricing_task: asyncio.Task | None = None
 buy_qr_task: asyncio.Task | None = None
+
+
+message_task: asyncio.Task | None = None
+
+
+@app.on_event("startup")
+async def start_okx_messages():
+    global message_task
+    if okx_messages_enabled(): message_task = asyncio.create_task(run_isolated(message_loop))
+
+
+@app.on_event("shutdown")
+async def stop_okx_messages():
+    global message_task
+    if message_task:
+        message_task.cancel()
+        try: await message_task
+        except asyncio.CancelledError: pass
+        message_task = None
 
 
 @app.on_event("startup")

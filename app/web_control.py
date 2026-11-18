@@ -51,6 +51,27 @@ router=APIRouter(prefix='/dashboard/api/control',dependencies=[Depends(verify_pr
 # Import before main.create_all so reporting tables are created in this account's
 # own schema. Reporting never changes trading or bank-transaction tables.
 from . import profit
+from . import okx_auto_messages
+
+
+class OKXMessageInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: StrictBool
+    text: str = Field(max_length=1000)
+    revision: str = Field(pattern=r'^[0-9a-f]{32}$')
+
+
+@router.get('/okx-messages')
+async def okx_message_settings(db=Depends(get_db)):
+    return okx_auto_messages.view(db)
+
+
+@router.put('/okx-messages/{side}')
+async def okx_message_save(side: Literal['BUY', 'SELL'], data: OKXMessageInput, db=Depends(get_db)):
+    try: okx_auto_messages.save(db, side, data.enabled, data.text, data.revision)
+    except okx_auto_messages.ConfigConflict as error: raise HTTPException(409, str(error)) from None
+    except ValueError as error: raise HTTPException(400, str(error)) from None
+    return okx_auto_messages.view(db)
 
 
 class ProfitPeriod(BaseModel):
