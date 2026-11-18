@@ -99,3 +99,8 @@ When remaining stock is below Min (including zero), OKX floors the effective Max
 at Min. That does not make the ad tradable: the existing availability monitor
 still stops Auto for insufficient stock. Recovery binds the verified ID but
 leaves Auto OFF; it never adds stock, lowers Min, or reopens an exhausted ad.
+
+A discovered SELL replacement may already be hidden with stock value below Min.
+Recovery permits this visibility difference only with unchanged saved total and
+all other replacement checks, preserving hidden and Auto OFF. Sufficient-stock
+hidden ads and BUY visibility changes are still blocked.
