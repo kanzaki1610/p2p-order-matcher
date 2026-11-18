@@ -56,12 +56,13 @@ def replacement_case(db, side='SELL'):
     return slot,attempt,candidate
 
 
+@pytest.mark.parametrize('old_read_code',['55651','55349'])
 @pytest.mark.parametrize('side',['BUY','SELL'])
-def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side):
+def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side,old_read_code):
     from app.okx_release import OKXRequestError
     slot,attempt,row=replacement_case(db,side)
     async def read(client,code):
-        if code=='123':raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+        if code=='123':raise OKXRequestError('OKX HTTP 400; mã API: '+old_read_code+'.')
         return row
     monkeypatch.setattr(recovery.replacement,'read_ad',AsyncMock(side_effect=read))
     listing=AsyncMock(return_value=([{'adId':'456','side':side.lower()}],False))
@@ -83,6 +84,7 @@ def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db
     post.assert_not_awaited();assert listing.await_count==2
 
 
+@pytest.mark.parametrize('old_read_code',['55651','55349'])
 @pytest.mark.parametrize('case',[
     'none','multiple','preexisting','wrong_price','wrong_quantity','wrong_min','wrong_max',
     'hidden','wrong_side','wrong_owner','wrong_currency','early','late','missing_time',
@@ -90,7 +92,7 @@ def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db
     'other_slot','concurrent_attempt','concurrent_evidence','missing_evidence','wrong_evidence',
     'missing_limits','missing_budget','wrong_root','wrong_pending_quantity','old_429',
 ])
-def test_lost_504_never_guesses_or_resubmits_when_evidence_is_incomplete(db,monkeypatch,case):
+def test_lost_504_never_guesses_or_resubmits_when_evidence_is_incomplete(db,monkeypatch,case,old_read_code):
     import json
     from app.okx_release import OKXRequestError
     slot,attempt,row=replacement_case(db,'BUY')
@@ -125,7 +127,7 @@ def test_lost_504_never_guesses_or_resubmits_when_evidence_is_incomplete(db,monk
             if case=='old_readable':return ad()
             if case=='old_timeout':raise TimeoutError()
             if case=='old_429':raise OKXRequestError('OKX HTTP 429; mã API: 50011.')
-            raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+            raise OKXRequestError('OKX HTTP 400; mã API: '+old_read_code+'.')
         if case=='candidate_error':raise TimeoutError()
         reads+=1
         if reads==2:
