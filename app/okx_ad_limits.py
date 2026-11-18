@@ -55,7 +55,7 @@ def maximum_matches(ad, expected):
     """Exact limit, or a SELL cap proven by unchanged total and taken stock.
 
     Get Ad exposes the lower effective Max after buyers reserve/complete stock.
-    Only accept that exact floor(available * price), never an arbitrary decrease.
+    Only accept that exact cap (floored at Min), never an arbitrary decrease.
     Callers still verify the saved total quantity and all other ad identity fields.
     """
     actual = number(ad.get('maxOrderSize'))
@@ -70,9 +70,10 @@ def maximum_matches(ad, expected):
         available = nonnegative(ad.get('availableAmount'))
         price = number(ad.get('unitPrice'))
         original_cap = (total * price).to_integral_value(rounding=ROUND_DOWN) - 1
-        effective_cap = min(expected, (available * price).to_integral_value(rounding=ROUND_DOWN))
+        minimum = number(ad.get('minOrderSize'))
+        effective_cap = min(expected, max(minimum, (available * price).to_integral_value(rounding=ROUND_DOWN)))
         return (total > available and expected == original_cap
-                and actual == effective_cap and actual >= number(ad.get('minOrderSize')))
+                and minimum <= expected and actual == effective_cap)
     except (ValueError, ArithmeticError):
         return False
 
