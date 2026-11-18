@@ -104,3 +104,15 @@ A discovered SELL replacement may already be hidden with stock value below Min.
 Recovery permits this visibility difference only with unchanged saved total and
 all other replacement checks, preserving hidden and Auto OFF. Sufficient-stock
 hidden ads and BUY visibility changes are still blocked.
+
+## Explicit own aliases and recovery guidance
+
+OKX source planning excludes every nonempty comma-separated name in the current
+account's OKX_MERCHANT_NICKNAMES. MEXC excludes both the slot nickname and the
+current account's MEXC_MERCHANT_NICKNAMES. Matching remains exact after trimming
+and case-folding; other merchants with similar names remain competitors. No
+cross-account alias registry or additional competitor filters are introduced.
+
+Operator recovery reports insufficient available stock against the verified Min
+and advises against enabling Auto in that condition. A hidden ad remains hidden.
+These messages do not change Min/Max, quantity or Auto, or send an exchange write.
