@@ -453,3 +453,55 @@ def test_manual_draft_change_during_read_is_not_overwritten(db,monkeypatch):
     monkeypatch.setattr(recovery,'read_ad',change)
     assert 'đã thay đổi' in run(db)
     assert db.query(recovery.OKXAdPriceAttempt).one().state=='UNKNOWN'
+
+
+@pytest.mark.parametrize('taken', ['held', 'completed', 'both'])
+@pytest.mark.parametrize('old_read_code', ['55349', '55651'])
+def test_lost_sell_504_recovers_after_exchange_caps_max_for_taken_stock(db, monkeypatch, taken, old_read_code):
+    from app.okx_release import OKXRequestError
+    slot, attempt, row = replacement_case(db, 'SELL')
+    row.update(availableAmount='800', onHoldAmount='200' if taken == 'held' else '100' if taken == 'both' else '0',
+               completedOrderCryptoAmount='200' if taken == 'completed' else '100' if taken == 'both' else '0',
+               maxOrderSize='21080000')
+    async def read(client, code):
+        if code == '123':
+            raise OKXRequestError('OKX HTTP 400; mã API: ' + old_read_code + '.')
+        return row
+    monkeypatch.setattr(recovery.replacement, 'read_ad', AsyncMock(side_effect=read))
+    monkeypatch.setattr(recovery.replacement, 'owned_list', AsyncMock(return_value=([{'adId': '456', 'side': 'sell'}], False)))
+    post = AsyncMock(); monkeypatch.setattr(recovery.httpx.AsyncClient, 'post', post)
+    result = run(db)
+    assert slot.adv_id == '456' and attempt.state == 'IDLE' and not slot.auto_enabled, result
+    assert slot.max_amount == 21080000 and slot.min_amount == 20000000
+    assert db.get(recovery.OKXPendingSellQuantity, slot.id) is None
+    post.assert_not_awaited()
+
+
+@pytest.mark.parametrize('case', ['low_max', 'high_max', 'lost_stock', 'wrong_min', 'wrong_price',
+    'missing_held', 'negative_held', 'nan_completed', 'wrong_side', 'second_read_changed'])
+def test_dynamic_sell_max_never_relaxes_other_replacement_evidence(db, monkeypatch, case):
+    from app.okx_release import OKXRequestError
+    slot, attempt, row = replacement_case(db, 'SELL')
+    row.update(availableAmount='800', onHoldAmount='200', completedOrderCryptoAmount='0', maxOrderSize='21080000')
+    if case == 'low_max': row['maxOrderSize'] = '21079999'
+    if case == 'high_max': row['maxOrderSize'] = '21080001'
+    if case == 'lost_stock': row['onHoldAmount'] = '199'
+    if case == 'wrong_min': row['minOrderSize'] = '20000001'
+    if case == 'wrong_price': row['unitPrice'] = '26349'
+    if case == 'missing_held': row.pop('onHoldAmount')
+    if case == 'negative_held': row['onHoldAmount'] = '-200'
+    if case == 'nan_completed': row['completedOrderCryptoAmount'] = 'NaN'
+    if case == 'wrong_side': row['side'] = 'buy'
+    reads = 0
+    async def read(client, code):
+        nonlocal reads
+        if code == '123': raise OKXRequestError('OKX HTTP 400; mã API: 55349.')
+        reads += 1
+        return {**row, 'maxOrderSize': '21080001'} if case == 'second_read_changed' and reads == 2 else row
+    monkeypatch.setattr(recovery.replacement, 'read_ad', AsyncMock(side_effect=read))
+    monkeypatch.setattr(recovery.replacement, 'owned_list', AsyncMock(return_value=([{'adId': '456', 'side': 'sell'}], False)))
+    post = AsyncMock(); monkeypatch.setattr(recovery.httpx.AsyncClient, 'post', post)
+    run(db)
+    assert slot.adv_id == '123' and attempt.state == 'UNKNOWN' and not slot.auto_enabled
+    assert db.get(recovery.OKXPendingSellQuantity, slot.id) is not None
+    post.assert_not_awaited()

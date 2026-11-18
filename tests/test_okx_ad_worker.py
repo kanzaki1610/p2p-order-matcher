@@ -489,3 +489,39 @@ def test_changed_nickname_before_submit_drops_old_plan(db,setup,monkeypatch):
     run(db)
     write.assert_not_awaited()
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
+
+
+@pytest.mark.parametrize('side', ['sell', 'buy'])
+def test_known_result_sell_cap_uses_remaining_stock_without_relaxing_buy(db, setup, monkeypatch, side):
+    setup.side = side.upper()
+    attempt = worker.OKXAdPriceAttempt(slot_id=setup.id, state='CONFIRMING', action='UPDATE_PRICE',
+        old_ad_id='123', result_ad_id='456', price=26070, hidden=False)
+    db.add(attempt)
+    db.add(worker.OKXPendingLimits(slot_id=setup.id, ad_id='123', minimum=1000000, maximum=26069999))
+    db.add(worker.OKXPendingSellQuantity(slot_id=setup.id, ad_id='123', quantity=1000))
+    db.commit()
+    row = ad('456', '26070', side=side)
+    row.update(availableAmount='900', onHoldAmount='100', maxOrderSize='23463000')
+    monkeypatch.setattr(worker, 'read_ad', AsyncMock(return_value=row))
+    write = AsyncMock(); monkeypatch.setattr(worker, 'request', write)
+    result = asyncio.run(worker.confirm(db, None, attempt, setup))
+    if side == 'sell':
+        assert result and attempt.state == 'IDLE' and setup.adv_id == '456'
+        assert setup.max_amount == 23463000 and setup.min_amount == 1000000
+    else:
+        assert not result and setup.adv_id == '123' and attempt.state == 'CONFIRMING'
+    write.assert_not_awaited()
+
+
+@pytest.mark.parametrize('case', ['no_taken', 'different_requested_max', 'buy', 'max_above_cap', 'max_below_cap'])
+def test_effective_sell_max_is_not_a_general_limit_tolerance(case):
+    from app.okx_ad_limits import maximum_matches
+    row = ad('456', '26070')
+    row.update(availableAmount='900', onHoldAmount='100', maxOrderSize='23463000')
+    expected = Decimal('26069999')
+    if case == 'no_taken': row.update(availableAmount='1000', onHoldAmount='0')
+    if case == 'different_requested_max': expected = Decimal('25000000')
+    if case == 'buy': row['side'] = 'buy'
+    if case == 'max_above_cap': row['maxOrderSize'] = '23463001'
+    if case == 'max_below_cap': row['maxOrderSize'] = '23462999'
+    assert not maximum_matches(row, expected)
