@@ -110,7 +110,8 @@ async def confirm(db, client, attempt, slot, plan=None):
     attempt.reason = None
     pending = db.get(OKXPendingLimits, slot.id)
     if pending and attempt.action == 'UPDATE_PRICE':
-        slot.min_amount, slot.max_amount = pending.minimum, pending.maximum
+        slot.min_amount = number(row.get('minOrderSize'))
+        slot.max_amount = number(row.get('maxOrderSize'))
         db.execute(update(OKXAutoLimits).where(OKXAutoLimits.slot_id == slot.id,
             OKXAutoLimits.ad_id == attempt.old_ad_id).values(ad_id=attempt.result_ad_id))
         db.delete(pending)

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 from .okx_ads import read_ad, number
 from .okx_buy_budget import stock_total
+from .okx_ad_limits import maximum_matches
 from .ad_visibility import owned_list
 
 
@@ -134,7 +135,7 @@ def matches(row, code, e):
             and row.get('status') == 'new' and row.get('isHidden') is e['hidden']
             and number(row.get('unitPrice')) == number(e['price'])
             and number(row.get('minOrderSize')) == number(e['minimum'])
-            and number(row.get('maxOrderSize')) == number(e['maximum'])
+            and maximum_matches(row, e['maximum'])
             and stock_total(row) == number(e['quantity'])
             and created.is_finite() and started - 5000 <= created <= started + 180000
             and created <= Decimal(str(datetime.now(timezone.utc).timestamp())) * 1000 + 5000)
