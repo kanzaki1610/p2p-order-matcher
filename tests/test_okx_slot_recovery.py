@@ -481,6 +481,9 @@ def test_lost_sell_504_recovers_after_exchange_caps_max_for_taken_stock(db, monk
     assert slot.max_amount == Decimal(row['maxOrderSize']) and slot.min_amount == 20000000
     assert db.get(recovery.OKXPendingSellQuantity, slot.id) is None
     if taken.startswith('hidden_'): assert 'vẫn đang ẩn' in result
+    if 'below_min' in taken or 'exhausted' in taken:
+        assert 'Không bật Auto' in result and 'chưa đủ Min' in result
+        assert 'kiểm tra rồi bấm Bật Auto' not in result
     post.assert_not_awaited()
 
 

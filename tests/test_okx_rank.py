@@ -92,3 +92,38 @@ def test_preview_alert_is_labeled_simulation_and_only_for_hide(monkeypatch):
     sender.reset_mock()
     plan = plan_rank_price(market("SELL", 26060), "SELL", 26050, now=1002)
     assert not asyncio.run(send_preview_alert(plan)) and sender.call_count == 0
+
+
+@pytest.mark.parametrize('side', ['BUY', 'SELL'])
+def test_rank_excludes_every_explicit_own_alias_without_filtering_other_merchants(side):
+    data = market(side)
+    data['rows'] = [{'nick': 'OWN-PRIMARY', 'price': '27000'},
+                    {'nick': ' own-alt ', 'price': '27001'},
+                    {'nick': 'OWN-ALT-other', 'price': '26080'},
+                    {'nick': 'Competitor', 'price': '26090'}]
+    result = plan_rank_price(data, side, own_nickname='OWN-PRIMARY', own_aliases=['OWN-ALT'],
+                             now=1002, target_rank=1, enforce_cost=False)
+    assert result['own_ads_excluded'] == 2
+    assert result['competitor']['nickname'] == 'OWN-ALT-other'
+    assert result['proposed_price'] == '26080'
+    result = plan_rank_price(data, side, own_nickname='OWN-PRIMARY', own_aliases=['OWN-ALT'],
+                             now=1002, target_nickname='OWN-ALT', enforce_cost=False)
+    assert result['action'] == 'BLOCKED'
+
+
+@pytest.mark.parametrize('configured', ['OWN-PRIMARY, OWN-ALT', ' , OWN-PRIMARY, OWN-ALT, '])
+def test_okx_source_uses_all_configured_own_names(monkeypatch, configured):
+    from app.config import settings
+    monkeypatch.setattr(settings, 'okx_merchant_nicknames', configured)
+    data = market('BUY')
+    import time
+    data['saved_ts'] = time.time()
+    data['rows'] = [{'nick': 'OWN-ALT', 'price': '27000'}, {'nick': 'Competitor', 'price': '26000'}]
+    def handler(request):
+        assert request.method == 'GET' and request.url.host == 'autop2p.biz'
+        return httpx.Response(200, json=data)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await read_rank_plan(client, 'BUY', target_rank=1)
+    result = asyncio.run(run())
+    assert result['own_ads_excluded'] == 1 and result['competitor']['nickname'] == 'Competitor'

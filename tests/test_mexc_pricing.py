@@ -288,3 +288,20 @@ def test_show_records_visibility_only_with_cumulative_sell_quantity(db,setup,mon
     assert current['quantity']=='100' and current['availableQuantity']=='20'
     assert current['advStatus']=='OPEN' and slot.state=='IDLE'
     assert not slot.paused_by_floor
+
+
+@pytest.mark.parametrize('side', ['BUY', 'SELL'])
+@pytest.mark.parametrize('slot_name', ['OWN-SLOT', ''])
+def test_mexc_excludes_configured_aliases_and_slot_name(monkeypatch, side, slot_name):
+    monkeypatch.setattr(worker.settings, 'mexc_merchant_nicknames', ' , OWN-PRIMARY, OWN-ALT, ')
+    slot = SimpleNamespace(key=side+':1', rank=1, nickname=slot_name)
+    data = {'ok':True, 'exchange':'mexc', 'side':side, 'panel':'mexc_'+side.lower(),
+            'cache':'new', 'age_sec':0, 'saved_ts':time.time(),
+            'rows':[{'nick':'OWN-PRIMARY','price':'27000'}, {'nick':'OWN-ALT','price':'27001'}]
+                   + ([{'nick':'OWN-SLOT','price':'27002'}] if slot_name else [])
+                   + [{'nick':'Competitor','price':'26070'}]}
+    async def get(*args, **kwargs):
+        return httpx.Response(200, json=data, request=httpx.Request('GET','https://autop2p.biz/'))
+    result = asyncio.run(REAL_RANK_PLAN(SimpleNamespace(get=get), slot, None, enforce_cost=False))
+    assert result['competitor']['nickname'] == 'Competitor'
+    assert result['own_ads_excluded'] == (3 if slot_name else 2)
