@@ -491,8 +491,9 @@ def test_changed_nickname_before_submit_drops_old_plan(db,setup,monkeypatch):
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='IDLE'
 
 
+@pytest.mark.parametrize('available', [900, 20, 0])
 @pytest.mark.parametrize('side', ['sell', 'buy'])
-def test_known_result_sell_cap_uses_remaining_stock_without_relaxing_buy(db, setup, monkeypatch, side):
+def test_known_result_sell_cap_uses_remaining_stock_without_relaxing_buy(db, setup, monkeypatch, side, available):
     setup.side = side.upper()
     attempt = worker.OKXAdPriceAttempt(slot_id=setup.id, state='CONFIRMING', action='UPDATE_PRICE',
         old_ad_id='123', result_ad_id='456', price=26070, hidden=False)
@@ -501,13 +502,14 @@ def test_known_result_sell_cap_uses_remaining_stock_without_relaxing_buy(db, set
     db.add(worker.OKXPendingSellQuantity(slot_id=setup.id, ad_id='123', quantity=1000))
     db.commit()
     row = ad('456', '26070', side=side)
-    row.update(availableAmount='900', onHoldAmount='100', maxOrderSize='23463000')
+    cap = max(1000000, available * 26070)
+    row.update(availableAmount=str(available), onHoldAmount=str(1000-available), maxOrderSize=str(cap))
     monkeypatch.setattr(worker, 'read_ad', AsyncMock(return_value=row))
     write = AsyncMock(); monkeypatch.setattr(worker, 'request', write)
     result = asyncio.run(worker.confirm(db, None, attempt, setup))
     if side == 'sell':
         assert result and attempt.state == 'IDLE' and setup.adv_id == '456'
-        assert setup.max_amount == 23463000 and setup.min_amount == 1000000
+        assert setup.max_amount == cap and setup.min_amount == 1000000
     else:
         assert not result and setup.adv_id == '123' and attempt.state == 'CONFIRMING'
     write.assert_not_awaited()

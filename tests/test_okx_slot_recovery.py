@@ -455,7 +455,7 @@ def test_manual_draft_change_during_read_is_not_overwritten(db,monkeypatch):
     assert db.query(recovery.OKXAdPriceAttempt).one().state=='UNKNOWN'
 
 
-@pytest.mark.parametrize('taken', ['held', 'completed', 'both'])
+@pytest.mark.parametrize('taken', ['held', 'completed', 'both', 'below_min', 'exhausted'])
 @pytest.mark.parametrize('old_read_code', ['55349', '55651'])
 def test_lost_sell_504_recovers_after_exchange_caps_max_for_taken_stock(db, monkeypatch, taken, old_read_code):
     from app.okx_release import OKXRequestError
@@ -463,6 +463,11 @@ def test_lost_sell_504_recovers_after_exchange_caps_max_for_taken_stock(db, monk
     row.update(availableAmount='800', onHoldAmount='200' if taken == 'held' else '100' if taken == 'both' else '0',
                completedOrderCryptoAmount='200' if taken == 'completed' else '100' if taken == 'both' else '0',
                maxOrderSize='21080000')
+    if taken in {'below_min', 'exhausted'}:
+        row.update(availableAmount='100' if taken == 'below_min' else '0',
+                   onHoldAmount='900' if taken == 'below_min' else '0',
+                   completedOrderCryptoAmount='1000' if taken == 'exhausted' else '0',
+                   maxOrderSize='20000000')
     async def read(client, code):
         if code == '123':
             raise OKXRequestError('OKX HTTP 400; mã API: ' + old_read_code + '.')
@@ -472,7 +477,7 @@ def test_lost_sell_504_recovers_after_exchange_caps_max_for_taken_stock(db, monk
     post = AsyncMock(); monkeypatch.setattr(recovery.httpx.AsyncClient, 'post', post)
     result = run(db)
     assert slot.adv_id == '456' and attempt.state == 'IDLE' and not slot.auto_enabled, result
-    assert slot.max_amount == 21080000 and slot.min_amount == 20000000
+    assert slot.max_amount == Decimal(row['maxOrderSize']) and slot.min_amount == 20000000
     assert db.get(recovery.OKXPendingSellQuantity, slot.id) is None
     post.assert_not_awaited()
 
