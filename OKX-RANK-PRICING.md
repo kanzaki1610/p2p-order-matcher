@@ -65,3 +65,20 @@ Set the app's Interactions Endpoint URL to https://p2p-order-matcher.onrender.co
 
 Webhook-only outbound notifications cannot receive slash commands; missing app credentials or installation must be completed before /gia is usable. Bot credentials are used for registration only; interaction signature checks and user/channel restrictions remain mandatory.
 
+
+## Recovering a lost 504 replacement response
+
+The operator's Check / recover action uses authenticated GETs only. For a saved
+UPDATE_PRICE request with a lost HTTP 504 response, Get Ad can return either
+HTTP 400 / 55651 or HTTP 400 / 55349 for an unavailable old ID. Both permit
+replacement discovery, not an automatic retry or a conclusion that the price
+update was rejected. Other errors (including 429, 5xx and transport failures)
+still stop reconciliation.
+
+Recovery requires durable pre-request evidence, unchanged pending terms, old ID
+absent from two complete owned active lists, and exactly one new owned USDT/VND
+ad matching the saved side, price, stock total, Min/Max, visibility and creation
+time. The candidate is read twice; collisions and concurrent state changes
+remain blocked. Success binds the new ID and preserves existing budget lineage.
+Auto remains OFF until the operator enables it. This change does not relax
+manual-price rejection recovery or resend a POST after an uncertain result.
