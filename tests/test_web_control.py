@@ -345,3 +345,41 @@ def test_completed_old_ad_diagnostic_is_not_attached_to_new_selected_id(client):
     with client.factory() as db:
         stored=db.get(OKXAdPriceAttempt,slot.id)
         assert stored.reason=='OKX HTTP 400; mã API: 55651.' and stored.result_ad_id=='222'
+
+
+@pytest.mark.parametrize('access', ['wrong_key', 'secondary'])
+def test_message_config_requires_primary_admin(client, monkeypatch, access):
+    if access == 'secondary': monkeypatch.setattr(web.settings, 'database_schema', 'kayhap')
+    response = client.get('/dashboard/api/control/okx-messages', headers={'X-Admin-Key':'wrong' if access == 'wrong_key' else KEY})
+    assert response.status_code == (401 if access == 'wrong_key' else 404)
+
+
+def test_message_settings_independent_validated_private_and_revision_guarded(client):
+    path = '/dashboard/api/control/okx-messages'
+    response = client.get(path)
+    assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
+    rows = {r['side']:r for r in response.json()['settings']}
+    assert not any(r['enabled'] for r in rows.values())
+    old = rows['BUY']['revision']
+    bad = client.put(path+'/BUY',json={'enabled':True,'text':'  ','revision':old})
+    assert bad.status_code == 400
+    assert client.put(path+'/BUY',json={'enabled':'true','text':'hello','revision':old}).status_code == 422
+    assert client.put(path+'/MEXC',json={'enabled':True,'text':'hello','revision':old}).status_code == 422
+    content = 'Xin chào\nNội dung <b>văn bản</b>'
+    saved = client.put(path+'/BUY',json={'enabled':True,'text':content,'revision':old})
+    assert saved.status_code == 200
+    values = {r['side']:r for r in saved.json()['settings']}
+    assert values['BUY']['text'] == content and values['BUY']['enabled']
+    assert not values['SELL']['enabled'] and not values['SELL']['text']
+    assert client.put(path+'/BUY',json={'enabled':False,'text':content,'revision':old}).status_code == 409
+    assert KEY not in saved.text and 'DO-NOT-RETURN-SECRET' not in saved.text
+
+
+def test_emergency_stop_also_stops_order_messages_without_deleting_text(client):
+    path='/dashboard/api/control/okx-messages'
+    rows=client.get(path).json()['settings']
+    for row in rows:
+        assert client.put(path+'/'+row['side'],json={'enabled':True,'text':'Tin '+row['side'],'revision':row['revision']}).status_code == 200
+    assert send(client,'stop_all').status_code == 200
+    stopped=client.get(path).json()['settings']
+    assert all(not row['enabled'] and row['enabled_since'] is None and row['text'] for row in stopped)
