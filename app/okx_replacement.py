@@ -124,6 +124,24 @@ def verify_pending(db, slot, attempt, evidence):
             raise ReplacementEvidenceError('Lượng USDT còn bán không khớp hồ sơ 504; giữ khóa.')
 
 
+
+def visibility_matches(row, e):
+    if row.get('isHidden') is e['hidden']:
+        return True
+    # A replacement may become hidden after buyers exhaust its tradable stock.
+    # Operator recovery may bind that ID, preserving hidden and Auto OFF.
+    # A hidden ad with enough stock or any change in the saved total stays locked.
+    try:
+        from .okx_buy_budget import nonnegative
+        available = nonnegative(row.get('availableAmount'))
+        total = stock_total(row)
+        return (e['side'] == 'SELL' and e['hidden'] is False and row.get('isHidden') is True
+                and total == number(e['quantity']) and available < total
+                and available * number(row.get('unitPrice')) < number(row.get('minOrderSize')))
+    except (ValueError, ArithmeticError):
+        return False
+
+
 def matches(row, code, e):
     try:
         created = Decimal(str(row.get('createdTimestamp')))
@@ -132,7 +150,7 @@ def matches(row, code, e):
             and str(row.get('cryptoCurrency', '')).upper() == 'USDT'
             and str(row.get('fiatCurrency', '')).upper() == 'VND'
             and row.get('side') == e['side'].lower() and row.get('type') == 'limit'
-            and row.get('status') == 'new' and row.get('isHidden') is e['hidden']
+            and row.get('status') == 'new' and visibility_matches(row, e)
             and number(row.get('unitPrice')) == number(e['price'])
             and number(row.get('minOrderSize')) == number(e['minimum'])
             and maximum_matches(row, e['maximum'])
