@@ -82,3 +82,15 @@ time. The candidate is read twice; collisions and concurrent state changes
 remain blocked. Success binds the new ID and preserves existing budget lineage.
 Auto remains OFF until the operator enables it. This change does not relax
 manual-price rejection recovery or resend a POST after an uncertain result.
+
+### Effective SELL Max after a buyer takes stock
+
+OKX may return a lower effective maxOrderSize after stock moves from available
+to held/completed on a replacement ad. Confirmation and operator recovery accept
+that lower Max only when it equals floor(available USDT * unchanged price),
+the saved requested Max equals floor(saved total USDT * price) - 1, the total
+available + held + completed still equals the saved quantity, and some stock is
+held/completed. Min, price, owner, side, visibility and replacement evidence
+remain required. Arbitrary lower/higher Max and BUY changes are not tolerated.
+The dashboard stores the verified current effective Max, without issuing another
+price edit. Recovery still leaves Auto OFF and never resends an uncertain POST.
