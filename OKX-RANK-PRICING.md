@@ -87,10 +87,15 @@ manual-price rejection recovery or resend a POST after an uncertain result.
 
 OKX may return a lower effective maxOrderSize after stock moves from available
 to held/completed on a replacement ad. Confirmation and operator recovery accept
-that lower Max only when it equals floor(available USDT * unchanged price),
+that lower Max only when it equals max(Min, floor(available USDT * unchanged price)),
 the saved requested Max equals floor(saved total USDT * price) - 1, the total
 available + held + completed still equals the saved quantity, and some stock is
 held/completed. Min, price, owner, side, visibility and replacement evidence
 remain required. Arbitrary lower/higher Max and BUY changes are not tolerated.
 The dashboard stores the verified current effective Max, without issuing another
 price edit. Recovery still leaves Auto OFF and never resends an uncertain POST.
+
+When remaining stock is below Min (including zero), OKX floors the effective Max
+at Min. That does not make the ad tradable: the existing availability monitor
+still stops Auto for insufficient stock. Recovery binds the verified ID but
+leaves Auto OFF; it never adds stock, lowers Min, or reopens an exhausted ad.
