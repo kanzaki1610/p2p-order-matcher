@@ -20,6 +20,7 @@ def db():
     NicknameTarget.__table__.create(engine)
     NicknamePriceBound.__table__.create(engine)
     worker.replacement.OKXReplacementIntent.__table__.create(engine)
+    worker.OKXPricingInterruption.__table__.create(engine)
     for table in (OKXSlot.__table__, OKXAuditLog.__table__, OKXPricePreferences.__table__, OKXPricingSwitch.__table__, OKXManualCost.__table__, worker.OKXAdPriceAttempt.__table__, worker.OKXAutoLimits.__table__, worker.OKXPendingLimits.__table__, worker.OKXPendingSellQuantity.__table__, *(t.__table__ for t in (worker.buy_budget.OKXBuyBudget, worker.buy_budget.OKXBuyBudgetAd, worker.buy_budget.OKXBuyBudgetOrder, worker.buy_budget.OKXPendingBuyBudget))): table.create(engine)
     with Session(engine) as session: yield session
     engine.dispose()
@@ -274,7 +275,8 @@ def test_cost_failure_never_hides_or_writes(db, setup, monkeypatch):
     monkeypatch.setattr(worker,'read_last_buy_cost',AsyncMock(side_effect=ValueError('private payload')))
     write=AsyncMock(); monkeypatch.setattr(worker,'request',write)
     run(db); write.assert_not_awaited()
-    assert 'private payload' not in worker.send_discord_message.call_args.args[1]
+    worker.send_discord_message.assert_not_awaited()
+    assert 'private payload' not in db.get(worker.OKXAdPriceAttempt,setup.id).reason
 
 
 def test_new_slot_ad_does_not_inherit_resume_permission(db, setup, monkeypatch):
@@ -563,3 +565,91 @@ def test_known_buy_result_effective_max_requires_saved_budget_lineage(db, setup,
         assert next_plan['terms']['maxOrderLimit'] == '247827500'  # Not displayed cap 247827634.
         assert next_plan['terms']['cryptoAmount'] == '9459.07'
     write.assert_not_awaited()
+
+
+def test_locked_alert_is_one_per_request_even_when_reason_changes_and_session_reloads(db, setup):
+    from datetime import datetime, timezone
+    a = worker.OKXAdPriceAttempt(slot_id=setup.id, state='UNKNOWN', action='UPDATE_PRICE',
+        old_ad_id='123', last_action_at=datetime.now(timezone.utc))
+    db.add(a); db.commit()
+    asyncio.run(worker.notice(db, a, setup, 'UNKNOWN', 'OKX HTTP 504'))
+    db.expire_all()
+    asyncio.run(worker.notice(db, a, setup, 'REVIEW_REQUIRED', 'OKX HTTP 429'))
+    worker.send_discord_message.assert_awaited_once()
+    message = worker.send_discord_message.call_args.args[1]
+    assert 'giá cũ' in message and 'Kiểm tra / khôi phục' in message
+
+
+def test_retry_alert_waits_for_continuous_interruption_and_deduplicates_changed_errors(db, setup, monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    start = datetime(2026, 11, 19, tzinfo=timezone.utc)
+    clock = [start]
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None): return clock[0]
+    monkeypatch.setattr(worker, 'datetime', Clock)
+    a = worker.OKXAdPriceAttempt(slot_id=setup.id, state='IDLE')
+    db.add(a); db.commit()
+    for seconds in (0, 30, 60, 90, 120, 150, 179):
+        clock[0] = start + timedelta(seconds=seconds)
+        asyncio.run(worker.notice(db, a, setup, 'ERROR', 'temporary read error'))
+    worker.send_discord_message.assert_not_awaited()
+    for seconds in (180, 210, 240):
+        clock[0] = start + timedelta(seconds=seconds)
+        db.expire_all()
+        asyncio.run(worker.notice(db, a, setup, 'BLOCKED', 'source unavailable ' + str(seconds)))
+    worker.send_discord_message.assert_awaited_once()
+    assert '3 phút' in worker.send_discord_message.call_args.args[1]
+    # A later hard lock still alerts immediately, independent of retry incident.
+    a.state='UNKNOWN'; a.old_ad_id='123'; a.action='UPDATE_PRICE'; a.last_action_at=clock[0]; db.commit()
+    asyncio.run(worker.notice(db, a, setup, 'UNKNOWN', '504'))
+    assert worker.send_discord_message.await_count == 2
+
+
+@pytest.mark.parametrize('kind', ['RESUMED', 'HIDDEN', 'ALREADY_HIDDEN', 'BUDGET_EXHAUSTED', 'CONFIG_CHANGED'])
+def test_expected_pricing_status_never_sends_error_alert(db, setup, kind):
+    a=worker.OKXAdPriceAttempt(slot_id=setup.id, state='IDLE'); db.add(a); db.commit()
+    asyncio.run(worker.notice(db, a, setup, kind, 'expected status'))
+    worker.send_discord_message.assert_not_awaited()
+
+
+def test_successful_cycle_resets_interruption_and_pending_buy_is_not_an_error(db, setup, monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    now=datetime.now(timezone.utc)
+    db.add(worker.OKXPricingInterruption(slot_id=setup.id, ad_id='123',
+        started_at=now-timedelta(minutes=10), last_seen_at=now)); db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    monkeypatch.setattr(worker,'read_rank_plan',AsyncMock(return_value=plan(price='26080')))
+    run(db)
+    assert db.get(worker.OKXPricingInterruption,setup.id) is None
+    worker.send_discord_message.assert_not_awaited()
+    setup.side='BUY'; db.commit()
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad(side='buy')))
+    monkeypatch.setattr(worker.buy_budget,'prepare_buy',AsyncMock(side_effect=worker.buy_budget.BuyBudgetError(
+        'Có lệnh mua đang chờ xử lý; giữ nguyên quảng cáo đến khi lệnh hoàn tất hoặc hủy.')))
+    run(db)
+    assert db.get(worker.OKXPricingInterruption,setup.id) is None
+    worker.send_discord_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize('reset', ['gap', 'ad_change'])
+def test_retry_window_does_not_count_a_pause_or_new_ad(db, setup, reset):
+    from datetime import datetime, timezone, timedelta
+    now=datetime.now(timezone.utc)
+    a=worker.OKXAdPriceAttempt(slot_id=setup.id, state='IDLE'); db.add(a)
+    db.add(worker.OKXPricingInterruption(slot_id=setup.id,
+        ad_id='999' if reset=='ad_change' else '123',
+        started_at=now-timedelta(minutes=10),
+        last_seen_at=now-timedelta(minutes=2) if reset=='gap' else now)); db.commit()
+    asyncio.run(worker.notice(db,a,setup,'ERROR','temporary'))
+    worker.send_discord_message.assert_not_awaited()
+    assert (now-worker.utc(db.get(worker.OKXPricingInterruption,setup.id).started_at)).total_seconds()<1
+
+
+def test_failed_discord_delivery_does_not_mark_incident_notified(db, setup, monkeypatch):
+    a=worker.OKXAdPriceAttempt(slot_id=setup.id,state='UNKNOWN',old_ad_id='123');db.add(a);db.commit()
+    sender=AsyncMock(side_effect=[False,True]);monkeypatch.setattr(worker,'send_discord_message',sender)
+    asyncio.run(worker.notice(db,a,setup,'UNKNOWN','504'))
+    assert a.notified_key is None
+    asyncio.run(worker.notice(db,a,setup,'UNKNOWN','504'))
+    assert a.notified_key and sender.await_count==2

@@ -78,7 +78,7 @@ def test_pricing_alert_never_falls_back_to_other_channels(monkeypatch):
     assert webhook_url("PRICING_ALERT") == ""
 
 
-def test_preview_alert_is_labeled_simulation_and_only_for_hide(monkeypatch):
+def test_preview_never_sends_to_actionable_error_channel(monkeypatch):
     from app.config import settings
     from app.okx_rank import send_preview_alert
     from unittest.mock import AsyncMock
@@ -86,10 +86,8 @@ def test_preview_alert_is_labeled_simulation_and_only_for_hide(monkeypatch):
     sender = AsyncMock(return_value=True)
     monkeypatch.setattr("app.discord_notifications.send_discord_message", sender)
     plan = plan_rank_price(market("SELL", 26059), "SELL", 26050, now=1002)
-    assert asyncio.run(send_preview_alert(plan))
-    event, message = sender.call_args.args
-    assert event == "PRICING_ALERT" and "chưa ẩn quảng cáo thật" in message and "26060" in message
-    sender.reset_mock()
+    assert not asyncio.run(send_preview_alert(plan))
+    sender.assert_not_awaited()
     plan = plan_rank_price(market("SELL", 26060), "SELL", 26050, now=1002)
     assert not asyncio.run(send_preview_alert(plan)) and sender.call_count == 0
 
