@@ -627,3 +627,28 @@ def test_vietinbank_hn_label_does_not_allow_conflict_or_partial_match():
     row = okx(); row['counterpartyDetail']['takerPaymentMethod'].update(bankName=label, bankCode='BANK')
     row['orderStatus'] = 'completed'; row['paymentStatus'] = 'confirmed'
     with pytest.raises(data.InactiveOrder): data.okx_instruction(row, row['orderId'])
+
+
+@pytest.mark.parametrize('label', ['Vikki bank', 'VIKKI BANK'])
+@pytest.mark.parametrize('exchange', ['OKX', 'MEXC'])
+def test_vikki_bank_label_preserves_verified_bin_and_empty_memo(label, exchange):
+    if exchange == 'OKX':
+        row=okx(); payment=row['counterpartyDetail']['takerPaymentMethod']
+        payment.update(bankName=label, bankCode='BANK')
+        result=data.okx_instruction(row,row['orderId'])
+    else:
+        row=mexc(); payment=row['paymentInfo'][0]
+        payment.update(bankName=label, bankCode='BANK')
+        result=data.mexc_instruction(row,row['advOrderNo'],'SELL')
+    assert result.bank=='Vikki' and result.bank_bin=='970406' and result.note==''
+    assert result.account==payment.get('accountNo',payment.get('account'))
+    assert '970406' in vietqr.payload(result.bank_bin,result.account,result.amount)
+
+
+def test_vikki_bank_alias_never_accepts_conflicts_partial_names_or_paid_order():
+    with pytest.raises(ValueError,match='khác nhau'): vietqr.resolve_bank('Vikki bank','ACB')
+    for label in ('Vikki bank ACB','Vikki bank unknown','Vikk bank'):
+        with pytest.raises(ValueError): vietqr.resolve_bank(label,'BANK')
+    row=okx();row['counterpartyDetail']['takerPaymentMethod'].update(bankName='Vikki bank',bankCode='BANK')
+    row['paymentStatus']='paid'
+    with pytest.raises(data.InactiveOrder): data.okx_instruction(row,row['orderId'])
