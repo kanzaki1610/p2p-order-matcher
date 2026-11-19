@@ -51,18 +51,20 @@ def price_limits(db, slot, ad, price):
     return {'minOrderLimit': format(lower, 'f'), 'maxOrderLimit': format(upper, 'f')}
 
 
-def maximum_matches(ad, expected):
-    """Exact limit, or a SELL cap proven by unchanged total and taken stock.
+def maximum_matches(ad, expected, *, buy_quantity=None):
+    """Exact limit, or an effective cap proven by saved total and taken stock.
 
     Get Ad exposes the lower effective Max after buyers reserve/complete stock.
     Only accept that exact cap (floored at Min), never an arbitrary decrease.
+    BUY additionally requires the caller's verified pending budget quantity;
+    its original Max is a VND budget, not necessarily total quantity * price - 1.
     Callers still verify the saved total quantity and all other ad identity fields.
     """
     actual = number(ad.get('maxOrderSize'))
     expected = number(expected)
     if actual == expected:
         return True
-    if ad.get('side') != 'sell':
+    if ad.get('side') != 'sell' and not (ad.get('side') == 'buy' and buy_quantity is not None):
         return False
     from .okx_buy_budget import stock_total, nonnegative
     try:
@@ -72,15 +74,17 @@ def maximum_matches(ad, expected):
         original_cap = (total * price).to_integral_value(rounding=ROUND_DOWN) - 1
         minimum = number(ad.get('minOrderSize'))
         effective_cap = min(expected, max(minimum, (available * price).to_integral_value(rounding=ROUND_DOWN)))
-        return (total > available and expected == original_cap
+        original_matches = (expected == original_cap if ad.get('side') == 'sell' else
+            total == number(buy_quantity) and 0 < expected <= original_cap)
+        return (total > available and original_matches
                 and minimum <= expected and actual == effective_cap)
     except (ValueError, ArithmeticError):
         return False
 
 
-def limits_match(pending, attempt, ad):
+def limits_match(pending, attempt, ad, *, buy_quantity=None):
     if pending is None or attempt.action not in {'UPDATE_PRICE'}:
         return True
     return (pending.ad_id == attempt.old_ad_id
             and number(ad.get('minOrderSize')) == pending.minimum
-            and maximum_matches(ad, pending.maximum))
+            and maximum_matches(ad, pending.maximum, buy_quantity=buy_quantity))

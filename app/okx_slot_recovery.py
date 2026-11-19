@@ -138,7 +138,7 @@ async def recover_slot(db, owner, side, slot_number):
             verify_manual_rejection(manual,attempt,ad)
             outcome='MANUAL_REJECTED_UNCHANGED'
         elif attempt.result_ad_id or discovered:
-            if current != attempt.price or (ad['isHidden'] is not attempt.hidden and not discovered) or not limits_match(pending, attempt, ad) or not buy_budget.pending_matches(db, slot.id, attempt, ad) or not sell_quantity_matches(db,slot.id,attempt,ad):
+            if current != attempt.price or (ad['isHidden'] is not attempt.hidden and not discovered) or not limits_match(pending, attempt, ad, buy_quantity=buy_budget.verified_pending_quantity(db, slot.id, attempt, ad)) or not buy_budget.pending_matches(db, slot.id, attempt, ad) or not sell_quantity_matches(db,slot.id,attempt,ad):
                 raise ValueError('Quảng cáo trả về chưa khớp giá, trạng thái hoặc Min/Max của yêu cầu cũ.')
             outcome = 'CONFIRMED'
         else:

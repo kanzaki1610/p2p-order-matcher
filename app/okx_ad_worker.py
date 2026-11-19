@@ -80,7 +80,8 @@ async def confirm(db, client, attempt, slot, plan=None):
         await notice(db, attempt, slot, "UNKNOWN", pending_reason(attempt), plan)
         return False
     row = await read_ad(client, attempt.result_ad_id)
-    if not limits_match(db.get(OKXPendingLimits, slot.id), attempt, row):
+    if not limits_match(db.get(OKXPendingLimits, slot.id), attempt, row,
+            buy_quantity=buy_budget.verified_pending_quantity(db, slot.id, attempt, row)):
         await notice(db, attempt, slot, 'REVIEW_REQUIRED', 'OKX chưa xác nhận đúng Min/Max đã gửi; không gửi lại yêu cầu.', plan)
         return False
     if not buy_budget.pending_matches(db, slot.id, attempt, row):

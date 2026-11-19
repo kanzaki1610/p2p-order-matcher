@@ -153,7 +153,7 @@ def matches(row, code, e):
             and row.get('status') == 'new' and visibility_matches(row, e)
             and number(row.get('unitPrice')) == number(e['price'])
             and number(row.get('minOrderSize')) == number(e['minimum'])
-            and maximum_matches(row, e['maximum'])
+            and maximum_matches(row, e['maximum'], buy_quantity=e['quantity'] if e['side'] == 'BUY' else None)
             and stock_total(row) == number(e['quantity'])
             and created.is_finite() and started - 5000 <= created <= started + 180000
             and created <= Decimal(str(datetime.now(timezone.utc).timestamp())) * 1000 + 5000)

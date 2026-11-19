@@ -260,6 +260,20 @@ async def prepare_buy(db, client, slot, ad, new_price):
             'minOrderLimit': format(minimum, 'f'), 'maxOrderLimit': format(maximum, 'f')}}
 
 
+def verified_pending_quantity(db, slot_id, attempt, ad):
+    """Opt into effective BUY Max only with an intact saved budget lineage."""
+    pending = db.get(OKXPendingBuyBudget, slot_id)
+    if not pending or attempt.action != 'UPDATE_PRICE' or ad.get('side') != 'buy':
+        return None
+    root = db.get(OKXBuyBudget, pending.root_ad_id)
+    link = db.get(OKXBuyBudgetAd, attempt.old_ad_id)
+    if (pending.old_ad_id == attempt.old_ad_id and root and root.slot_id == slot_id
+            and link and link.root_ad_id == pending.root_ad_id
+            and stock_total(ad) == pending.quantity):
+        return pending.quantity
+    return None
+
+
 def pending_matches(db, slot_id, attempt, ad):
     pending = db.get(OKXPendingBuyBudget, slot_id)
     if pending is None or attempt.action != 'UPDATE_PRICE': return True
