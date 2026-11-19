@@ -21,7 +21,8 @@ ALIASES = {'MB': 'MBBANK', 'KLB': 'KIENLONGBANK', 'STB': 'SACOMBANK', 'CTG': 'VI
            # Exact label observed in authenticated OKX collection instructions.
            # Do not broaden this into edit-distance or substring matching.
            'SHIHANBANK': 'SHINHANBANK',
-           'VIETINBANKNHCONGTHUONGHN': 'VIETINBANK'}
+           'VIETINBANKNHCONGTHUONGHN': 'VIETINBANK',
+           'VIKKIBANK': 'VIKKI'}
 
 
 def bank_keys(bank):
