@@ -140,9 +140,20 @@ class DiscordDelivery:
                 db.commit()
                 logger.warning('BUY QR Discord delivery failed HTTP=%s',r.status_code)
                 return False
-            record.message = str(r.json()['id'])
+            received = r.json()
+            record.message = str(received['id'])
             record.delivery_unknown = False
             db.commit()
+            if image is not None:
+                # A content-only acknowledgement is not a delivered QR. Keep
+                # the acknowledged ID so a later fresh order check PATCHes it,
+                # never creates another message or advances the fingerprint.
+                attached = any(x.get('filename') == 'payment.png' for x in received.get('attachments', []))
+                embedded = any(str((x.get('image') or {}).get('url', '')).startswith('https://')
+                               for x in received.get('embeds', []))
+                if not attached and not embedded:
+                    logger.warning('BUY QR Discord acknowledged message without QR image; awaiting verified update')
+                    return False
             return True
         except (httpx.HTTPError,ValueError,KeyError):
             db.commit()
