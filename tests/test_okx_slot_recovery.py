@@ -515,3 +515,44 @@ def test_dynamic_sell_max_never_relaxes_other_replacement_evidence(db, monkeypat
     assert slot.adv_id == '123' and attempt.state == 'UNKNOWN' and not slot.auto_enabled
     assert db.get(recovery.OKXPendingSellQuantity, slot.id) is not None
     post.assert_not_awaited()
+
+
+@pytest.mark.parametrize('old_read_code', ['55349', '55651'])
+@pytest.mark.parametrize('bad', [None, 'low_max', 'high_max', 'lost_stock', 'missing_root', 'wrong_root', 'wrong_price'])
+def test_buy_504_effective_max_after_completed_purchase_preserves_budget(db, monkeypatch, old_read_code, bad):
+    from app.okx_release import OKXRequestError
+    b = recovery.buy_budget
+    slot, attempt, row = replacement_case(db, 'BUY')
+    # BUY Max is a VND budget, independent of ceil-rounded USDT quantity.
+    pending = db.get(recovery.OKXPendingLimits, slot.id)
+    pending.maximum = 26349865
+    root = db.get(b.OKXBuyBudget, '123'); root.total_vnd = 26349865
+    recovery.replacement.save(db, slot, attempt,
+        {'minOrderLimit': '20000000', 'maxOrderLimit': '26349865', 'cryptoAmount': '1000'}, ['123', '777'])
+    row.update(availableAmount='800', onHoldAmount='0', completedOrderCryptoAmount='200',
+        completedOrderFiatAmount='5270000', maxOrderSize='21080000')
+    if bad == 'low_max': row['maxOrderSize'] = '21079999'
+    if bad == 'high_max': row['maxOrderSize'] = '21080001'
+    if bad == 'lost_stock': row['completedOrderCryptoAmount'] = '199'
+    if bad == 'missing_root': db.delete(root)
+    if bad == 'wrong_root': db.get(b.OKXBuyBudgetAd, '123').root_ad_id = '987'
+    if bad == 'wrong_price': row['unitPrice'] = '26349'
+    db.commit(); db.expire_all()
+    async def read(client, code):
+        if code == '123': raise OKXRequestError('OKX HTTP 400; mã API: ' + old_read_code + '.')
+        return row
+    monkeypatch.setattr(recovery.replacement, 'read_ad', AsyncMock(side_effect=read))
+    monkeypatch.setattr(recovery.replacement, 'owned_list', AsyncMock(return_value=([{'adId': '456', 'side': 'buy'}], False)))
+    post = AsyncMock(); monkeypatch.setattr(recovery.httpx.AsyncClient, 'post', post)
+    result = asyncio.run(recovery.recover_slot(db, 'owner', 'BUY', 2))
+    assert not slot.auto_enabled
+    if bad:
+        assert slot.adv_id == '123' and attempt.state == 'UNKNOWN', result
+        assert db.get(b.OKXPendingBuyBudget, slot.id) is not None
+    else:
+        assert slot.adv_id == '456' and attempt.state == 'IDLE', result
+        assert slot.max_amount == 21080000
+        assert db.get(b.OKXBuyBudgetAd, '456').root_ad_id == '123'
+        assert db.get(b.OKXBuyBudget, '123').total_vnd == 26349865
+        assert db.get(b.OKXPendingBuyBudget, slot.id) is None
+    post.assert_not_awaited()

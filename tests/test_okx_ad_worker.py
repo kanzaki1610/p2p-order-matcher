@@ -527,3 +527,39 @@ def test_effective_sell_max_is_not_a_general_limit_tolerance(case):
     if case == 'max_above_cap': row['maxOrderSize'] = '23463001'
     if case == 'max_below_cap': row['maxOrderSize'] = '23462999'
     assert not maximum_matches(row, expected)
+
+
+@pytest.mark.parametrize('broken', [None, 'missing_root', 'wrong_link', 'quantity'])
+def test_known_buy_result_effective_max_requires_saved_budget_lineage(db, setup, monkeypatch, broken):
+    b = worker.buy_budget
+    setup.side = 'BUY'
+    attempt = worker.OKXAdPriceAttempt(slot_id=setup.id, state='CONFIRMING', action='UPDATE_PRICE',
+        old_ad_id='123', result_ad_id='456', price=26200, hidden=False)
+    db.add(attempt)
+    db.add(worker.OKXPendingLimits(slot_id=setup.id, ad_id='123', minimum=50000000, maximum=509827500))
+    root = b.OKXBuyBudget(root_ad_id='123', slot_id=setup.id, total_vnd=509827500, total_crypto=Decimal('19459.07'))
+    if broken != 'missing_root': db.add(root)
+    db.add(b.OKXBuyBudgetAd(ad_id='123', root_ad_id='987' if broken == 'wrong_link' else '123'))
+    db.add(b.OKXPendingBuyBudget(slot_id=setup.id, root_ad_id='123', old_ad_id='123',
+        quantity=Decimal('19459.06' if broken == 'quantity' else '19459.07')))
+    db.commit()
+    row = ad('456', '26200', side='buy')
+    row.update(availableAmount='9459.07', onHoldAmount='0', completedOrderCryptoAmount='10000',
+        completedOrderFiatAmount='262000000', minOrderSize='50000000', maxOrderSize='247827634')
+    monkeypatch.setattr(worker, 'read_ad', AsyncMock(return_value=row))
+    write = AsyncMock(); monkeypatch.setattr(worker, 'request', write)
+    result = asyncio.run(worker.confirm(db, None, attempt, setup))
+    if broken:
+        assert not result and setup.adv_id == '123' and attempt.state == 'CONFIRMING'
+    else:
+        assert result and setup.adv_id == '456' and attempt.state == 'IDLE'
+        assert db.get(b.OKXBuyBudget, '123').total_vnd == 509827500
+        assert db.get(b.OKXBuyBudgetAd, '456').root_ad_id == '123'
+        monkeypatch.setattr(b, 'read_buy_quantum', AsyncMock(return_value=Decimal('.01')))
+        monkeypatch.setattr(b, 'read_order_page', AsyncMock(return_value=[dict(orderId='900', adId='456',
+            side='buy', orderStatus='completed', paymentStatus='confirmed', cryptoCurrency='USDT',
+            fiatCurrency='VND', cryptoAmount='10000', fiatAmount='262000000', createdTimestamp='1795087000000')]))
+        next_plan = asyncio.run(b.prepare_buy(db, None, setup, row, Decimal('26200')))
+        assert next_plan['terms']['maxOrderLimit'] == '247827500'  # Not displayed cap 247827634.
+        assert next_plan['terms']['cryptoAmount'] == '9459.07'
+    write.assert_not_awaited()
