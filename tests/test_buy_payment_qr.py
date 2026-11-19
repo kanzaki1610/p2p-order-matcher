@@ -600,3 +600,30 @@ def test_ocb_short_name_does_not_allow_conflicting_or_partial_bank_labels():
         bankName='Ocb phương đông', bankCode='BANK', accountName='TRAN VAN B')
     with pytest.raises(ValueError):
         data.okx_instruction(row, row['orderId'])
+
+
+@pytest.mark.parametrize('label', ['VietinBank - NH Công Thương HN', 'VIETINBANK - NH CONG THUONG HN'])
+@pytest.mark.parametrize('exchange', ['OKX', 'MEXC'])
+def test_verified_vietinbank_hn_collection_label_encodes_correct_bin(label, exchange):
+    if exchange == 'OKX':
+        row = okx(); payment = row['counterpartyDetail']['takerPaymentMethod']
+        payment.update(bankName=label, bankCode='BANK')
+        result = data.okx_instruction(row, row['orderId'])
+    else:
+        row = mexc(); payment = row['paymentInfo'][0]
+        payment.update(bankName=label, bankCode='BANK')
+        result = data.mexc_instruction(row, row['advOrderNo'], 'SELL')
+    assert result.bank == 'VietinBank' and result.bank_bin == '970415'
+    assert result.account == payment.get('accountNo', payment.get('account')) and result.note == ''
+    assert '970415' in vietqr.payload(result.bank_bin, result.account, result.amount)
+
+
+def test_vietinbank_hn_label_does_not_allow_conflict_or_partial_match():
+    label = 'VietinBank - NH Công Thương HN'
+    with pytest.raises(ValueError, match='khác nhau'):
+        vietqr.resolve_bank(label, 'ICBC')
+    for bad in ('NH Công Thương HN', 'VietinBank - NH Công Thương HN ACB', 'VietinBank - NH Công Thương TQ'):
+        with pytest.raises(ValueError): vietqr.resolve_bank(bad, 'BANK')
+    row = okx(); row['counterpartyDetail']['takerPaymentMethod'].update(bankName=label, bankCode='BANK')
+    row['orderStatus'] = 'completed'; row['paymentStatus'] = 'confirmed'
+    with pytest.raises(data.InactiveOrder): data.okx_instruction(row, row['orderId'])
