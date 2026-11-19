@@ -652,3 +652,58 @@ def test_vikki_bank_alias_never_accepts_conflicts_partial_names_or_paid_order():
     row=okx();row['counterpartyDetail']['takerPaymentMethod'].update(bankName='Vikki bank',bankCode='BANK')
     row['paymentStatus']='paid'
     with pytest.raises(data.InactiveOrder): data.okx_instruction(row,row['orderId'])
+
+
+@pytest.mark.parametrize('image_ack', ['attachment', 'embed'])
+def test_discord_content_only_qr_ack_is_not_success_and_retries_same_id_after_fresh_read(db, monkeypatch, image_ack):
+    from email.parser import BytesParser
+    from email.policy import default
+    row=record(db); methods=[]
+    async def handle(request):
+        methods.append(request.method)
+        multipart=BytesParser(policy=default).parsebytes(
+            ('Content-Type: '+request.headers['content-type']+'\r\n\r\n').encode()+request.content)
+        parts={p.get_param('name',header='content-disposition'):p for p in multipart.iter_parts()}
+        body=json.loads(parts['payload_json'].get_payload(decode=True))
+        assert body['embeds'][0]['image']['url']=='attachment://payment.png'
+        assert parts['files[0]'].get_filename()=='payment.png'
+        assert parts['files[0]'].get_payload(decode=True).startswith(b'\x89PNG')
+        result={'id':'523456789012345678','content':body['content']}
+        if request.method=='PATCH':
+            assert request.url.path.endswith('/523456789012345678')
+            if image_ack=='attachment':result['attachments']=[{'filename':'payment.png'}]
+            else:result['embeds']=[{'image':{'url':'https://cdn.discordapp.com/attachments/test/payment.png'}}]
+        return httpx.Response(200,json=result)
+    reader=AsyncMock(return_value=info());monkeypatch.setattr(worker,'read_payment',reader)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            delivery=worker.DiscordDelivery(client)
+            await worker.process(db,client,None,delivery,row)
+            assert row.message=='523456789012345678' and not row.delivery_unknown
+            assert row.fingerprint==''
+            await worker.process(db,client,None,delivery,row)
+            assert row.fingerprint==worker.fingerprint(asdict(info()))
+    asyncio.run(run())
+    assert methods==['POST','PATCH'] and reader.await_count==4
+
+
+def test_partial_qr_delivery_never_replays_qr_after_order_is_paid(db, monkeypatch):
+    row=record(db);methods=[]
+    async def handle(request):
+        methods.append(request.method)
+        if request.method=='PATCH':
+            body=json.loads(request.content)
+            assert body['attachments']==[] and body['embeds']==[]
+            assert 'QR đã được bỏ' in body['content']
+        return httpx.Response(200,json={'id':'523456789012345678'})
+    reader=AsyncMock(side_effect=[info(),info(),data.InactiveOrder('Lệnh đã báo thanh toán; QR đã được bỏ.')])
+    monkeypatch.setattr(worker,'read_payment',reader)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            delivery=worker.DiscordDelivery(client)
+            await worker.process(db,client,None,delivery,row)
+            assert row.fingerprint=='' and not row.delivery_unknown
+            await worker.process(db,client,None,delivery,row)
+            assert row.terminal
+    asyncio.run(run())
+    assert methods==['POST','PATCH']
