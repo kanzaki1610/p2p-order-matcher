@@ -122,16 +122,6 @@ async def read_rank_plan(client, side, cost_basis=None, target_rank=TARGET_RANK,
 
 
 async def send_preview_alert(plan):
-    from .config import settings
-    from .discord_notifications import send_discord_message
-    from .telegram_commands import format_vietnam_time
-    from datetime import datetime, timezone
-    if not settings.discord_webhook_pricing_alerts or plan.get("action") != "HIDE_AD":
-        return False
-    message = ("[MÔ PHỎNG CẢNH BÁO GIÁ — chưa ẩn quảng cáo thật]\nOKX\n"
-        f"Thời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\n"
-        f"Giá vốn: {plan['cost_basis']}đ/USDT\n"
-        f"Giá bán vị trí {plan['target_rank']}: {plan['proposed_price']}đ/USDT\n"
-        f"Giá bán tối thiểu: {plan['minimum_sell_price']}đ/USDT\n"
-        f"Lý do: {plan['reason']}")
-    return await send_discord_message("PRICING_ALERT", message)
+    # Keep preview API compatibility, but reserve the alert channel for actual
+    # worker interruptions. A simulation is still returned to its requester.
+    return False

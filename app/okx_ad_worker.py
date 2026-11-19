@@ -45,6 +45,26 @@ class OKXAdPriceAttempt(Base):
     notified_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class OKXPricingInterruption(Base):
+    __tablename__ = 'okx_pricing_interruptions'
+    slot_id: Mapped[int] = mapped_column(ForeignKey('okx_slots.id'), primary_key=True)
+    ad_id: Mapped[str] = mapped_column(String(100))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+def clear_interruption(db, slot):
+    row = db.get(OKXPricingInterruption, slot.id)
+    if row:
+        db.delete(row)
+        return True
+    return False
+
+
+def utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
 def safe_failure(error):
     # Do not expose arbitrary exception text, signed URLs or API response messages.
     from .okx_release import OKXRequestError
@@ -53,19 +73,46 @@ def safe_failure(error):
 
 
 async def notice(db, attempt, slot, kind, reason, plan=None):
-    key = hashlib.sha256((kind + reason).encode()).hexdigest()
+    locked = kind in {'UNKNOWN', 'REVIEW_REQUIRED'}
+    if kind not in {'UNKNOWN', 'REVIEW_REQUIRED', 'ERROR', 'BLOCKED', 'COST_UNVERIFIED'}:
+        if clear_interruption(db, slot): db.commit()
+        logger.debug('OKX pricing status slot=%s kind=%s', slot.id, kind)
+        return
+    if locked:
+        # One alert per uncertain request, even when subsequent GETs report a
+        # different error. Never replay the financial write to resolve it.
+        sent_at = utc(attempt.last_action_at).isoformat() if attempt.last_action_at else None
+        identity = f'locked:{slot.id}:{attempt.old_ad_id}:{attempt.action}:{sent_at}'
+        status = 'Đã dừng bám giá; cần bạn kiểm tra.'
+    else:
+        now = datetime.now(timezone.utc)
+        if kind in {'BLOCKED', 'COST_UNVERIFIED'}:
+            attempt.reason = reason[:500]
+        row = db.get(OKXPricingInterruption, slot.id)
+        # A paused worker or an ID change is not continuous failure.
+        gap = max(60, max(5, settings.okx_ad_pricing_seconds) * 3)
+        if row is None:
+            row = OKXPricingInterruption(slot_id=slot.id, ad_id=slot.adv_id,
+                started_at=now, last_seen_at=now)
+            db.add(row)
+        elif row.ad_id != slot.adv_id or (now - utc(row.last_seen_at)).total_seconds() > gap:
+            row.ad_id, row.started_at = slot.adv_id, now
+        row.last_seen_at = now
+        db.commit()
+        if (now - utc(row.started_at)).total_seconds() < 180:
+            logger.debug('OKX pricing retrying slot=%s kind=%s', slot.id, kind)
+            return
+        identity = f'interrupted:{slot.id}:{slot.adv_id}:{utc(row.started_at).isoformat()}'
+        status = 'Không bám được giá liên tục ít nhất 3 phút; cần bạn kiểm tra. Bot vẫn thử đọc lại.'
+    key = hashlib.sha256(identity.encode()).hexdigest()
     if attempt.notified_key == key:
         return
     merchant = settings.okx_merchant_nicknames.split(',')[0].strip() or 'VNTrader'
-    text = (f"OKX · {merchant} · cảnh báo giá {kind}\nMã quảng cáo: {slot.adv_id}\n"
-            f"Chiều: {slot.side}\nThời gian VN: {format_vietnam_time(datetime.now(timezone.utc))}\nLý do: {reason}")
-    if plan:
-        reference = (f"{plan['target_nickname']} {plan['price_offset']:+d}đ" if plan.get('target_nickname') else f"vị trí {plan.get('target_rank', 10)}")
-        text += f"\nGiá theo {reference}: {plan.get('proposed_price')}đ/USDT"
-        if plan.get("cost_source"):
-            text += '\nNguồn giá vốn: '+('đang tắt áp dụng' if plan['cost_source'].get('mode')=='DISABLED' else 'nhập thủ công' if plan['cost_source'].get('mode')=='MANUAL' else 'lệnh mua OKX '+plan['cost_source']['order_id'])
-        if plan.get("minimum_sell_price"):
-            text += f"\nGiá vốn: {plan['cost_basis']}đ · giá bán tối thiểu: {plan['minimum_sell_price']}đ"
+    text = (f"OKX · {merchant} · CẦN KIỂM TRA BÁM GIÁ\n{slot.side} · Slot {slot.slot_number} · {slot.adv_id}\n"
+            f"{status}\nLý do: {reason}\n"
+            'Quảng cáo trên OKX có thể vẫn hiển thị và nhận lệnh ở giá cũ.\n'
+            + ('Vào slot → Kiểm tra / khôi phục.\n' if locked else 'Vào slot để xem nguyên nhân và nguồn giá.\n')
+            + f"VN: {format_vietnam_time(datetime.now(timezone.utc))}")
     if await send_discord_message("PRICING_ALERT", text):
         attempt.notified_key = key
         db.commit()
@@ -108,6 +155,7 @@ async def confirm(db, client, attempt, slot, plan=None):
     slot.adv_id = attempt.result_ad_id
     slot.current_price = attempt.price
     attempt.state = "IDLE"
+    clear_interruption(db, slot)
     attempt.reason = None
     pending = db.get(OKXPendingLimits, slot.id)
     if pending and attempt.action == 'UPDATE_PRICE':
@@ -229,10 +277,12 @@ async def process_ad_pricing(db, client):
             if buy and terms:
                 terms_changed = terms_changed or buy_budget.stock_total(row) != Decimal(terms['cryptoAmount'])
             if plan["action"] == "UPDATE_PRICE" and current == proposed and not resume and not terms_changed:
+                cleared = clear_interruption(db, slot)
                 if attempt.reason:
                     attempt.reason=None
                     attempt.notified_key=None
                     db.commit()
+                elif cleared: db.commit()
                 continue
             now = datetime.now(timezone.utc)
             # Share the write interval across BUY/SELL slots and worker restarts.
@@ -369,6 +419,11 @@ async def process_ad_pricing(db, client):
             if attempt:
                 attempt.reason = safe_failure(error)[:500]
                 db.commit()
+                if (attempt.state == 'IDLE' and isinstance(error, buy_budget.BuyBudgetError)
+                        and str(error).startswith('Có lệnh mua đang chờ xử lý;')):
+                    clear_interruption(db, slot)
+                    db.commit()
+                    continue
                 kind = "UNKNOWN" if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"} else "ERROR"
                 reason = pending_reason(attempt) if kind == "UNKNOWN" else "Chỉnh giá gặp lỗi: " + attempt.reason
                 await notice(db, attempt, slot, kind, reason, plan)
