@@ -133,18 +133,10 @@ def verify_pending(db, slot, attempt, evidence):
 def visibility_matches(row, e):
     if row.get('isHidden') is e['hidden']:
         return True
-    # A replacement may become hidden after buyers exhaust its tradable stock.
-    # Operator recovery may bind that ID, preserving hidden and Auto OFF.
-    # A hidden ad with enough stock or any change in the saved total stays locked.
-    try:
-        from .okx_buy_budget import nonnegative
-        available = nonnegative(row.get('availableAmount'))
-        total = stock_total(row)
-        return (e['side'] == 'SELL' and e['hidden'] is False and row.get('isHidden') is True
-                and total == number(e['quantity']) and available < total
-                and available * number(row.get('unitPrice')) < number(row.get('minOrderSize')))
-    except (ValueError, ArithmeticError):
-        return False
+    # Hiding a uniquely verified replacement must not erase its identity.
+    # All price/stock/limit/ownership/time checks remain in matches(). Recovery
+    # preserves hidden and switches Auto OFF, never showing the ad again.
+    return e['hidden'] is False and row.get('isHidden') is True
 
 
 def matches(row, code, e):
@@ -194,6 +186,8 @@ async def discover(client, slot, attempt, evidence):
     code, row = candidates[0]
     if await active_ids(client, slot.side) != ids:
         raise ReplacementEvidenceError('Danh sách quảng cáo thay đổi trong lúc xác minh; kiểm tra lại, chưa gỡ khóa.')
+    previous_hidden = row.get('isHidden')
     row = await read_ad(client, code)
-    if not matches(row, code, e):raise ReplacementEvidenceError('Quảng cáo thay thế thay đổi trong lúc xác minh; giữ khóa.')
+    if not matches(row, code, e) or row.get('isHidden') is not previous_hidden:
+        raise ReplacementEvidenceError('Quảng cáo thay thế thay đổi trong lúc xác minh; giữ khóa.')
     return code, row

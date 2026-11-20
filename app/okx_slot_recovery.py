@@ -230,6 +230,9 @@ async def recover_slot(db, owner, side, slot_number, *, automatic=False):
     # Keep last_action_at so recovery cannot bypass the shared write cooldown.
     if unavailable or (outcome == 'REJECTED_UNCHANGED' and before['reason'] == 'OKX HTTP 400; mã API: 55147.'):
         attempt.paused_by_floor=False
+    if discovered and ad.get('isHidden') is True:
+        slot.auto_enabled = False
+        attempt.paused_by_floor = False
     if automatic and unavailable:
         slot.auto_enabled = False
     db.commit()
