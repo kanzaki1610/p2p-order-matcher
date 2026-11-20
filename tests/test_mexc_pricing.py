@@ -88,8 +88,41 @@ def test_missing_required_original_configuration_blocks(field):
 
 def test_success_reads_back_and_does_not_repeat_unchanged_price(db,setup):
     slot,current=setup;run(db);slot.last_action=0;db.commit();run(db)
+    assert worker.write_price.await_count == 1, (slot.reason, worker.send_discord_message.call_args)
     worker.write_price.assert_awaited_once()
     assert slot.state=='IDLE' and current['price']=='26070'
+
+
+def test_automatic_reconciliation_after_timeout_keeps_enabled_without_second_post(db,setup,monkeypatch):
+    slot,current=setup
+    async def applied_timeout(api,row,value,body=None):
+        current['price']=str(value)
+        if body:
+            for field in ('minSingleTransAmount','maxSingleTransAmount'):
+                current[field]=body[field]
+        raise httpx.ReadTimeout('private URL')
+    monkeypatch.setattr(worker,'write_price',AsyncMock(side_effect=applied_timeout))
+    run(db)
+    assert slot.state=='UNKNOWN'
+    slot.last_action=Decimal(str(time.time()-180));db.commit()
+    from app import mexc_price_recovery
+    monkeypatch.setattr(mexc_price_recovery,'read_ad',AsyncMock(return_value=current.copy()))
+    run(db)
+    assert slot.state=='IDLE' and slot.enabled
+    worker.write_price.assert_awaited_once()
+
+
+def test_get_failure_keeps_original_write_error_and_throttles(db,setup,monkeypatch):
+    slot,current=setup
+    monkeypatch.setattr(worker,'write_price',AsyncMock(side_effect=httpx.ReadTimeout('private')))
+    run(db)
+    reason=slot.reason
+    reader=AsyncMock(side_effect=httpx.ReadTimeout('GET private'))
+    monkeypatch.setattr(worker,'read_ad',reader)
+    run(db);db.expire_all();run(db)
+    assert slot.reason==reason and slot.state=='UNKNOWN' and slot.enabled
+    reader.assert_awaited_once()
+    worker.write_price.assert_awaited_once()
 
 
 def test_timeout_is_durable_and_never_resubmitted(db,setup,monkeypatch):

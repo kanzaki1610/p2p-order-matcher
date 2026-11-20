@@ -14,6 +14,8 @@ from app.models import OKXSlot, OKXAuditLog, OKXPricePreferences, OKXPricingSwit
 @pytest.fixture
 def db():
     engine = create_engine('sqlite://')
+    from app.pricing_recheck import PricingRecheck
+    PricingRecheck.__table__.create(engine)
     from app.nickname_target import NicknameTarget, NicknamePriceBound
     from app.nickname_offers import OfferSelection, OfferPicker, OfferNotice
     for model in (OfferSelection, OfferPicker, OfferNotice): model.__table__.create(engine)
@@ -74,7 +76,8 @@ def test_baseline_failure_stops_before_any_price_post(db,setup,monkeypatch,cause
 
 
 @pytest.mark.parametrize('autoflush',[False,True])
-def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite_evidence(db,setup,monkeypatch,autoflush):
+@pytest.mark.parametrize('background',[False,True])
+def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite_evidence(db,setup,monkeypatch,autoflush,background):
     db.autoflush=autoflush
     from datetime import datetime,timezone,timedelta
     from app import okx_slot_recovery as recovery
@@ -104,9 +107,14 @@ def test_accepted_replacement_lost_as_504_is_recoverable_from_persisted_prewrite
         @classmethod
         def now(cls,tz=None):return datetime.now(tz)+timedelta(seconds=121)
     monkeypatch.setattr(recovery,'datetime',Later)
-    result=asyncio.run(recovery.recover_slot(db,'owner','SELL',1))
-    assert 'sau lỗi 504' in result and setup.adv_id=='456'
-    assert attempt.state=='IDLE' and not setup.auto_enabled
+    if background:
+        monkeypatch.setattr(worker,'datetime',Later)
+        run(db)
+    else:
+        result=asyncio.run(recovery.recover_slot(db,'owner','SELL',1))
+        assert 'sau lỗi 504' in result
+    assert setup.adv_id=='456'
+    assert attempt.state=='IDLE' and setup.auto_enabled is background
     assert worker.replacement.snapshot(db,setup.id)==proof_at_post[0]
     assert write.await_count==1  # Recovery must never send another price edit.
 
@@ -247,9 +255,7 @@ def test_okx_error_keeps_one_detailed_alert_after_poll_and_restart(db, setup, mo
     db.expire_all()
     run(db); run(db)
     assert write.await_count==1
-    worker.send_discord_message.assert_awaited_once()
-    message=worker.send_discord_message.call_args.args[1]
-    assert '55723' in message and 'dừng bám giá' in message
+    worker.send_discord_message.assert_not_awaited()  # Allow automatic reconciliation first.
     assert db.get(worker.OKXAdPriceAttempt,setup.id).state=='UNKNOWN'
 
 
@@ -568,16 +574,16 @@ def test_known_buy_result_effective_max_requires_saved_budget_lineage(db, setup,
 
 
 def test_locked_alert_is_one_per_request_even_when_reason_changes_and_session_reloads(db, setup):
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     a = worker.OKXAdPriceAttempt(slot_id=setup.id, state='UNKNOWN', action='UPDATE_PRICE',
-        old_ad_id='123', last_action_at=datetime.now(timezone.utc))
+        old_ad_id='123', last_action_at=datetime.now(timezone.utc)-timedelta(minutes=4))
     db.add(a); db.commit()
     asyncio.run(worker.notice(db, a, setup, 'UNKNOWN', 'OKX HTTP 504'))
     db.expire_all()
     asyncio.run(worker.notice(db, a, setup, 'REVIEW_REQUIRED', 'OKX HTTP 429'))
     worker.send_discord_message.assert_awaited_once()
     message = worker.send_discord_message.call_args.args[1]
-    assert 'giá cũ' in message and 'Kiểm tra / khôi phục' in message
+    assert 'giá cũ' in message and 'Không cần bấm khôi phục' in message
 
 
 def test_retry_alert_waits_for_continuous_interruption_and_deduplicates_changed_errors(db, setup, monkeypatch):
@@ -600,8 +606,11 @@ def test_retry_alert_waits_for_continuous_interruption_and_deduplicates_changed_
         asyncio.run(worker.notice(db, a, setup, 'BLOCKED', 'source unavailable ' + str(seconds)))
     worker.send_discord_message.assert_awaited_once()
     assert '3 phút' in worker.send_discord_message.call_args.args[1]
-    # A later hard lock still alerts immediately, independent of retry incident.
+    # A later uncertain write gets its own automatic reconciliation grace period.
     a.state='UNKNOWN'; a.old_ad_id='123'; a.action='UPDATE_PRICE'; a.last_action_at=clock[0]; db.commit()
+    asyncio.run(worker.notice(db, a, setup, 'UNKNOWN', '504'))
+    assert worker.send_discord_message.await_count == 1
+    clock[0] += timedelta(seconds=180)
     asyncio.run(worker.notice(db, a, setup, 'UNKNOWN', '504'))
     assert worker.send_discord_message.await_count == 2
 

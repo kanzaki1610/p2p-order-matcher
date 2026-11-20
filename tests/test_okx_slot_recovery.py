@@ -36,6 +36,33 @@ def ad(code='123',price='27563'):
 def run(db): return asyncio.run(recovery.recover_slot(db,'owner','SELL',2))
 
 
+@pytest.mark.parametrize('automatic', [True, False])
+def test_recovery_preserves_explicit_run_intent(db, monkeypatch, automatic):
+    monkeypatch.setattr(recovery,'read_ad',AsyncMock(return_value=ad()))
+    asyncio.run(recovery.recover_slot(db,'owner','SELL',2,automatic=automatic))
+    assert db.query(OKXSlot).one().auto_enabled is automatic
+    assert db.query(recovery.OKXAdPriceAttempt).one().state == 'IDLE'
+
+
+def test_automatic_recovery_never_enables_disabled_slot(db, monkeypatch):
+    slot=db.query(OKXSlot).one();slot.auto_enabled=False;db.commit()
+    reader=AsyncMock();monkeypatch.setattr(recovery,'read_ad',reader)
+    asyncio.run(recovery.recover_slot(db,'auto','SELL',2,automatic=True))
+    reader.assert_not_awaited()
+    assert not slot.auto_enabled
+
+
+def test_operator_stop_during_automatic_read_wins(db, monkeypatch):
+    slot=db.query(OKXSlot).one()
+    async def read(*args):
+        db.execute(update(OKXSlot).where(OKXSlot.id==slot.id).values(auto_enabled=False));db.commit()
+        return ad()
+    monkeypatch.setattr(recovery,'read_ad',read)
+    asyncio.run(recovery.recover_slot(db,'auto','SELL',2,automatic=True))
+    assert not slot.auto_enabled
+    assert db.query(recovery.OKXAdPriceAttempt).one().state=='UNKNOWN'
+
+
 def replacement_case(db, side='SELL'):
     slot=db.query(OKXSlot).one();slot.side=side
     attempt=db.query(recovery.OKXAdPriceAttempt).one()
@@ -58,7 +85,8 @@ def replacement_case(db, side='SELL'):
 
 @pytest.mark.parametrize('old_read_code',['55651','55349'])
 @pytest.mark.parametrize('side',['BUY','SELL'])
-def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side,old_read_code):
+@pytest.mark.parametrize('automatic',[False,True])
+def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side,old_read_code,automatic):
     from app.okx_release import OKXRequestError
     slot,attempt,row=replacement_case(db,side)
     async def read(client,code):
@@ -69,8 +97,8 @@ def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db
     monkeypatch.setattr(recovery.replacement,'owned_list',listing)
     post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
     db.expire_all()  # Saved evidence, not an in-memory response, drives recovery.
-    result=asyncio.run(recovery.recover_slot(db,'owner',side,2))
-    assert slot.adv_id=='456' and attempt.state=='IDLE' and not slot.auto_enabled, result
+    result=asyncio.run(recovery.recover_slot(db,'owner',side,2,automatic=automatic))
+    assert slot.adv_id=='456' and attempt.state=='IDLE' and slot.auto_enabled is automatic, result
     assert slot.current_price==26350 and 'sau lỗi 504' in result
     assert db.get(recovery.OKXPendingLimits,slot.id) is None
     assert db.query(recovery.OKXAutoLimits).one().ad_id=='456'
