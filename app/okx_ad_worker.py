@@ -191,6 +191,18 @@ def pending_reason(attempt):
 
 
 async def process_ad_pricing(db, client):
+    # Manual confirmations intentionally stop Auto. Reconcile their replies even
+    # while pricing is paused; this only reads the exchange and never enables it.
+    manual_slots=db.scalars(select(OKXSlot).join(OKXAdPriceAttempt,
+        OKXAdPriceAttempt.slot_id==OKXSlot.id).where(OKXSlot.auto_enabled.is_(False),
+        OKXAdPriceAttempt.action=='MANUAL_PRICE',
+        OKXAdPriceAttempt.state.in_(['UNKNOWN','CONFIRMING']))).all()
+    for manual_slot in manual_slots:
+        saved=db.get(OKXAdPriceAttempt,manual_slot.id)
+        if saved.last_action_at and (datetime.now(timezone.utc)-utc(saved.last_action_at)).total_seconds()>=120:
+            if recheck_due(db,'OKX:'+str(manual_slot.id),(saved.old_ad_id,saved.action,str(saved.last_action_at))):
+                from .okx_slot_recovery import recover_slot
+                await recover_slot(db,'auto-manual-reconcile',manual_slot.side,manual_slot.slot_number)
     if not pricing_active(db):
         return
     try:

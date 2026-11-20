@@ -101,7 +101,7 @@ async def recover_slot(db, owner, side, slot_number, *, automatic=False):
         return 'Chưa khôi phục: loại yêu cầu cũ chưa được hỗ trợ xác minh. Auto đã tắt.'
     manual=None
     if attempt.action=='MANUAL_PRICE':
-        if attempt.result_ad_id or attempt.reason!='OKX HTTP 400; mã API: 55723.':
+        if not attempt.result_ad_id and attempt.reason not in {'OKX HTTP 400; mã API: 55723.', 'OKX HTTP 504; phản hồi không phải JSON.'}:
             return 'Chưa khôi phục: yêu cầu đặt giá thủ công chưa có bằng chứng bị từ chối rõ ràng (400/55723); giữ khóa, không gửi lại. Auto đã tắt.'
         try:manual=manual_intent(db,attempt)
         except ValueError as error:return 'Chưa khôi phục: '+str(error)+' Auto đã tắt.'
@@ -119,7 +119,11 @@ async def recover_slot(db, owner, side, slot_number, *, automatic=False):
     replacement_before=replacement.snapshot(db,slot.id)
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            if replacement.lost_response(attempt):
+            if manual is not None and (attempt.result_ad_id or attempt.reason=='OKX HTTP 504; phản hồi không phải JSON.'):
+                from .okx_manual_recovery import discover
+                code,ad=await discover(client,slot,attempt,manual)
+                discovered=True
+            elif replacement.lost_response(attempt):
                 replacement.verify_pending(db, slot, attempt, replacement_before)
                 code, ad = await replacement.discover(client, slot, attempt, replacement_before)
                 discovered=True
@@ -146,7 +150,7 @@ async def recover_slot(db, owner, side, slot_number, *, automatic=False):
         current = None if unavailable else number(ad.get('unitPrice'))
         if unavailable:
             outcome='REJECTED_AD_UNAVAILABLE'
-        elif manual is not None:
+        elif manual is not None and not discovered:
             verify_manual_rejection(manual,attempt,ad)
             outcome='MANUAL_REJECTED_UNCHANGED'
         elif attempt.result_ad_id or discovered:
@@ -197,7 +201,7 @@ async def recover_slot(db, owner, side, slot_number, *, automatic=False):
         if not unchanged:
             db.rollback()
             return 'Hồ sơ đặt giá thủ công đã thay đổi trong lúc kiểm tra; chưa gỡ khóa. Auto vẫn tắt.'
-    if discovered:
+    if discovered and manual is None:
         try:replacement.verify_pending(db,slot,attempt,replacement_before)
         except ValueError as error:
             db.rollback()
