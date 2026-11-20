@@ -75,7 +75,7 @@ def legacy_source_reconcilable(slot, pending, row):
     except (ValueError,TypeError,KeyError,ArithmeticError): return False
 
 
-async def recover(db, owner, side, number):
+async def recover(db, owner, side, number, *, automatic=False):
     if side not in {'BUY', 'SELL'} or str(number) not in {'1', '2'}:
         raise ValueError('Chọn Mua/Bán và slot 1 hoặc 2.')
     key = side + ':' + str(number)
@@ -83,7 +83,10 @@ async def recover(db, owner, side, number):
         .with_for_update().execution_options(populate_existing=True))
     if slot is None:
         raise ValueError('Slot MEXC chưa được cấu hình.')
-    slot.enabled, slot.revision = False, uuid.uuid4().hex
+    if automatic and not slot.enabled:
+        return 'Auto đã tắt; không tự bật lại.'
+    if not automatic:
+        slot.enabled, slot.revision = False, uuid.uuid4().hex
     db.commit()
     if slot.state == 'IDLE':
         return 'Slot MEXC không bị khóa. Auto đang TẮT; kiểm tra rồi tự bật khi sẵn sàng.'
@@ -132,7 +135,7 @@ async def recover(db, owner, side, number):
     slot = db.scalar(select(MexcPriceSlot).where(MexcPriceSlot.key == key)
         .with_for_update().execution_options(populate_existing=True))
     pending = db.get(MexcPendingPrice, key, populate_existing=True)
-    if (slot.enabled or slot_snapshot(slot) != before or pending_snapshot(pending) != pending_before):
+    if (slot.enabled != automatic or slot_snapshot(slot) != before or pending_snapshot(pending) != pending_before):
         db.rollback()
         return 'Cấu hình vừa thay đổi trong lúc kiểm tra; chưa khôi phục. Kiểm tra lại trạng thái slot.'
     db.add(OKXAuditLog(action='MEXC_SLOT_RECOVERED', actor='discord:' + owner,

@@ -60,7 +60,7 @@ def verify_manual_rejection(intent, attempt, ad):
     return current
 
 
-async def recover_slot(db, owner, side, slot_number):
+async def recover_slot(db, owner, side, slot_number, *, automatic=False):
     if settings.database_schema == 'kayhap' and not settings.discord_pricing_commands_enabled:
         raise ValueError('Chức năng bám giá này chỉ dành cho tài khoản gốc.')
     if side not in {'BUY', 'SELL'} or type(slot_number) is not int or slot_number not in {1, 2}:
@@ -70,7 +70,10 @@ async def recover_slot(db, owner, side, slot_number):
     if slot is None:
         raise ValueError('Slot chưa được cấu hình.')
     # Stop new writes before inspecting the previous one. Never enable on recovery.
-    slot.auto_enabled = False
+    if automatic and not slot.auto_enabled:
+        return 'Auto đã tắt; không tự bật lại.'
+    if not automatic:
+        slot.auto_enabled = False
     db.commit()
     attempt = db.get(OKXAdPriceAttempt, slot.id)
     if attempt is None or attempt.state == 'IDLE':
@@ -80,6 +83,15 @@ async def recover_slot(db, owner, side, slot_number):
     now = datetime.now(timezone.utc)
     last = attempt.last_action_at
     last = last.replace(tzinfo=timezone.utc) if last and not last.tzinfo else last
+    if automatic and attempt.state == 'SUBMITTING' and last and (now-last).total_seconds() >= 120:
+        # UNKNOWN is committed before the network write. SUBMITTING is only a
+        # preflight claim; release it conditionally so an active writer wins.
+        changed = db.execute(update(OKXAdPriceAttempt).where(
+            OKXAdPriceAttempt.slot_id == slot.id, OKXAdPriceAttempt.state == 'SUBMITTING',
+            OKXAdPriceAttempt.last_action_at == attempt.last_action_at
+        ).values(state='IDLE'))
+        db.commit()
+        return 'Đã khôi phục bước chuẩn bị chưa gửi.' if changed.rowcount else 'Yêu cầu đã thay đổi.'
     if (attempt.state not in {'UNKNOWN', 'CONFIRMING'} or last is None
             or (now - last).total_seconds() < 120):
         return 'Chưa khôi phục: yêu cầu đang xử lý hoặc chưa qua 120 giây. Auto đã tắt; không gửi lại OKX.'
@@ -171,7 +183,7 @@ async def recover_slot(db, owner, side, slot_number):
     pending = db.get(OKXPendingLimits, slot.id)
     budget_pending = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
     sell_pending=db.get(OKXPendingSellQuantity,slot.id)
-    if (slot.auto_enabled or (slot.adv_id, slot.side, slot.current_price) != slot_before
+    if (slot.auto_enabled != automatic or (slot.adv_id, slot.side, slot.current_price) != slot_before
             or attempt is None or snapshot(attempt) != before
             or replacement.snapshot(db,slot.id) != replacement_before
             or ((pending.ad_id, pending.minimum, pending.maximum) if pending else None) != pending_before
@@ -218,6 +230,8 @@ async def recover_slot(db, owner, side, slot_number):
     # Keep last_action_at so recovery cannot bypass the shared write cooldown.
     if unavailable or (outcome == 'REJECTED_UNCHANGED' and before['reason'] == 'OKX HTTP 400; mã API: 55147.'):
         attempt.paused_by_floor=False
+    if automatic and unavailable:
+        slot.auto_enabled = False
     db.commit()
     rejected_code = '55147' if before['reason'] == 'OKX HTTP 400; mã API: 55147.' else '55723'
     conclusion = 'Đã xác minh kết quả yêu cầu cũ.' if outcome == 'CONFIRMED' else f'OKX đã trả lỗi 400/{rejected_code}; quảng cáo cũ vẫn giữ giá trước yêu cầu. Đã lưu hồ sơ lỗi và gỡ khóa.'

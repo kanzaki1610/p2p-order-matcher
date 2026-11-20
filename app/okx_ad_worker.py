@@ -25,6 +25,7 @@ from .okx_release import request, failure_reason
 from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, OKXPendingSellQuantity, price_limits, limits_match, sell_quantity_matches
 from . import okx_buy_budget as buy_budget
 from . import okx_replacement as replacement
+from .pricing_recheck import due as recheck_due
 from .telegram_commands import format_vietnam_time
 
 logger = logging.getLogger("uvicorn.error.okx_ad_pricing")
@@ -83,7 +84,9 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
         # different error. Never replay the financial write to resolve it.
         sent_at = utc(attempt.last_action_at).isoformat() if attempt.last_action_at else None
         identity = f'locked:{slot.id}:{attempt.old_ad_id}:{attempt.action}:{sent_at}'
-        status = 'Đã dừng bám giá; cần bạn kiểm tra.'
+        if attempt.last_action_at and (datetime.now(timezone.utc)-utc(attempt.last_action_at)).total_seconds() < 180:
+            return
+        status = 'Chưa xác minh được kết quả. Bot tự kiểm tra lại và tiếp tục khi đủ bằng chứng.'
     else:
         now = datetime.now(timezone.utc)
         if kind in {'BLOCKED', 'COST_UNVERIFIED'}:
@@ -111,7 +114,7 @@ async def notice(db, attempt, slot, kind, reason, plan=None):
     text = (f"OKX · {merchant} · CẦN KIỂM TRA BÁM GIÁ\n{slot.side} · Slot {slot.slot_number} · {slot.adv_id}\n"
             f"{status}\nLý do: {reason}\n"
             'Quảng cáo trên OKX có thể vẫn hiển thị và nhận lệnh ở giá cũ.\n'
-            + ('Vào slot → Kiểm tra / khôi phục.\n' if locked else 'Vào slot để xem nguyên nhân và nguồn giá.\n')
+            + ('Không cần bấm khôi phục để thử lại.\n' if locked else 'Vào slot để xem nguyên nhân và nguồn giá.\n')
             + f"VN: {format_vietnam_time(datetime.now(timezone.utc))}")
     if await send_discord_message("PRICING_ALERT", text):
         attempt.notified_key = key
@@ -184,7 +187,7 @@ def pending_reason(attempt):
     """Keep the original diagnostic stable across polling and restarts."""
     detail = f" Chi tiết: {attempt.reason}" if attempt.reason else ""
     return ("Chưa xác minh được kết quả sửa/ẩn quảng cáo." + detail
-            + " Bot đã dừng bám giá cho slot này; không tự gửi lại. Bấm Kiểm tra / khôi phục để xác minh ID quảng cáo thay thế.")
+            + " Bot đang tự xác minh; chưa gửi yêu cầu sửa tiếp theo.")
 
 
 async def process_ad_pricing(db, client):
@@ -213,9 +216,19 @@ async def process_ad_pricing(db, client):
                 attempt = db.get(OKXAdPriceAttempt, slot.id)
         plan = None
         buy = None
+        reconciling = attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"}
         try:
-            if attempt.state in {"SUBMITTING", "UNKNOWN", "CONFIRMING"}:
-                await confirm(db, client, attempt, slot)
+            if reconciling:
+                if not recheck_due(db, 'OKX:'+str(slot.id), (attempt.old_ad_id, attempt.action, str(attempt.last_action_at))):
+                    continue
+                if attempt.last_action_at and (datetime.now(timezone.utc)-utc(attempt.last_action_at)).total_seconds() >= 120:
+                    from .okx_slot_recovery import recover_slot
+                    await recover_slot(db, 'auto-reconcile', slot.side, slot.slot_number, automatic=True)
+                    db.refresh(attempt)
+                    if attempt.state != 'IDLE':
+                        await notice(db, attempt, slot, 'UNKNOWN', pending_reason(attempt))
+                else:
+                    await confirm(db, client, attempt, slot)
                 continue
             if attempt.paused_by_floor and attempt.result_ad_id != slot.adv_id:
                 attempt.paused_by_floor = False
@@ -364,7 +377,14 @@ async def process_ad_pricing(db, client):
                     attempt.state = 'IDLE'
                     db.commit()
                     continue
-            attempt.state = "UNKNOWN"
+            sending = db.execute(update(OKXAdPriceAttempt).where(
+                OKXAdPriceAttempt.slot_id == slot.id, OKXAdPriceAttempt.state == 'SUBMITTING',
+                OKXAdPriceAttempt.last_action_at == now
+            ).values(state='UNKNOWN'))
+            if sending.rowcount != 1:
+                db.rollback()
+                continue
+            db.refresh(attempt)
             old_budget = db.get(buy_budget.OKXPendingBuyBudget, slot.id)
             if old_budget:
                 db.delete(old_budget)
@@ -417,7 +437,8 @@ async def process_ad_pricing(db, client):
             db.rollback()
             attempt = db.get(OKXAdPriceAttempt, slot.id)
             if attempt:
-                attempt.reason = safe_failure(error)[:500]
+                if not reconciling:
+                    attempt.reason = safe_failure(error)[:500]
                 db.commit()
                 if (attempt.state == 'IDLE' and isinstance(error, buy_budget.BuyBudgetError)
                         and str(error).startswith('Có lệnh mua đang chờ xử lý;')):

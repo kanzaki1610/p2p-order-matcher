@@ -75,7 +75,12 @@ def snapshot(db, slot_id):
 
 def lost_response(attempt):
     return (attempt.action == 'UPDATE_PRICE' and not attempt.result_ad_id
-            and attempt.reason == 'OKX HTTP 504; phản hồi không phải JSON.')
+            and (not attempt.reason or attempt.reason in {
+                'Hết thời gian chờ phản hồi từ sàn.',
+                'Lỗi kết nối mạng đến sàn; kiểm tra kết nối dịch vụ.',
+                'Dữ liệu API thiếu hoặc sai định dạng bắt buộc.',
+            } or str(attempt.reason).startswith(('OKX HTTP 500;', 'OKX HTTP 502;',
+                'OKX HTTP 503;', 'OKX HTTP 504;'))))
 
 
 def validate(evidence, slot, attempt):

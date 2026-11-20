@@ -23,6 +23,7 @@ from .okx_rank import plan_rank_price
 from .nickname_target import target as nickname_target, plan_options
 from .notifications import notify_once
 from .discord_notifications import send_discord_message, valid_webhook
+from .pricing_recheck import due as recheck_due
 
 logger = logging.getLogger('uvicorn.error.mexc_pricing')
 
@@ -132,11 +133,17 @@ async def process_pricing(db, api, source):
     slots = db.scalars(select(MexcPriceSlot).where(MexcPriceSlot.enabled.is_(True))).all()
     for slot in slots:
         attempt = None
+        reconciling = slot.state != 'IDLE'
         try:
-            if slot.state == 'SUBMITTING':
-                continue
-            if slot.state != 'IDLE':
-                await confirm(db, api, slot)
+            if reconciling:
+                if not recheck_due(db, 'MEXC:'+slot.key, slot.attempt_id):
+                    continue
+                if time.time()-float(slot.last_action) >= 120:
+                    from .mexc_price_recovery import recover
+                    side, slot_number = slot.key.split(':')
+                    await recover(db, 'auto-reconcile', side, slot_number, automatic=True)
+                elif slot.state != 'SUBMITTING':
+                    await confirm(db, api, slot)
                 continue
             if db.scalar(select(MexcPriceSlot.key).where(MexcPriceSlot.key != slot.key, MexcPriceSlot.ad == slot.ad)):
                 raise ValueError('Một quảng cáo đang được gán cho nhiều slot; chưa sửa giá.')
@@ -232,6 +239,9 @@ async def process_pricing(db, api, source):
             raise
         except Exception as error:
             db.rollback(); db.refresh(slot)
+            if reconciling:
+                logger.warning('MEXC reconciliation deferred slot=%s error=%s', slot.key, type(error).__name__)
+                continue  # Preserve original POST diagnostics; GET failures are not write outcomes.
             if attempt and slot.attempt_id != attempt:
                 continue
             if attempt and slot.state == 'SUBMITTING':
