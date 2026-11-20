@@ -589,3 +589,31 @@ def test_buy_504_effective_max_after_completed_purchase_preserves_budget(db, mon
         assert db.get(b.OKXBuyBudget, '123').total_vnd == 26349865
         assert db.get(b.OKXPendingBuyBudget, slot.id) is None
     post.assert_not_awaited()
+
+@pytest.mark.parametrize('case',['valid','multiple','wrong_quantity','wrong_max','wrong_owner','old_present','changed'])
+def test_manual_504_recovery_reads_only_exact_consumed_intent(db,monkeypatch,case):
+    from app.okx_release import OKXRequestError
+    manual_case(db)
+    slot=db.query(OKXSlot).one();a=db.query(recovery.OKXAdPriceAttempt).one()
+    a.reason='OKX HTTP 504; phản hồi không phải JSON.';slot.auto_enabled=False;db.commit()
+    row={**ad('456','26350'),'isOwner':True,'cryptoCurrency':'USDT','fiatCurrency':'VND',
+        'availableAmount':'10000','onHoldAmount':'0','completedOrderCryptoAmount':'0',
+        'createdTimestamp':int((datetime.fromisoformat(recovery.replacement.stamp(a.last_action_at)).timestamp()+6)*1000)}
+    if case=='wrong_quantity':row['availableAmount']='9999'
+    if case=='wrong_max':row['maxOrderSize']='179999999'
+    if case=='wrong_owner':row['isOwner']=False
+    calls=[0]
+    async def read(client,code):
+        if code=='123':raise OKXRequestError('OKX HTTP 400; mã API: 55651.')
+        calls[0]+=1
+        return {**row,'adId':code,'unitPrice':'26349' if case=='changed' and calls[0]>1 else row['unitPrice']}
+    ids=['456','789'] if case=='multiple' else ['123','456'] if case=='old_present' else ['456']
+    monkeypatch.setattr(recovery.replacement,'read_ad',AsyncMock(side_effect=read))
+    monkeypatch.setattr(recovery.replacement,'active_ids',AsyncMock(return_value=ids))
+    post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
+    result=asyncio.run(recovery.recover_slot(db,'auto','SELL',2))
+    assert (a.state=='IDLE') is (case=='valid'),result
+    assert slot.adv_id==('456' if case=='valid' else '123')
+    assert not slot.auto_enabled
+    post.assert_not_awaited()
+
