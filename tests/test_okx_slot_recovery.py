@@ -86,9 +86,11 @@ def replacement_case(db, side='SELL'):
 @pytest.mark.parametrize('old_read_code',['55651','55349'])
 @pytest.mark.parametrize('side',['BUY','SELL'])
 @pytest.mark.parametrize('automatic',[False,True])
-def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side,old_read_code,automatic):
+@pytest.mark.parametrize('hidden',[False,True])
+def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db,monkeypatch,side,old_read_code,automatic,hidden):
     from app.okx_release import OKXRequestError
     slot,attempt,row=replacement_case(db,side)
+    row['isHidden']=hidden
     async def read(client,code):
         if code=='123':raise OKXRequestError('OKX HTTP 400; mã API: '+old_read_code+'.')
         return row
@@ -98,7 +100,8 @@ def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db
     post=AsyncMock();monkeypatch.setattr(recovery.httpx.AsyncClient,'post',post)
     db.expire_all()  # Saved evidence, not an in-memory response, drives recovery.
     result=asyncio.run(recovery.recover_slot(db,'owner',side,2,automatic=automatic))
-    assert slot.adv_id=='456' and attempt.state=='IDLE' and slot.auto_enabled is automatic, result
+    assert slot.adv_id=='456' and attempt.state=='IDLE' and slot.auto_enabled is (automatic and not hidden), result
+    if hidden: assert not attempt.paused_by_floor and row['isHidden'] is True
     assert slot.current_price==26350 and 'sau lỗi 504' in result
     assert db.get(recovery.OKXPendingLimits,slot.id) is None
     assert db.query(recovery.OKXAutoLimits).one().ad_id=='456'
@@ -115,7 +118,7 @@ def test_lost_504_response_finds_unique_new_id_preserves_budget_after_restart(db
 @pytest.mark.parametrize('old_read_code',['55651','55349'])
 @pytest.mark.parametrize('case',[
     'none','multiple','preexisting','wrong_price','wrong_quantity','wrong_min','wrong_max',
-    'hidden','wrong_side','wrong_owner','wrong_currency','early','late','missing_time',
+    'invalid_hidden','visibility_changed','wrong_side','wrong_owner','wrong_currency','early','late','missing_time',
     'old_present','old_readable','old_timeout','candidate_error','list_changed','read_changed',
     'other_slot','concurrent_attempt','concurrent_evidence','missing_evidence','wrong_evidence',
     'missing_limits','missing_budget','wrong_root','wrong_pending_quantity','old_429',
@@ -139,7 +142,8 @@ def test_lost_504_never_guesses_or_resubmits_when_evidence_is_incomplete(db,monk
     if case=='wrong_quantity':row['availableAmount']='899'
     if case=='wrong_min':row['minOrderSize']='20000001'
     if case=='wrong_max':row['maxOrderSize']='26349998'
-    if case=='hidden':row['isHidden']=True
+    if case=='invalid_hidden':row['isHidden']='true'
+    if case=='visibility_changed':row['isHidden']=True
     if case=='wrong_side':row['side']='sell'
     if case=='wrong_owner':row['isOwner']=False
     if case=='wrong_currency':row['fiatCurrency']='USD'
@@ -159,6 +163,7 @@ def test_lost_504_never_guesses_or_resubmits_when_evidence_is_incomplete(db,monk
         if case=='candidate_error':raise TimeoutError()
         reads+=1
         if reads==2:
+            if case=='visibility_changed':return {**row,'isHidden':False}
             if case=='read_changed':return {**row,'unitPrice':'26349'}
             if case=='concurrent_attempt':
                 db.execute(update(recovery.OKXAdPriceAttempt).values(reason='Changed'));db.commit()
