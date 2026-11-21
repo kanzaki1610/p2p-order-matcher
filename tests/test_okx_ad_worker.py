@@ -662,3 +662,17 @@ def test_failed_discord_delivery_does_not_mark_incident_notified(db, setup, monk
     assert a.notified_key is None
     asyncio.run(worker.notice(db,a,setup,'UNKNOWN','504'))
     assert a.notified_key and sender.await_count==2
+
+
+def test_market_mode_worker_waits_without_falling_back_to_rank(db,setup,monkeypatch):
+    from app.okx_market_follow import save_mode
+    save_mode(db,'SELL',1,'test')
+    monkeypatch.setattr(worker,'read_ad',AsyncMock(return_value=ad()))
+    from app import okx_market_follow as market
+    reader=AsyncMock(return_value={'action':'WAIT_MARKET','proposed_price':None,'reason':'waiting'})
+    monkeypatch.setattr(market,'read_plan',reader)
+    rank=AsyncMock();monkeypatch.setattr(worker,'read_rank_plan',rank)
+    post=AsyncMock();monkeypatch.setattr(worker,'request',post)
+    run(db)
+    reader.assert_awaited_once();rank.assert_not_awaited();post.assert_not_awaited()
+    assert setup.auto_enabled
