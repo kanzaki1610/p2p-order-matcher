@@ -152,7 +152,7 @@ async def visibility_check(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SE
 
 class Action(BaseModel):
     model_config=ConfigDict(extra='forbid')
-    action: Literal['ad','rank','follow','cost','cost_switch','limits','manual','manual_confirm','manual_cancel',
+    action: Literal['ad','rank','follow','market_follow','cost','cost_switch','limits','manual','manual_confirm','manual_cancel',
         'recover','adopt_preview','adopt_confirm','adopt_cancel','auto','pause','resume','stop_all','release']
     exchange: Literal['OKX','MEXC']='OKX'
     side: Literal['BUY','SELL']='BUY'
@@ -226,7 +226,7 @@ def snapshot(db):
                     'auto':(slot.auto_enabled if exchange=='OKX' else slot.enabled) if slot else False,
                     'state':attempt.state if attempt else 'IDLE','reason':reason,
                     'last_action':stamp(attempt.last_action_at if exchange=='OKX' else attempt.last_action) if attempt else None,
-                    'rank':rank,'mode':'nickname' if follow else 'rank','nickname':follow[0] if follow else '',
+                    'rank':rank,'mode':('market' if follow and follow[0]=='__OKX_MARKET20__' else 'nickname') if follow else 'rank','nickname':follow[0] if follow else '',
                     'offset':follow[1] if follow else 0,'bound':follow[3] if follow else 0,
                     'sell_min':str(limits.minimum) if limits else None})
         result['exchanges'][exchange]=block
@@ -288,6 +288,10 @@ async def dispatch(db, data):
     values={k:str(v).strip() for k,v in data.fields.items()}
     if set(values)-allowed.get(action,set()) or any(len(v)>150 for v in values.values()):
         raise ValueError('Trường cấu hình không hợp lệ.')
+    if action=='market_follow':
+        if exchange!='OKX':raise ValueError('Bám thị trường chỉ hỗ trợ OKX.')
+        from .okx_market_follow import save_mode
+        return {'message':save_mode(db,side,n,OWNER),'choices':[]}
     if action=='manual' and 'quantity_mode' in values:
         if values['quantity_mode']!='remaining' or exchange!='OKX' or side!='SELL' or not values.get('quantity'):
             raise ValueError('Chế độ Tất cả ví P2P chỉ hỗ trợ Bán OKX với số USDT đã nhập.')
@@ -364,7 +368,10 @@ async def live(exchange:Literal['OKX','MEXC'],side:Literal['BUY','SELL'],n:int,d
                 basis=cost.unit_price if cost and cost.enabled else None
                 prefs=db.get(OKXPricePreferences,1)
                 rank=getattr(prefs,side.lower()+'_rank') if prefs else 10
-                async def plan():return await read_rank_plan(client,side,basis if side=='SELL' else None,target_rank=rank,**plan_options(follow),**({'enforce_cost':False} if not cost_protection.enforced(db,'OKX') else {}))
+                from .okx_market_follow import is_market, read_plan as market_preview
+                async def plan():
+                    if is_market(follow):return await market_preview(db,client,slot,follow,preview=True)
+                    return await read_rank_plan(client,side,basis if side=='SELL' else None,target_rank=rank,**plan_options(follow),**({'enforce_cost':False} if not cost_protection.enforced(db,'OKX') else {}))
             else:
                 from .mexc import MexcP2PClient
                 from .mexc_ads import read_ad

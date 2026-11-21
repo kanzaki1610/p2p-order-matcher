@@ -26,6 +26,7 @@ from .okx_ad_limits import OKXAutoLimits, OKXPendingLimits, OKXPendingSellQuanti
 from . import okx_buy_budget as buy_budget
 from . import okx_replacement as replacement
 from .pricing_recheck import due as recheck_due
+from .okx_market_follow import MarketCycle
 from .telegram_commands import format_vietnam_time
 
 logger = logging.getLogger("uvicorn.error.okx_ad_pricing")
@@ -270,7 +271,14 @@ async def process_ad_pricing(db, client):
             follow = nickname_target(db, 'OKX', slot.side, slot.slot_number)
             kwargs = plan_options(follow)
             if cost and cost.get('mode')=='DISABLED':kwargs['enforce_cost']=False
-            plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" and cost['unit_price'] is not None else None, target_rank=rank, **kwargs)
+            from .okx_market_follow import is_market, read_plan as read_market_plan
+            if is_market(follow):
+                plan=await read_market_plan(db,client,slot,follow,
+                    cost['unit_price'] if cost else None,enforce_cost=not(cost and cost.get('mode')=='DISABLED'),
+                    current=number(row.get('unitPrice')))
+                if plan['action']=='WAIT_MARKET':continue
+            else:
+                plan = await read_rank_plan(client, slot.side, Decimal(cost["unit_price"]) if slot.side == "SELL" and cost['unit_price'] is not None else None, target_rank=rank, **kwargs)
             if slot.side == "SELL":
                 plan["cost_source"] = cost
             if plan["action"] == "BLOCKED":
@@ -389,6 +397,8 @@ async def process_ad_pricing(db, client):
                     attempt.state = 'IDLE'
                     db.commit()
                     continue
+            if is_market(follow) and not plan['market_due']<=__import__('time').time()<plan['market_due']+5:
+                attempt.state='IDLE';db.commit();continue
             sending = db.execute(update(OKXAdPriceAttempt).where(
                 OKXAdPriceAttempt.slot_id == slot.id, OKXAdPriceAttempt.state == 'SUBMITTING',
                 OKXAdPriceAttempt.last_action_at == now
